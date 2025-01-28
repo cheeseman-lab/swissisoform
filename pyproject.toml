@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swissisoform"
+version = "0.1.0"
+description = "Analysis of alternative protein isoforms from ribosome profiling"
+readme = "README.md"
+license = { file = "LICENSE" }
+dependencies = []
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["swissisoform"]
+
+[tool.ruff]
+
+[tool.ruff.lint]
+# Configure pydocstyle settings under lint
+select = ["D"]
+pydocstyle = { convention = "google" }
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore docstring check for script and notebook files
+"workflow/scripts/*.py" = ["D100", "D103"]
+"*.ipynb" = ["D100", "D103"]
+# Ignore all checks for external files
+"workflow/lib/external/*.py" = ["ALL"]
