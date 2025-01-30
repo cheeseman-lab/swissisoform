@@ -1,7 +1,7 @@
 from gql import gql, Client
 from gql.transport.aiohttp import AIOHTTPTransport
 import pandas as pd
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import requests
 import xml.etree.ElementTree as ET
 from urllib.parse import urlencode
@@ -664,6 +664,47 @@ class MutationHandler:
         """Clear the cached API responses"""
         self.cached_data = {}
 
+    def _standardize_impact_category(self, impact: str) -> str:
+        """
+        Standardize impact categories to a consistent set of terms.
+        
+        Args:
+            impact (str): Raw impact/consequence string
+            
+        Returns:
+            str: Standardized impact category
+        """
+        if pd.isna(impact) or not isinstance(impact, str):
+            return "unknown"
+            
+        impact = impact.lower().strip()
+        
+        # Define category mappings
+        if any(term in impact for term in ['missense']):
+            return 'missense variant'
+        elif any(term in impact for term in ['synonymous']):
+            return 'synonymous variant'
+        elif any(term in impact for term in ['nonsense', 'stop_gained', 'stop gained']):
+            return 'nonsense variant'
+        elif any(term in impact for term in ['inframe']):
+            if 'deletion' in impact:
+                return 'inframe deletion'
+            elif 'insertion' in impact:
+                return 'inframe insertion'
+            return 'inframe variant'
+        elif any(term in impact for term in ['frameshift']):
+            return 'frameshift variant'
+        elif any(term in impact for term in ['splice']):
+            return 'splice variant'
+        elif any(term in impact for term in ['start_lost', 'start lost']):
+            return 'start lost variant'
+        elif any(term in impact for term in ['5_prime_utr', '5 prime utr']):
+            return '5 prime UTR variant'
+        elif any(term in impact for term in ['3_prime_utr', '3 prime utr']):
+            return '3 prime UTR variant'
+        
+        return 'other variant'
+
     def standardize_mutation_data(self, variants_df: pd.DataFrame, source: str) -> pd.DataFrame:
         """
         Standardize mutation data from different sources into a consistent format.
@@ -701,7 +742,7 @@ class MutationHandler:
                 'reference': variants_df['reference'],
                 'alternate': variants_df['alternate'],
                 'source': 'gnomAD',
-                'impact': variants_df['consequence'],
+                'impact': variants_df['consequence'].apply(self._standardize_impact_category),
                 'hgvsc': variants_df['hgvsc'],
                 'hgvsp': variants_df['hgvsp'],
                 'allele_frequency': variants_df['allele_frequency'],
@@ -715,7 +756,7 @@ class MutationHandler:
                 'reference': variants_df['ref_allele'],
                 'alternate': variants_df['alt_allele'],
                 'source': 'ClinVar',
-                'impact': variants_df['molecular_consequences'],
+                'impact': variants_df['molecular_consequences'].apply(self._standardize_impact_category),
                 'hgvsc': variants_df['cdna_change'],
                 'hgvsp': variants_df['protein_change'],
                 'allele_frequency': None,
@@ -724,12 +765,12 @@ class MutationHandler:
             
         elif source.lower() == 'aggregator':
             standardized_df = pd.DataFrame({
-                'position': variants_df['position'],  # Now comes from variant ID parsing
+                'position': variants_df['position'],
                 'variant_id': variants_df['varId'],
-                'reference': variants_df['reference'],  # Now comes from variant ID parsing
-                'alternate': variants_df['alternate'],  # Now comes from variant ID parsing
+                'reference': variants_df['reference'],
+                'alternate': variants_df['alternate'],
                 'source': 'Aggregator',
-                'impact': variants_df['consequence'],  # Changed from impact to consequence to match gnomAD
+                'impact': variants_df['consequence'].apply(self._standardize_impact_category),
                 'hgvsc': variants_df['hgvsc'],
                 'hgvsp': variants_df['hgvsp'],
                 'allele_frequency': variants_df['allelefrequency'],
@@ -800,39 +841,55 @@ class MutationHandler:
             df = df.sort_values('position')
         
         return df.reset_index(drop=True)        
-    
+        
     async def get_visualization_ready_mutations(self, gene_name: str, 
-                                            aggregator_csv_path: Optional[str] = None) -> pd.DataFrame:
+                                            aggregator_csv_path: Optional[str] = None,
+                                            alt_features: Optional[pd.DataFrame] = None,
+                                            sources: Optional[List[str]] = None) -> pd.DataFrame:
         """
-        Get mutation data from all sources in a format ready for visualization.
+        Get mutation data from specified sources in a format ready for visualization.
         
         Args:
-            gene_name (str): Gene symbol
-            aggregator_csv_path (str, optional): Path to aggregator CSV
-            
+            gene_name (str): Name of the gene
+            aggregator_csv_path (Optional[str]): Path to aggregator CSV file
+            alt_features (Optional[pd.DataFrame]): Alternative features DataFrame
+            sources (Optional[List[str]]): List of sources to include ('gnomad', 'clinvar', 'aggregator')
+                                        If None, includes all available sources
+        
         Returns:
-            pd.DataFrame: Combined and standardized mutation data
+            pd.DataFrame: Combined and filtered mutation data
         """
-        # Get data from each source
-        try:
-            gnomad_df = await self.get_gnomad_variants(gene_name)
-            gnomad_standardized = self.standardize_mutation_data(gnomad_df, 'gnomad')
-        except Exception as e:
-            print(f"Error fetching gnomAD data: {str(e)}")
-            gnomad_standardized = pd.DataFrame()
+        # Default to all sources if none specified
+        if sources is None:
+            sources = ['gnomad', 'clinvar', 'aggregator']
         
-        try:
-            clinvar_df = await self.get_clinvar_variants(gene_name)
-            clinvar_standardized = self.standardize_mutation_data(clinvar_df, 'clinvar')
-        except Exception as e:
-            print(f"Error fetching ClinVar data: {str(e)}")
-            clinvar_standardized = pd.DataFrame()
+        # Convert to lowercase for case-insensitive comparison
+        sources = [s.lower() for s in sources]
         
-        # Initialize list to hold all DataFrames
-        dfs_to_combine = [df for df in [gnomad_standardized, clinvar_standardized] if not df.empty]
+        dfs_to_combine = []
         
-        # Add aggregator data if provided
-        if aggregator_csv_path:
+        # Get gnomAD data if requested
+        if 'gnomad' in sources:
+            try:
+                gnomad_df = await self.get_gnomad_variants(gene_name)
+                gnomad_standardized = self.standardize_mutation_data(gnomad_df, 'gnomad')
+                if not gnomad_standardized.empty:
+                    dfs_to_combine.append(gnomad_standardized)
+            except Exception as e:
+                print(f"Error fetching gnomAD data: {str(e)}")
+        
+        # Get ClinVar data if requested
+        if 'clinvar' in sources:
+            try:
+                clinvar_df = await self.get_clinvar_variants(gene_name)
+                clinvar_standardized = self.standardize_mutation_data(clinvar_df, 'clinvar')
+                if not clinvar_standardized.empty:
+                    dfs_to_combine.append(clinvar_standardized)
+            except Exception as e:
+                print(f"Error fetching ClinVar data: {str(e)}")
+        
+        # Get aggregator data if requested and path provided
+        if 'aggregator' in sources and aggregator_csv_path:
             try:
                 agg_df = self.get_aggregator_variants(aggregator_csv_path)
                 agg_standardized = self.standardize_mutation_data(agg_df, 'aggregator')
@@ -844,19 +901,72 @@ class MutationHandler:
         if not dfs_to_combine:
             return pd.DataFrame()
         
-        # Combine all DataFrames
+        # Combine DataFrames
         combined_df = pd.concat(dfs_to_combine, ignore_index=True)
+        print(f"\nSource distribution before filtering:")
+        print(combined_df['source'].value_counts())
         
-        # Remove duplicates (same position, ref, and alt)
+        # Remove duplicates
         combined_df = combined_df.drop_duplicates(
             subset=['position', 'reference', 'alternate'],
             keep='first'
         )
+        print(f"\nSource distribution after duplicate removal:")
+        print(combined_df['source'].value_counts())
         
-        # Calculate relative position based on transcript start
-        # This would be helpful for visualization
-        if 'position' in combined_df.columns and combined_df['position'].notna().any():
+        # Ensure position is numeric
+        combined_df['position'] = pd.to_numeric(combined_df['position'], errors='coerce')
+        
+        # Filter by alt_features if provided
+        if alt_features is not None and not alt_features.empty:
+            print("\nFiltering mutations by alternative feature positions:")
+            print(f"Initial mutations count: {len(combined_df)}")
+            
+            # Ensure alt_features positions are numeric
+            alt_features['start'] = pd.to_numeric(alt_features['start'])
+            alt_features['end'] = pd.to_numeric(alt_features['end'])
+            
+            # Create position mask
+            position_mask = pd.Series(False, index=combined_df.index)
+            
+            for _, feature in alt_features.iterrows():
+                start_pos = feature['start']
+                end_pos = feature['end']
+                print(f"\nChecking range: {start_pos}-{end_pos}")
+                
+                # Create mask for this range
+                range_mask = (
+                    (combined_df['position'] >= start_pos) & 
+                    (combined_df['position'] <= end_pos)
+                )
+                
+                print(f"Mutations in this range: {range_mask.sum()}")
+                position_mask |= range_mask
+            
+            # Apply the mask
+            filtered_df = combined_df[position_mask].copy()
+            print(f"\nSource distribution after position filtering:")
+            print(filtered_df['source'].value_counts())
+            
+            # Add region information
+            def find_feature_region(row):
+                pos = float(row['position'])
+                for _, feature in alt_features.iterrows():
+                    if feature['start'] <= pos <= feature['end']:
+                        return f"{int(feature['start'])}-{int(feature['end'])}"
+                return None
+            
+            filtered_df['alt_feature_region'] = filtered_df.apply(find_feature_region, axis=1)
+            
+            # Calculate relative position
+            if len(filtered_df) > 0:
+                min_pos = filtered_df['position'].min()
+                filtered_df['relative_position'] = filtered_df['position'] - min_pos
+            
+            return filtered_df
+        
+        else:
+            # Calculate relative position for unfiltered data
             min_pos = combined_df['position'].min()
             combined_df['relative_position'] = combined_df['position'] - min_pos
-        
-        return combined_df
+            return combined_df
