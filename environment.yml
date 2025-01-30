@@ -10,5 +10,8 @@ dependencies:
   - biopython 
   - pip
   - matplotlib
+  - requests
+  - gql
+  - aiohttp
   - pip:
       - -e .

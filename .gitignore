@@ -8,6 +8,7 @@ src/swissisoform/__pycache__
 data/genome_data/hg38.fa
 data/genome_data/hg38.ncbiRefSeq.gtf
 data/ribosome_profiling
+data/mutation_data
 
 # output visualizations
 notebooks/*.csv
