@@ -10,6 +10,9 @@ data/genome_data/hg38.ncbiRefSeq.gtf
 data/ribosome_profiling
 data/mutation_data
 
-# output visualizations
-notebooks/*.csv
-notebooks/*.png
+# output folders
+notebooks/**/
+
+# script outputs
+scripts/out
+scripts/results

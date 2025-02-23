@@ -118,17 +118,48 @@ class GenomeHandler:
         
         return stats
     
-    def get_transcript_ids(self, gene_name):
-        """Get all transcript IDs for a given gene name."""
+    def get_transcript_ids(self, gene_name, standard_chroms_only=True):
+        """
+        Get all transcript IDs for a given gene name.
+        
+        Args:
+            gene_name (str): Name of the gene
+            standard_chroms_only (bool): If True, only return transcripts on standard chromosomes
+                (chr1-22, chrX, chrY, chrM)
+        
+        Returns:
+            pd.DataFrame: DataFrame containing transcript information
+        """
         if not hasattr(self, 'annotations'):
             raise ValueError("No GTF file loaded")
         
+        # Get all transcripts first
         transcripts = self.annotations[
             (self.annotations['gene_name'] == gene_name) & 
             (self.annotations['feature_type'] == 'transcript')
         ]
-        return transcripts[['transcript_id', 'chromosome', 'start', 'end', 'strand']].drop_duplicates()
-
+        
+        # Basic transcript info
+        transcript_info = transcripts[['transcript_id', 'chromosome', 'start', 'end', 'strand']].drop_duplicates()
+        
+        if standard_chroms_only:
+            # Define standard chromosomes
+            standard_chromosomes = {f'chr{i}' for i in range(1, 23)}.union({'chrX', 'chrY', 'chrM'})
+            
+            # Filter and count
+            original_count = len(transcript_info)
+            transcript_info = transcript_info[transcript_info['chromosome'].isin(standard_chromosomes)]
+            filtered_count = len(transcript_info)
+            
+            # Print filtering info if any transcripts were filtered
+            if filtered_count < original_count:
+                print(f"Note: Filtered out {original_count - filtered_count} transcript(s) on non-standard chromosomes")
+                print("Non-standard chromosomes:", 
+                    set(transcripts['chromosome'].unique()) - standard_chromosomes)
+        
+        return transcript_info
+    
+    
     def get_transcript_sequence(self, transcript_id):
         """Get the full genomic sequence for a transcript."""
         if not hasattr(self, 'annotations'):

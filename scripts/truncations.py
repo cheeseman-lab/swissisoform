@@ -1,157 +1,249 @@
-import pandas as pd
+#!/usr/bin/env python3
+
 import asyncio
-from typing import List, Dict
+import pandas as pd
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional, Dict
+import os
+
 from swissisoform.genome import GenomeHandler
+from swissisoform.visualize import GenomeVisualizer
 from swissisoform.isoform import AlternativeIsoform
 from swissisoform.mutations import MutationHandler
-from datetime import datetime
+from swissisoform.utils import analyze_mutations
 
-async def analyze_gene_truncation_mutations(
-    gene_names: List[str],
+async def process_gene(
+    gene_name: str,
     genome: GenomeHandler,
     alt_isoforms: AlternativeIsoform,
-    mutation_handler: MutationHandler
-) -> pd.DataFrame:
+    mutation_handler: MutationHandler,
+    output_dir: str,
+    visualize: bool = False,
+    include_unfiltered: bool = False,
+    impact_types: Optional[Dict[str, List[str]]] = None
+) -> dict:
     """
-    Analyze mutations in truncation regions for a list of genes.
+    Process a single gene with visualizations and mutation analysis.
     
     Args:
-        gene_names: List of gene names to analyze
+        gene_name: Name of the gene to process
         genome: Initialized GenomeHandler instance
         alt_isoforms: Initialized AlternativeIsoform instance
         mutation_handler: Initialized MutationHandler instance
+        output_dir: Directory to save output files
+        visualize: Whether to generate visualizations
+        include_unfiltered: Whether to include unfiltered mutation analysis
+        impact_types: Optional dict of mutation impact types to filter by source
         
     Returns:
-        DataFrame containing analysis results for each gene
+        Dictionary containing analysis results
     """
-    results = []
-    total_genes = len(gene_names)
-    
-    print(f"\nStarting analysis of {total_genes} genes at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    for idx, gene_name in enumerate(gene_names, 1):
-        try:
-            print(f"\nProcessing gene {idx}/{total_genes}: {gene_name}")
-            
-            # Get alternative isoform features
-            print(f"  ├─ Getting alternative features...", end='', flush=True)
-            alt_features = alt_isoforms.get_visualization_features(gene_name)
-            
-            if alt_features.empty:
-                print(f"\r  ├─ No alternative features found")
-                continue
-            print(f"\r  ├─ Found {len(alt_features)} alternative features")
-                
-            # Get transcript info
-            print(f"  ├─ Getting transcript information...", end='', flush=True)
-            transcript_info = genome.get_transcript_ids(gene_name)
-            if transcript_info.empty:
-                print(f"\r  ├─ No transcript info found")
-                continue
-            print(f"\r  ├─ Found {len(transcript_info)} transcripts")
-                
-            # Get ClinVar mutations
-            print(f"  ├─ Fetching ClinVar mutations...", end='', flush=True)
-            mutations = await mutation_handler.get_visualization_ready_mutations(
-                gene_name=gene_name,
-                alt_features=alt_features,
-                sources=['clinvar']
-            )
-            
-            if mutations.empty:
-                print(f"\r  └─ No ClinVar mutations found")
-                results.append({
-                    'gene_name': gene_name,
-                    'has_truncation_region': True,
-                    'truncation_regions': len(alt_features),
-                    'mutations_in_region': 0,
-                    'mutation_impacts': None,
-                    'clinical_significance': None,
-                    'truncation_coordinates': alt_features.apply(
-                        lambda x: f"{x['start']}-{x['end']}", axis=1).tolist()
-                })
-                continue
-            
-            # Analyze mutations
-            print(f"\r  └─ Found {len(mutations)} mutations in truncation regions")
-            mutation_impacts = mutations['impact'].value_counts().to_dict()
-            clinical_sig = mutations['clinical_significance'].value_counts().to_dict()
-            
-            results.append({
+    try:
+        # Get alternative isoform features
+        print(f"  ├─ Getting alternative features...", end='', flush=True)
+        alt_features = alt_isoforms.get_visualization_features(gene_name)
+        
+        if alt_features.empty:
+            print(f"\r  ├─ No alternative features found")
+            return {
                 'gene_name': gene_name,
-                'has_truncation_region': True,
-                'truncation_regions': len(alt_features),
-                'mutations_in_region': len(mutations),
-                'mutation_impacts': mutation_impacts,
-                'clinical_significance': clinical_sig,
-                'truncation_coordinates': alt_features.apply(
-                    lambda x: f"{x['start']}-{x['end']}", axis=1).tolist()
-            })
+                'status': 'no_features',
+                'error': None
+            }
+        
+        print(f"\r  ├─ Found {len(alt_features)} alternative features")
+        
+        # Get transcript information
+        print(f"  ├─ Getting transcript information...", end='', flush=True)
+        transcript_info = genome.get_transcript_ids(gene_name)
+        
+        if transcript_info.empty:
+            print(f"\r  ├─ No transcript info found")
+            return {
+                'gene_name': gene_name,
+                'status': 'no_transcripts',
+                'error': None
+            }
+        
+        print(f"\r  ├─ Found {len(transcript_info)} transcripts")
+        
+        # Get mutations (unfiltered) if requested
+        mutations_unfiltered = None
+        unfiltered_count = 0
+        if include_unfiltered:
+            print(f"  ├─ Fetching unfiltered mutations...", end='', flush=True)
+            mutations_unfiltered = await analyze_mutations(
+                gene_name=gene_name,
+                mutation_handler=mutation_handler,
+                alt_features=alt_features,
+                sources=["clinvar"]
+            )
+            unfiltered_count = len(mutations_unfiltered) if mutations_unfiltered is not None else 0
+            print(f"\r  ├─ Found {unfiltered_count} unfiltered mutations")
+        
+        # Get mutations (filtered)
+        print(f"  ├─ Fetching filtered mutations...", end='', flush=True)
+        mutations_filtered = await analyze_mutations(
+            gene_name=gene_name,
+            mutation_handler=mutation_handler,
+            alt_features=alt_features,
+            sources=["clinvar"],
+            impact_types=impact_types
+        )
+        
+        filtered_count = len(mutations_filtered) if mutations_filtered is not None else 0
+        print(f"\r  ├─ Found {filtered_count} mutations after filtering")
+        
+        if visualize:
+            visualizer = GenomeVisualizer(genome)
+            gene_dir = Path(output_dir) / gene_name
+            gene_dir.mkdir(parents=True, exist_ok=True)
             
-        except Exception as e:
-            print(f"\r  └─ Error: {str(e)}")
-            continue
-    
-    print(f"\nAnalysis completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    return pd.DataFrame(results)
+            print(f"  ├─ Generating visualizations:")
+            for _, transcript in transcript_info.iterrows():
+                transcript_id = transcript['transcript_id']
+                print(f"  │  ├─ Processing {transcript_id}")
+                
+                if include_unfiltered and mutations_unfiltered is not None:
+                    print(f"  │  │  ├─ Creating unfiltered view")
+                    visualizer.visualize_transcript(
+                        gene_name=gene_name,
+                        transcript_id=transcript_id,
+                        alt_features=alt_features,
+                        mutations_df=mutations_unfiltered,
+                        output_file=str(gene_dir / f'{transcript_id}_unfiltered.png')
+                    )
+                
+                if mutations_filtered is not None:
+                    print(f"  │  │  ├─ Creating filtered view")
+                    visualizer.visualize_transcript(
+                        gene_name=gene_name,
+                        transcript_id=transcript_id,
+                        alt_features=alt_features,
+                        mutations_df=mutations_filtered,
+                        output_file=str(gene_dir / f'{transcript_id}_filtered.png')
+                    )
+                    
+                    print(f"  │  │  └─ Creating zoomed view")
+                    visualizer.visualize_transcript_zoomed(
+                        gene_name=gene_name,
+                        transcript_id=transcript_id,
+                        alt_features=alt_features,
+                        mutations_df=mutations_filtered,
+                        output_file=str(gene_dir / f'{transcript_id}_filtered_zoom.png'),
+                        padding=100
+                    )
+                print(f"  │  └─ Completed {transcript_id}")
+        
+        print("  └─ Processing complete")
+        return {
+            'gene_name': gene_name,
+            'status': 'success',
+            'transcripts': len(transcript_info),
+            'alt_features': len(alt_features),
+            'mutations_unfiltered': unfiltered_count if include_unfiltered else None,
+            'mutations_filtered': filtered_count,
+            'error': None
+        }
+        
+    except Exception as e:
+        print(f"  └─ Error: {str(e)}")
+        return {
+            'gene_name': gene_name,
+            'status': 'error',
+            'error': str(e)
+        }
 
-async def main(gene_list_path: str):
-    print(f"Initializing analysis at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+async def main(
+    gene_list_path: str, 
+    output_dir: str,
+    visualize: bool = False,
+    include_unfiltered: bool = False
+):
+    print(f"Starting analysis at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Initialize handlers
-    print("Loading genome data...")
+    print("\nInitializing components:")
+    print("  ├─ Loading genome data...")
     genome = GenomeHandler(
         '../data/genome_data/hg38.fa',
         '../data/genome_data/hg38.ncbiRefSeq.gtf'
     )
     
-    print("Loading alternative isoform data...")
+    print("  ├─ Loading alternative isoform data...")
     alt_isoforms = AlternativeIsoform()
     alt_isoforms.load_bed('../data/ribosome_profiling/RiboTISHV6_Ly2024_AnnoToTruncation_exonintersect.bed')
     
-    print("Initializing mutation handler...")
+    print("  └─ Initializing mutation handler...")
     mutation_handler = MutationHandler()
     
+    # Define impact types for filtering
+    impact_types = {
+        "clinvar": ["missense variant", "nonsense variant", "frameshift variant"]
+    }
+    
     # Read gene list
-    print(f"Reading gene list from {gene_list_path}")
+    print(f"\nReading gene list from {gene_list_path}")
     with open(gene_list_path, 'r') as f:
         gene_names = [line.strip() for line in f if line.strip()]
     
-    # Run analysis
-    results_df = await analyze_gene_truncation_mutations(
-        gene_names,
-        genome,
-        alt_isoforms,
-        mutation_handler
-    )
+    total_genes = len(gene_names)
+    print(f"\nStarting analysis of {total_genes} genes")
+    print(f"Impact types filter: {impact_types['clinvar']}")
     
-    # Basic summary statistics
+    # Process all genes
+    results = []
+    for idx, gene_name in enumerate(gene_names, 1):
+        print(f"\nProcessing gene {idx}/{total_genes}: {gene_name}")
+        result = await process_gene(
+            gene_name=gene_name,
+            genome=genome,
+            alt_isoforms=alt_isoforms,
+            mutation_handler=mutation_handler,
+            output_dir=output_dir,
+            visualize=visualize,
+            include_unfiltered=include_unfiltered,
+            impact_types=impact_types
+        )
+        results.append(result)
+        
+        # Save intermediate results
+        results_df = pd.DataFrame(results)
+        results_df.to_csv(Path(output_dir) / 'analysis_results.csv', index=False)
+    
+    # Final summary
     print("\nAnalysis Summary:")
-    print(f"Total genes analyzed: {len(results_df)}")
+    results_df = pd.DataFrame(results)
+    print(f"  ├─ Total genes processed: {len(results_df)}")
+    print("\n  ├─ Status breakdown:")
+    for status, count in results_df['status'].value_counts().items():
+        print(f"  │  ├─ {status}: {count}")
     
-    genes_with_mutations = results_df[results_df['mutations_in_region'] > 0]
-    print(f"Genes with mutations in truncation regions: {len(genes_with_mutations)}")
+    # Genes with errors
+    error_genes = results_df[results_df['status'] == 'error']
+    if not error_genes.empty:
+        print("\n  ├─ Genes with errors:")
+        for _, row in error_genes.iterrows():
+            print(f"  │  ├─ {row['gene_name']}: {row['error']}")
     
-    if not genes_with_mutations.empty:
-        print("\nBreakdown of genes with mutations:")
-        for _, row in genes_with_mutations.iterrows():
-            print(f"\n{row['gene_name']}:")
-            print(f"  Number of mutations: {row['mutations_in_region']}")
-            print(f"  Impact types: {row['mutation_impacts']}")
-            print(f"  Clinical significance: {row['clinical_significance']}")
-            print(f"  Truncation regions: {row['truncation_coordinates']}")
-    
-    # Save results
-    output_file = 'truncation_mutation_analysis.csv'
-    results_df.to_csv(output_file, index=False)
-    print(f"\nResults saved to: {output_file}")
-    
-    return results_df
+    print(f"\n  ├─ Results saved to: {output_dir}")
+    print(f"  └─ Analysis completed at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) != 2:
-        print("Usage: python script.py path_to_gene_list.txt")
-        sys.exit(1)
+    import argparse
     
-    asyncio.run(main(sys.argv[1]))
+    parser = argparse.ArgumentParser(description='Batch process genes for mutation analysis')
+    parser.add_argument('gene_list', help='Path to file containing gene names')
+    parser.add_argument('output_dir', help='Directory to save output files')
+    parser.add_argument('--visualize', action='store_true', help='Generate visualizations')
+    parser.add_argument('--include-unfiltered', action='store_true', help='Include unfiltered mutation analysis')
+    
+    args = parser.parse_args()
+    
+    asyncio.run(main(
+        gene_list_path=args.gene_list,
+        output_dir=args.output_dir,
+        visualize=args.visualize,
+        include_unfiltered=args.include_unfiltered
+    ))

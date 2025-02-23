@@ -1,3 +1,9 @@
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from matplotlib.lines import Line2D
+import numpy as np
+import pandas as pd
+
 class GenomeVisualizer:
     def __init__(self, genome_handler):
         self.genome = genome_handler

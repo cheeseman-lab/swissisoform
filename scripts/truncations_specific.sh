@@ -16,4 +16,4 @@ conda activate swissisoform
 mkdir -p results
 
 # Run the analysis script
-python3 truncations.py '../data/ribosome_profiling/gene_list.txt' 'results'
+python3 truncations.py '../data/ribosome_profiling/gene_list_specific.txt' 'results'
