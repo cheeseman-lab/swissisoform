@@ -6,6 +6,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict
 import os
+import warnings
+
+# Suppress pandas FutureWarning
+warnings.filterwarnings('ignore', category=FutureWarning)
 
 from swissisoform.genome import GenomeHandler
 from swissisoform.visualize import GenomeVisualizer
@@ -83,7 +87,7 @@ async def process_gene(
             print(f"\r  ├─ Found {unfiltered_count} unfiltered mutations")
         
         # Get mutations (filtered)
-        print(f"  ├─ Fetching filtered mutations...", end='', flush=True)
+        print(f"  ├─ Analyzing mutations...", end='', flush=True)
         mutations_filtered = await analyze_mutations(
             gene_name=gene_name,
             mutation_handler=mutation_handler,
@@ -173,7 +177,7 @@ async def main(
     
     print("  ├─ Loading alternative isoform data...")
     alt_isoforms = AlternativeIsoform()
-    alt_isoforms.load_bed('../data/ribosome_profiling/RiboTISHV6_Ly2024_AnnoToTruncation_exonintersect.bed')
+    alt_isoforms.load_bed('../data/ribosome_profiling/RiboTISHV6_MD2025_AnnoToTruncation_exonintersect.bed')
     
     print("  └─ Initializing mutation handler...")
     mutation_handler = MutationHandler()

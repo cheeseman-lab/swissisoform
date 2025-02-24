@@ -18,7 +18,7 @@ class MutationHandler:
     - Other databases can be added...
     """
     
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = '26214372a9ab53b26a43ba8546f4a5195308'):
         """Initialize the mutation handler with API endpoints"""
         # Setup gnomAD GraphQL client
         transport = AIOHTTPTransport(url="https://gnomad.broadinstitute.org/api")
@@ -33,6 +33,9 @@ class MutationHandler:
             'efetch': f"{self.clinvar_base}/efetch.fcgi",
             'elink': f"{self.clinvar_base}/elink.fcgi"
         }
+        self.api_key = api_key
+
+        
         
     async def get_gnomad_variants(self, gene_name: str) -> pd.DataFrame:
         """Get processed variant data from gnomAD"""
@@ -239,11 +242,11 @@ class MutationHandler:
         # Get variant IDs from esearch
         search_params = {
             'db': 'clinvar',
-            'term': f"{gene_name}[gene] AND single_gene[prop]",
+            'term': f"{gene_name}[gene]",
             'retmax': 500,  # Adjust as needed
             'retmode': 'json',
             'tool': 'swissisoform',
-            'email': 'your.email@example.com'  # Replace with actual email
+            'email': 'mdiberna@wi.mit.edu'  # Replace with actual email
         }
         
         try:
@@ -275,7 +278,7 @@ class MutationHandler:
                     'id': ','.join(batch_ids),
                     'retmode': 'json',
                     'tool': 'swissisoform',
-                    'email': 'your.email@example.com'  # Replace with actual email
+                    'email': 'mdiberna@wi.mit.edu'  # Replace with actual email
                 }
                 
                 summary_response = await self._async_get_request(
@@ -652,6 +655,14 @@ class MutationHandler:
         Returns:
             str: Response text
         """
+        # Initialize params if None
+        if params is None:
+            params = {}
+            
+        # Add API key to params if available
+        if self.api_key:
+            params['api_key'] = self.api_key
+        
         loop = asyncio.get_event_loop()
         def _make_request():
             response = requests.get(url, params=params)
@@ -842,131 +853,111 @@ class MutationHandler:
         
         return df.reset_index(drop=True)        
         
-    async def get_visualization_ready_mutations(self, gene_name: str, 
-                                            aggregator_csv_path: Optional[str] = None,
-                                            alt_features: Optional[pd.DataFrame] = None,
-                                            sources: Optional[List[str]] = None) -> pd.DataFrame:
+    async def get_visualization_ready_mutations(
+        self, 
+        gene_name: str,
+        aggregator_csv_path: Optional[str] = None,
+        alt_features: Optional[pd.DataFrame] = None,
+        sources: Optional[List[str]] = None,
+        verbose: bool = False
+    ) -> pd.DataFrame:
         """
         Get mutation data from specified sources in a format ready for visualization.
-        
-        Args:
-            gene_name (str): Name of the gene
-            aggregator_csv_path (Optional[str]): Path to aggregator CSV file
-            alt_features (Optional[pd.DataFrame]): Alternative features DataFrame
-            sources (Optional[List[str]]): List of sources to include ('gnomad', 'clinvar', 'aggregator')
-                                        If None, includes all available sources
-        
-        Returns:
-            pd.DataFrame: Combined and filtered mutation data
         """
-        # Default to all sources if none specified
         if sources is None:
             sources = ['gnomad', 'clinvar', 'aggregator']
-        
-        # Convert to lowercase for case-insensitive comparison
         sources = [s.lower() for s in sources]
         
+        # Fetch and combine data from sources
         dfs_to_combine = []
+        print(f"Fetching mutations from sources: {', '.join(sources)}...")
         
-        # Get gnomAD data if requested
-        if 'gnomad' in sources:
+        for source in sources:
             try:
-                gnomad_df = await self.get_gnomad_variants(gene_name)
-                gnomad_standardized = self.standardize_mutation_data(gnomad_df, 'gnomad')
-                if not gnomad_standardized.empty:
-                    dfs_to_combine.append(gnomad_standardized)
+                if source == 'gnomad':
+                    df = await self.get_gnomad_variants(gene_name)
+                elif source == 'clinvar':
+                    df = await self.get_clinvar_variants(gene_name)
+                elif source == 'aggregator' and aggregator_csv_path:
+                    df = self.get_aggregator_variants(aggregator_csv_path)
+                else:
+                    continue
+                    
+                standardized_df = self.standardize_mutation_data(df, source)
+                if not standardized_df.empty:
+                    dfs_to_combine.append(standardized_df)
+                    if verbose:
+                        print(f"  ├─ Found {len(standardized_df)} variants from {source}")
+                        
             except Exception as e:
-                print(f"Error fetching gnomAD data: {str(e)}")
-        
-        # Get ClinVar data if requested
-        if 'clinvar' in sources:
-            try:
-                clinvar_df = await self.get_clinvar_variants(gene_name)
-                clinvar_standardized = self.standardize_mutation_data(clinvar_df, 'clinvar')
-                if not clinvar_standardized.empty:
-                    dfs_to_combine.append(clinvar_standardized)
-            except Exception as e:
-                print(f"Error fetching ClinVar data: {str(e)}")
-        
-        # Get aggregator data if requested and path provided
-        if 'aggregator' in sources and aggregator_csv_path:
-            try:
-                agg_df = self.get_aggregator_variants(aggregator_csv_path)
-                agg_standardized = self.standardize_mutation_data(agg_df, 'aggregator')
-                if not agg_standardized.empty:
-                    dfs_to_combine.append(agg_standardized)
-            except Exception as e:
-                print(f"Error processing aggregator data: {str(e)}")
+                print(f"Error fetching {source} data: {str(e)}")
         
         if not dfs_to_combine:
+            print("No mutations found")
             return pd.DataFrame()
         
-        # Combine DataFrames
+        # Process combined data
         combined_df = pd.concat(dfs_to_combine, ignore_index=True)
-        print(f"\nSource distribution before filtering:")
-        print(combined_df['source'].value_counts())
+        initial_count = len(combined_df)
         
         # Remove duplicates
         combined_df = combined_df.drop_duplicates(
             subset=['position', 'reference', 'alternate'],
             keep='first'
         )
-        print(f"\nSource distribution after duplicate removal:")
-        print(combined_df['source'].value_counts())
         
-        # Ensure position is numeric
+        if verbose:
+            print(f"Found {len(combined_df)} unique variants after deduplication")
+        
+        # Convert position to numeric
         combined_df['position'] = pd.to_numeric(combined_df['position'], errors='coerce')
         
         # Filter by alt_features if provided
         if alt_features is not None and not alt_features.empty:
-            print("\nFiltering mutations by alternative feature positions:")
-            print(f"Initial mutations count: {len(combined_df)}")
-            
-            # Ensure alt_features positions are numeric
             alt_features['start'] = pd.to_numeric(alt_features['start'])
             alt_features['end'] = pd.to_numeric(alt_features['end'])
             
-            # Create position mask
-            position_mask = pd.Series(False, index=combined_df.index)
+            print("\nAnalyzing mutations in alternative features:")
+            filtered_dfs = []
             
-            for _, feature in alt_features.iterrows():
+            for idx, feature in alt_features.iterrows():
                 start_pos = feature['start']
                 end_pos = feature['end']
-                print(f"\nChecking range: {start_pos}-{end_pos}")
+                name = feature.get('name', f'Feature {idx + 1}')
                 
-                # Create mask for this range
-                range_mask = (
+                # Filter mutations for this feature
+                feature_mask = (
                     (combined_df['position'] >= start_pos) & 
                     (combined_df['position'] <= end_pos)
                 )
+                feature_mutations = combined_df[feature_mask].copy()
                 
-                print(f"Mutations in this range: {range_mask.sum()}")
-                position_mask |= range_mask
+                # Add feature information
+                if not feature_mutations.empty:
+                    feature_mutations['alt_feature_region'] = f"{int(start_pos)}-{int(end_pos)}"
+                    feature_mutations['alt_feature_name'] = name
+                    filtered_dfs.append(feature_mutations)
+                
+                print(f"  ├─ {name} ({start_pos}-{end_pos}): {len(feature_mutations)} mutations")
             
-            # Apply the mask
-            filtered_df = combined_df[position_mask].copy()
-            print(f"\nSource distribution after position filtering:")
-            print(filtered_df['source'].value_counts())
-            
-            # Add region information
-            def find_feature_region(row):
-                pos = float(row['position'])
-                for _, feature in alt_features.iterrows():
-                    if feature['start'] <= pos <= feature['end']:
-                        return f"{int(feature['start'])}-{int(feature['end'])}"
-                return None
-            
-            filtered_df['alt_feature_region'] = filtered_df.apply(find_feature_region, axis=1)
-            
-            # Calculate relative position
-            if len(filtered_df) > 0:
-                min_pos = filtered_df['position'].min()
-                filtered_df['relative_position'] = filtered_df['position'] - min_pos
-            
-            return filtered_df
-        
+            if filtered_dfs:
+                filtered_df = pd.concat(filtered_dfs, ignore_index=True)
+                print(f"\nTotal mutations in all features: {len(filtered_df)}")
+                
+                # Calculate relative positions
+                if len(filtered_df) > 0:
+                    min_pos = filtered_df['position'].min()
+                    filtered_df['relative_position'] = filtered_df['position'] - min_pos
+                
+                return filtered_df
+            else:
+                print("No mutations found in any feature")
+                return pd.DataFrame()
+                
         else:
-            # Calculate relative position for unfiltered data
-            min_pos = combined_df['position'].min()
-            combined_df['relative_position'] = combined_df['position'] - min_pos
+            # No filtering, just add relative positions
+            if len(combined_df) > 0:
+                min_pos = combined_df['position'].min()
+                combined_df['relative_position'] = combined_df['position'] - min_pos
+            
             return combined_df

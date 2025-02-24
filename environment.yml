@@ -8,6 +8,7 @@ dependencies:
   - numpy
   - pandas
   - biopython 
+  - bioconductor-biomart
   - pip
   - matplotlib
   - requests
