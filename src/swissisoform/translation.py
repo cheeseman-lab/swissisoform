@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
 import pandas as pd
 import re
-import os
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-from Bio import SeqIO
 
 from swissisoform.genome import GenomeHandler
 from swissisoform.isoform import AlternativeIsoform
@@ -37,38 +37,7 @@ class TruncatedProteinGenerator:
         self.alt_isoforms = alt_isoform_handler
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
-    def extract_transcript_sequence(self, transcript_id: str) -> Tuple[str, bool]:
-        """
-        Extract the full nucleotide sequence for a transcript.
-        
-        Args:
-            transcript_id: Transcript ID
-            
-        Returns:
-            Tuple of (sequence, success_flag)
-        """
-        try:
-            # Get transcript sequence - returns a dictionary with sequence info
-            sequence_info = self.genome.get_transcript_sequence(transcript_id)
-            
-            if not sequence_info or 'sequence' not in sequence_info:
-                print(f"Failed to retrieve sequence for transcript {transcript_id}")
-                return "", False
-                
-            # Extract the actual sequence string from the dictionary
-            sequence = sequence_info['sequence']
-            
-            if not sequence:
-                print(f"Empty sequence for transcript {transcript_id}")
-                return "", False
-                
-            return sequence, True
-            
-        except Exception as e:
-            print(f"Error extracting transcript sequence: {str(e)}")
-            return "", False
-            
+    
     def get_truncation_sites(self, gene_name: str) -> pd.DataFrame:
         """
         Get truncation sites for a gene from the alternative isoform data.
@@ -80,7 +49,7 @@ class TruncatedProteinGenerator:
             DataFrame containing truncation information
         """
         try:
-            # Get alternative isoform features - these are already truncation/alternative start sites
+            # Get alternative isoform features
             alt_features = self.alt_isoforms.get_visualization_features(gene_name)
             
             if alt_features.empty:
@@ -94,79 +63,170 @@ class TruncatedProteinGenerator:
         except Exception as e:
             print(f"Error getting truncation sites: {str(e)}")
             return pd.DataFrame()
-            
-    def apply_truncation(
-        self, 
-        transcript_sequence: str, 
-        truncation_position: int, 
-        strand: str
-    ) -> str:
+    
+    def apply_truncation(self, transcript_id: str, truncation_feature: pd.Series) -> str:
         """
-        Apply truncation to a transcript sequence.
+        Apply truncation to a transcript by removing the truncated segment and
+        joining the sequence before and after.
         
         Args:
-            transcript_sequence: Full transcript nucleotide sequence
-            truncation_position: Position to truncate (in genomic coordinates)
-            strand: '+' or '-' strand
+            transcript_id: Transcript ID to truncate
+            truncation_feature: Feature containing truncation information
             
         Returns:
             Truncated transcript sequence
         """
         try:
-            # Convert genomic position to transcript position
-            # This is a placeholder - you would need to implement the actual conversion
-            # based on your specific genomic coordinate system
-            transcript_position = self._convert_genomic_to_transcript_position(
-                truncation_position, 
-                transcript_sequence, 
-                strand
-            )
-            
-            if transcript_position < 0:
-                print(f"Could not convert genomic position {truncation_position} to transcript position")
+            # Get transcript data
+            transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
+            if not transcript_data or 'sequence' not in transcript_data.get('sequence', {}):
+                print(f"Failed to retrieve sequence for {transcript_id}")
                 return ""
-                
-            # Apply truncation
-            if strand == '+':
-                truncated_sequence = transcript_sequence[:transcript_position]
-            else:
-                truncated_sequence = transcript_sequence[transcript_position:]
-                
+            
+            # Extract necessary information
+            full_sequence = transcript_data['sequence']['sequence']
+            transcript_start = transcript_data['sequence']['start']
+            strand = transcript_data['sequence']['strand']
+            
+            # Get truncation information
+            trunc_start = truncation_feature['start']
+            trunc_end = truncation_feature['end']
+            
+            # Convert to transcript coordinates
+            rel_trunc_start = trunc_start - transcript_start
+            rel_trunc_end = trunc_end - transcript_start + 1  # +1 because end is inclusive
+            
+            if strand == '-':
+                # For negative strand, we need to reverse the coordinates
+                rel_trunc_start, rel_trunc_end = len(full_sequence) - rel_trunc_end, len(full_sequence) - rel_trunc_start
+            
+            # Ensure the truncation coordinates are within the transcript bounds
+            rel_trunc_start = max(0, min(rel_trunc_start, len(full_sequence)))
+            rel_trunc_end = max(0, min(rel_trunc_end, len(full_sequence)))
+            
+            # Extract segments before and after truncation
+            before_segment = full_sequence[:rel_trunc_start]
+            after_segment = full_sequence[rel_trunc_end:]
+            
+            # Join segments to create truncated sequence
+            truncated_sequence = before_segment + after_segment
+            
             return truncated_sequence
             
         except Exception as e:
             print(f"Error applying truncation: {str(e)}")
             return ""
-            
-    def _convert_genomic_to_transcript_position(
-        self, 
-        genomic_position: int, 
-        transcript_sequence: str, 
-        strand: str
-    ) -> int:
+    
+    def build_truncated_cds(self, transcript_id: str, truncation_feature: pd.Series) -> str:
         """
-        Convert genomic position to transcript position.
-        This is a placeholder - you would need to implement the actual conversion
-        logic using your GenomeHandler.
+        Build a properly truncated CDS by analyzing how the truncation affects each CDS region.
+        This provides better reading frame preservation than simply truncating the transcript.
         
         Args:
-            genomic_position: Position in genomic coordinates
-            transcript_sequence: Transcript sequence
-            strand: '+' or '-' strand
+            transcript_id: Transcript ID
+            truncation_feature: Feature containing truncation information
             
         Returns:
-            Position in transcript coordinates
+            Truncated CDS sequence
         """
-        # This would need to be implemented based on your specific genomic
-        # coordinate system and transcript annotation
-        # For now, we'll return a mock value
-        # In a real implementation, you would use genome_handler to get
-        # exon coordinates and map between genomic and transcript coordinates
-        return len(transcript_sequence) // 2  # Placeholder
+        try:
+            # Get transcript data
+            transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
+            if not transcript_data or 'sequence' not in transcript_data.get('sequence', {}):
+                return ""
             
+            # Extract necessary information
+            features = transcript_data['features']
+            full_sequence = transcript_data['sequence']['sequence']
+            transcript_start = transcript_data['sequence']['start']
+            strand = transcript_data['sequence']['strand']
+            
+            # Get CDS regions
+            cds_regions = features[features['feature_type'] == 'CDS'].copy()
+            if cds_regions.empty:
+                return ""
+            
+            cds_regions.sort_values('start', inplace=True)
+            
+            # For mock truncation (to get canonical sequence), return full CDS
+            if truncation_feature['start'] < 0 or truncation_feature['end'] < 0:
+                canonical_cds = ""
+                for _, cds in cds_regions.iterrows():
+                    rel_start = cds['start'] - transcript_start
+                    rel_end = cds['end'] - transcript_start + 1
+                    
+                    if strand == '-':
+                        rel_start = len(full_sequence) - rel_end
+                        rel_end = len(full_sequence) - (cds['start'] - transcript_start)
+                    
+                    cds_seq = full_sequence[rel_start:rel_end]
+                    canonical_cds += cds_seq
+                
+                # Ensure CDS length is divisible by 3
+                remainder = len(canonical_cds) % 3
+                if remainder > 0:
+                    canonical_cds = canonical_cds[:len(canonical_cds) - remainder]
+                
+                return canonical_cds
+            
+            # Get truncation information
+            trunc_start = truncation_feature['start']
+            trunc_end = truncation_feature['end']
+            
+            # Convert to transcript coordinates
+            rel_trunc_start = trunc_start - transcript_start
+            rel_trunc_end = trunc_end - transcript_start + 1
+            
+            if strand == '-':
+                rel_trunc_start, rel_trunc_end = len(full_sequence) - rel_trunc_end, len(full_sequence) - rel_trunc_start
+            
+            # Build truncated CDS by examining each CDS region
+            truncated_cds = ""
+            
+            for _, cds in cds_regions.iterrows():
+                # Calculate relative CDS positions
+                rel_cds_start = cds['start'] - transcript_start
+                rel_cds_end = cds['end'] - transcript_start + 1
+                
+                if strand == '-':
+                    rel_cds_start = len(full_sequence) - rel_cds_end
+                    rel_cds_end = len(full_sequence) - (cds['start'] - transcript_start)
+                
+                # CDS region is entirely before the truncation
+                if rel_cds_end <= rel_trunc_start:
+                    cds_seq = full_sequence[rel_cds_start:rel_cds_end]
+                    truncated_cds += cds_seq
+                
+                # CDS region is entirely after the truncation
+                elif rel_cds_start >= rel_trunc_end:
+                    cds_seq = full_sequence[rel_cds_start:rel_cds_end]
+                    truncated_cds += cds_seq
+                
+                # CDS region overlaps with the truncation
+                else:
+                    # Keep the part before truncation if any
+                    if rel_cds_start < rel_trunc_start:
+                        before_part = full_sequence[rel_cds_start:rel_trunc_start]
+                        truncated_cds += before_part
+                    
+                    # Keep the part after truncation if any
+                    if rel_cds_end > rel_trunc_end:
+                        after_part = full_sequence[rel_trunc_end:rel_cds_end]
+                        truncated_cds += after_part
+            
+            # Ensure CDS length is divisible by 3
+            remainder = len(truncated_cds) % 3
+            if remainder > 0:
+                truncated_cds = truncated_cds[:len(truncated_cds) - remainder]
+            
+            return truncated_cds
+            
+        except Exception as e:
+            print(f"Error building truncated CDS: {str(e)}")
+            return ""
+    
     def translate_sequence(self, nucleotide_seq: str) -> str:
-        """
-        Translate a nucleotide sequence to amino acid sequence.
+        """Translate a nucleotide sequence to amino acid sequence.
         
         Args:
             nucleotide_seq: Nucleotide sequence
@@ -175,24 +235,16 @@ class TruncatedProteinGenerator:
             Amino acid sequence
         """
         try:
-            # Find the start codon
-            start_codon_match = re.search(r'ATG', nucleotide_seq)
-            
-            if not start_codon_match:
-                print("No start codon (ATG) found in the sequence")
+            if not nucleotide_seq or len(nucleotide_seq) < 3:
                 return ""
-                
-            start_pos = start_codon_match.start()
             
-            # Translate from start codon to the end
-            coding_seq = nucleotide_seq[start_pos:]
+            # Ensure sequence length is divisible by 3
+            remainder = len(nucleotide_seq) % 3
+            if remainder > 0:
+                nucleotide_seq = nucleotide_seq[:len(nucleotide_seq) - remainder]
             
-            # Ensure the length is a multiple of 3
-            length_to_use = len(coding_seq) - (len(coding_seq) % 3)
-            coding_seq = coding_seq[:length_to_use]
-            
-            # Translate
-            seq_obj = Seq(coding_seq)
+            # Translate directly without requiring start codon
+            seq_obj = Seq(nucleotide_seq)
             protein_seq = str(seq_obj.translate(to_stop=True))
             
             return protein_seq
@@ -200,15 +252,14 @@ class TruncatedProteinGenerator:
         except Exception as e:
             print(f"Error translating sequence: {str(e)}")
             return ""
-            
+    
     def generate_for_gene(
         self, 
         gene_name: str,
         output_format: str = 'fasta',
         exclude_canonical: bool = False
     ) -> Dict[str, Dict[str, str]]:
-        """
-        Generate amino acid sequences for all truncation variants of a gene.
+        """Generate amino acid sequences for all truncation variants of a gene.
         
         Args:
             gene_name: Name of the gene
@@ -237,24 +288,25 @@ class TruncatedProteinGenerator:
             # Process each transcript
             for _, transcript in transcript_info.iterrows():
                 transcript_id = transcript['transcript_id']
-                strand = transcript.get('strand', '+')
                 
                 print(f"  Processing transcript {transcript_id}")
                 
-                # Get full transcript sequence
-                full_sequence, success = self.extract_transcript_sequence(transcript_id)
+                # Generate canonical protein first
+                canonical_cds = self.build_truncated_cds(transcript_id, pd.Series({
+                    'start': -1,  # Set to impossible values to get full CDS
+                    'end': -1
+                }))
                 
-                if not success or not full_sequence:
-                    print(f"  Failed to get sequence for {transcript_id}, skipping")
+                if not canonical_cds:
+                    print(f"  Failed to get CDS for {transcript_id}, skipping")
                     continue
-                    
-                # Generate canonical protein
-                canonical_protein = self.translate_sequence(full_sequence)
+                
+                canonical_protein = self.translate_sequence(canonical_cds)
                 
                 if not canonical_protein:
                     print(f"  Failed to translate canonical sequence for {transcript_id}, skipping")
                     continue
-                    
+                
                 # Store canonical sequence
                 result[transcript_id] = {
                     'canonical': canonical_protein
@@ -264,22 +316,21 @@ class TruncatedProteinGenerator:
                 if not truncations.empty:
                     for _, trunc in truncations.iterrows():
                         trunc_id = trunc.get('feature_id', f"trunc_{trunc['start']}_{trunc['end']}")
-                        trunc_position = trunc['start']  # Or use another field based on your data
                         
-                        # Apply truncation
-                        truncated_seq = self.apply_truncation(full_sequence, trunc_position, strand)
+                        # Build truncated CDS
+                        truncated_cds = self.build_truncated_cds(transcript_id, trunc)
                         
-                        if not truncated_seq:
-                            print(f"  Failed to apply truncation {trunc_id} to {transcript_id}, skipping")
+                        if not truncated_cds:
+                            print(f"  Failed to build truncated CDS for {transcript_id} - {trunc_id}, skipping")
                             continue
-                            
+                        
                         # Translate truncated sequence
-                        truncated_protein = self.translate_sequence(truncated_seq)
+                        truncated_protein = self.translate_sequence(truncated_cds)
                         
                         if not truncated_protein:
                             print(f"  Failed to translate truncated sequence for {transcript_id} - {trunc_id}, skipping")
                             continue
-                            
+                        
                         # Store truncated sequence
                         result[transcript_id][trunc_id] = truncated_protein
                         print(f"  Generated truncated protein for {transcript_id} - {trunc_id}")
@@ -293,7 +344,7 @@ class TruncatedProteinGenerator:
         except Exception as e:
             print(f"Error generating sequences for gene {gene_name}: {str(e)}")
             return result
-            
+    
     def _save_sequences(
         self, 
         gene_name: str, 
@@ -301,8 +352,7 @@ class TruncatedProteinGenerator:
         output_format: str = 'fasta',
         exclude_canonical: bool = False
     ) -> None:
-        """
-        Save generated sequences to files.
+        """Save generated sequences to files.
         
         Args:
             gene_name: Name of the gene
@@ -372,7 +422,7 @@ class TruncatedProteinGenerator:
             output_file = gene_dir / f"{gene_name}_protein_sequences.csv"
             pd.DataFrame(rows).to_csv(output_file, index=False)
             print(f"Saved protein sequences to {output_file}")
-            
+    
     def prepare_deep_learning_dataset(
         self, 
         gene_list: List[str],
@@ -381,8 +431,7 @@ class TruncatedProteinGenerator:
         min_length: int = 50,
         max_length: int = 1000
     ) -> pd.DataFrame:
-        """
-        Prepare a dataset of amino acid sequences for deep learning.
+        """Prepare a dataset of amino acid sequences for deep learning.
         
         Args:
             gene_list: List of gene names to process
@@ -453,10 +502,8 @@ class TruncatedProteinGenerator:
         
         return dataset
 
-
     def _save_dataset_fasta(self, dataset: pd.DataFrame) -> None:
-        """
-        Save dataset as FASTA file.
+        """Save dataset as FASTA file.
         
         Args:
             dataset: DataFrame with sequence information
