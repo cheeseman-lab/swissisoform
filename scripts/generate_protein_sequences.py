@@ -74,7 +74,7 @@ async def generate_protein_sequences(
 
     # Generate dataset
     print("\nGenerating amino acid sequences for deep learning dataset")
-    dataset = protein_generator.prepare_deep_learning_dataset(
+    dataset = protein_generator.create_protein_sequence_dataset(
         gene_list=gene_names,
         output_format=output_format,
         include_canonical=include_canonical,

@@ -11,7 +11,7 @@ from typing import Optional, Dict, List
 
 class AlternativeIsoform:
     """Handles alternative isoform data from BED format files.
-    
+
     The name field in the BED file is expected to contain gene information in the format:
     ENSG00000260916.6_CCPG1_AUG_TruncationToAnno
     """

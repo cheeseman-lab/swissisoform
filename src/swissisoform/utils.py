@@ -15,6 +15,7 @@ from biomart import BiomartServer
 # Configure logger
 logger = logging.getLogger(__name__)
 
+
 def save_analysis_results(
     results: List[Dict],
     output_dir: Union[str, Path],

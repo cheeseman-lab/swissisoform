@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 class MutationHandler:
     """Handles variant data from multiple mutation databases.
-    
+
     Provides methods to fetch, parse, and analyze mutation data from:
     - gnomAD
     - ClinVar
