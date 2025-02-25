@@ -1,3 +1,10 @@
+"""Genome sequence and annotation handling module.
+
+This module provides the GenomeHandler class for working with genome sequences
+and annotation files. It supports loading and querying FASTA genome sequences
+and GTF annotation files.
+"""
+
 from Bio import SeqIO
 import pandas as pd
 from typing import Dict, List, Optional, Tuple

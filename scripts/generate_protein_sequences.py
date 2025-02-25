@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+
+"""Generate protein sequences from truncated transcripts.
+
+This script generates amino acid sequences from truncated transcript variants
+for a list of genes, creating datasets suitable for deep learning
+applications.
+"""
+
 import asyncio
 import pandas as pd
 from pathlib import Path
@@ -7,7 +15,7 @@ import logging
 from typing import List, Optional
 
 from swissisoform.genome import GenomeHandler
-from swissisoform.isoform import AlternativeIsoform
+from swissisoform.alternative_isoforms import AlternativeIsoform
 from swissisoform.translation import TruncatedProteinGenerator
 from swissisoform.utils import parse_gene_list
 
@@ -18,7 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def generate_amino_acid_sequences(
+async def generate_protein_sequences(
     gene_list_path: str,
     output_dir: str,
     genome_path: str = "../data/genome_data/hg38.fa",
@@ -117,10 +125,10 @@ if __name__ == "__main__":
         "--include-canonical", action="store_true", help="Include canonical sequences"
     )
     parser.add_argument(
-        "--min-length", type=int, default=50, help="Minimum protein length"
+        "--min-length", type=int, default=0, help="Minimum protein length"
     )
     parser.add_argument(
-        "--max-length", type=int, default=1000, help="Maximum protein length"
+        "--max-length", type=int, default=10000, help="Maximum protein length"
     )
     parser.add_argument(
         "--format", default="fasta,csv", help="Output format: fasta, csv, or fasta,csv"
@@ -133,7 +141,7 @@ if __name__ == "__main__":
     output_dir.mkdir(parents=True, exist_ok=True)
 
     asyncio.run(
-        generate_amino_acid_sequences(
+        generate_protein_sequences(
             gene_list_path=args.gene_list,
             output_dir=args.output_dir,
             genome_path=args.genome,

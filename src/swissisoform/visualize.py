@@ -1,3 +1,10 @@
+"""Genomic feature visualization module.
+
+This module provides the GenomeVisualizer class for creating visual
+representations of transcript features, alternative isoforms, and
+mutation data.
+"""
+
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.lines import Line2D

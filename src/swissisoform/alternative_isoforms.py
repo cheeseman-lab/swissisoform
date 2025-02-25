@@ -1,15 +1,23 @@
+"""Alternative isoform data handling module.
+
+This module provides functionality for loading and processing alternative
+isoform data from BED format files, with support for visualizing
+alternative start sites.
+"""
+
 import pandas as pd
 from typing import Optional, Dict, List
 
 
 class AlternativeIsoform:
     """Handles alternative isoform data from BED format files.
+    
     The name field in the BED file is expected to contain gene information in the format:
     ENSG00000260916.6_CCPG1_AUG_TruncationToAnno
     """
 
     def __init__(self):
-        """Initialize an empty isoform handler"""
+        """Initialize an empty isoform handler."""
         self.isoforms = pd.DataFrame()
 
     def load_bed(self, file_path: str) -> None:

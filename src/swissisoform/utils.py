@@ -1,98 +1,19 @@
+"""Utility functions for the SwissIsoform package.
+
+This module provides various helper functions for mutation analysis,
+file handling, and data processing used throughout the package.
+"""
+
 import pandas as pd
 from typing import List, Dict, Optional, Union
 import asyncio
 import logging
 from pathlib import Path
+from biomart import BiomartServer
+
 
 # Configure logger
 logger = logging.getLogger(__name__)
-
-
-async def analyze_mutations(
-    gene_name: str,
-    mutation_handler: "MutationHandler",
-    alt_features: pd.DataFrame,
-    sources: Optional[List[str]] = None,
-    impact_types: Optional[Dict[str, List[str]]] = None,
-    aggregator_csv_path: Optional[str] = None,
-) -> Optional[pd.DataFrame]:
-    """Analyze mutations in alternative isoform regions.
-
-    Args:
-        gene_name: Name of the gene to analyze
-        mutation_handler: Initialized MutationHandler instance
-        alt_features: DataFrame containing alternative isoform features
-        sources: List of mutation sources to query ('clinvar', 'gnomad', 'aggregator')
-        impact_types: Dictionary mapping sources to impact types to filter by
-        aggregator_csv_path: Path to aggregator CSV file (only needed if 'aggregator' in sources)
-
-    Returns:
-        DataFrame containing mutations in alternative isoform regions or None if no mutations found
-    """
-    if sources is None:
-        sources = ["clinvar"]
-
-    if impact_types is None:
-        impact_types = {}  # Default to no filtering by impact type
-
-    print(f"Fetching mutations from sources: {', '.join(sources)}...")
-
-    mutations = await mutation_handler.get_visualization_ready_mutations(
-        gene_name=gene_name,
-        alt_features=alt_features,
-        sources=sources,
-        aggregator_csv_path=aggregator_csv_path,
-    )
-
-    # Filter mutations by impact type for each source if specified
-    if not mutations.empty and impact_types:
-        print(f"Filtering for impact types by source:")
-        filtered_mutations = pd.DataFrame()
-
-        for source, impacts in impact_types.items():
-            print(f"  - {source}: {', '.join(impacts)}")
-            source_mutations = mutations[
-                mutations["source"].str.lower() == source.lower()
-            ]
-
-            if not source_mutations.empty:
-                filtered_source = source_mutations[
-                    source_mutations["impact"].isin(impacts)
-                ]
-                filtered_mutations = pd.concat([filtered_mutations, filtered_source])
-
-            # Keep mutations from sources that don't have filters specified
-            other_sources = [s for s in sources if s.lower() != source.lower()]
-            for other_source in other_sources:
-                other_mutations = mutations[
-                    mutations["source"].str.lower() == other_source.lower()
-                ]
-                filtered_mutations = pd.concat([filtered_mutations, other_mutations])
-
-        mutations = filtered_mutations
-
-    if mutations.empty:
-        print("No matching mutations found")
-        return None
-
-    print(f"Found {len(mutations)} mutations in truncation regions")
-
-    # Get mutation statistics
-    mutation_impacts = mutations["impact"].value_counts().to_dict()
-    clinical_sig = mutations["clinical_significance"].value_counts().to_dict()
-
-    # Create truncation regions string
-    truncation_regions = alt_features.apply(
-        lambda x: f"{x['start']}-{x['end']}", axis=1
-    ).tolist()
-
-    print("\nMutation Analysis:")
-    print(f"Impact types: {mutation_impacts}")
-    print(f"Clinical significance: {clinical_sig}")
-    print(f"Truncation regions: {truncation_regions}")
-
-    return mutations
-
 
 def save_analysis_results(
     results: List[Dict],
@@ -177,3 +98,166 @@ def parse_gene_list(gene_list_path: Union[str, Path]) -> List[str]:
 
     print(f"Read {len(gene_names)} genes from {gene_list_path}")
     return gene_names
+
+
+def get_ensembl_reference():
+    """Fetch current ENSEMBL ID to gene name mappings using biomart.
+
+    Returns:
+        dict: Mapping of ENSEMBL IDs to gene names
+    """
+    server = BiomartServer("http://www.ensembl.org/biomart")
+    database = server.databases["ENSEMBL_MART_ENSEMBL"]
+    dataset = database.datasets["hsapiens_gene_ensembl"]
+
+    attributes = ["ensembl_gene_id", "external_gene_name"]
+    response = dataset.search({"attributes": attributes})
+
+    reference_data = {}
+    for line in response.iter_lines():
+        ensembl_id, gene_name = line.decode("utf-8").split("\t")
+        if ensembl_id and gene_name:
+            reference_data[ensembl_id] = gene_name
+
+    return reference_data
+
+
+def parse_bed_line(line):
+    """Parse a single BED file line to extract ENSEMBL ID and gene name."""
+    fields = line.strip().split("\t")
+    if len(fields) < 4:
+        return None
+
+    name_parts = fields[3].split("_")
+    if len(name_parts) < 3:
+        return None
+
+    # Get base ENSEMBL ID without version number
+    full_ensembl_id = name_parts[0]
+    ensembl_id = full_ensembl_id.split(".")[0]
+    gene_name = name_parts[1]
+
+    return {
+        "ensembl_id": ensembl_id,
+        "full_ensembl_id": full_ensembl_id,
+        "gene_name": gene_name,
+        "fields": fields,
+        "line": line.strip(),
+    }
+
+
+def process_bed_file(bed_file_path, reference_data, callback):
+    """Process BED file with a custom callback function for each line."""
+    stats = {
+        "total": 0,
+        "processed": 0,
+        "mismatches": [],
+        "invalid_format": [],
+        "not_found": [],
+    }
+
+    with open(bed_file_path, "r") as f:
+        for line_num, line in enumerate(f, 1):
+            if not line.strip():
+                continue
+
+            stats["total"] += 1
+            parsed = parse_bed_line(line)
+
+            if not parsed:
+                stats["invalid_format"].append((line_num, line.strip()))
+                continue
+
+            if not parsed["ensembl_id"].startswith("ENSG"):
+                stats["invalid_format"].append((line_num, line.strip()))
+                continue
+
+            if parsed["ensembl_id"] not in reference_data:
+                stats["not_found"].append(
+                    (line_num, parsed["ensembl_id"], parsed["gene_name"])
+                )
+                continue
+
+            ref_gene_name = reference_data[parsed["ensembl_id"]]
+            if ref_gene_name.upper() != parsed["gene_name"].upper():
+                stats["mismatches"].append(
+                    (line_num, parsed["ensembl_id"], parsed["gene_name"], ref_gene_name)
+                )
+
+            callback(parsed, ref_gene_name)
+            stats["processed"] += 1
+
+    return stats
+
+
+def validate_ensembl_mappings(bed_file_path):
+    """Validate ENSEMBL ID to gene name mappings in a BED file."""
+    print("Fetching current Ensembl reference data...")
+    reference_data = get_ensembl_reference()
+    print(f"Retrieved {len(reference_data)} reference mappings")
+
+    valid_entries = []
+
+    def validation_callback(parsed, ref_gene_name):
+        valid_entries.append(
+            (parsed["ensembl_id"], parsed["gene_name"], parsed["line"])
+        )
+
+    stats = process_bed_file(bed_file_path, reference_data, validation_callback)
+    return {**stats, "valid_entries": valid_entries}
+
+
+def update_bed_with_reference_names(bed_file_path, output_path):
+    """Create a new BED file with gene names updated to match Ensembl reference."""
+    print("Fetching current Ensembl reference data...")
+    reference_data = get_ensembl_reference()
+    print(f"Retrieved {len(reference_data)} reference mappings")
+
+    with open(output_path, "w") as f_out:
+
+        def update_callback(parsed, ref_gene_name):
+            fields = parsed["fields"].copy()
+            name_parts = fields[3].split("_")
+            name_parts[1] = ref_gene_name
+            fields[3] = "_".join(name_parts)
+            f_out.write("\t".join(fields) + "\n")
+
+        stats = process_bed_file(bed_file_path, reference_data, update_callback)
+
+    return stats
+
+
+def print_validation_results(results):
+    """Print validation results in a readable format."""
+    print(f"\nValidation Results:")
+    print(f"Total entries processed: {results['total']}")
+    print(f"Successfully validated: {results['processed']}")
+
+    if results["invalid_format"]:
+        print(f"\nInvalid format entries ({len(results['invalid_format'])} found):")
+        for line_num, line in results["invalid_format"]:
+            print(f"Line {line_num}: {line}")
+
+    if results["not_found"]:
+        print(
+            f"\nENSEMBL IDs not found in reference ({len(results['not_found'])} found):"
+        )
+        for line_num, ensembl_id, gene_name in results["not_found"]:
+            print(f"Line {line_num}: {ensembl_id} ({gene_name})")
+
+    if results["mismatches"]:
+        print(f"\nReference mismatches ({len(results['mismatches'])} found):")
+        for line_num, ensembl_id, bed_gene, ref_gene in results["mismatches"]:
+            print(f"Line {line_num}: {ensembl_id}")
+            print(f"  BED gene name: {bed_gene}")
+            print(f"  Reference gene name: {ref_gene}\n")
+
+
+def print_update_results(stats):
+    """Print update operation results."""
+    print(f"\nUpdate Results:")
+    print(f"Total entries: {stats['total']}")
+    print(f"Successfully updated: {stats['processed']}")
+    print(f"Invalid format entries: {len(stats['invalid_format'])}")
+    print(f"ENSEMBL IDs not found: {len(stats['not_found'])}")
+    print(f"Gene names that were different: {len(stats['mismatches'])}")

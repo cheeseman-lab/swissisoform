@@ -1,3 +1,10 @@
+"""Transcript translation and protein sequence generation module.
+
+This module contains the TruncatedProteinGenerator class for generating
+amino acid sequences from truncated transcripts and preparing datasets
+for deep learning applications.
+"""
+
 import pandas as pd
 import re
 import os
@@ -8,11 +15,12 @@ from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 
 from swissisoform.genome import GenomeHandler
-from swissisoform.isoform import AlternativeIsoform
+from swissisoform.alternative_isoforms import AlternativeIsoform
 
 
 class TruncatedProteinGenerator:
     """Generate amino acid sequences from truncated transcripts.
+    
     This class facilitates the generation of protein sequences stemming from
     transcript truncations for use in deep learning models.
     """

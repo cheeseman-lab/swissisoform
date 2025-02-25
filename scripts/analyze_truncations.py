@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 
+"""Analyze truncation sites and mutations in gene transcripts.
+
+This script batch processes a list of genes to identify alternative isoform
+truncation sites and analyze mutations that occur within these regions.
+It can generate visualizations of transcript features and mutations.
+"""
+
 import asyncio
 import pandas as pd
 from datetime import datetime
@@ -15,9 +22,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 from swissisoform.genome import GenomeHandler
 from swissisoform.visualize import GenomeVisualizer
-from swissisoform.isoform import AlternativeIsoform
-from swissisoform.mutations import MutationHandler
-from swissisoform.utils import analyze_mutations, save_analysis_results, parse_gene_list
+from swissisoform.alternative_isoforms import AlternativeIsoform
+from swissisoform.mutations import MutationHandler, analyze_mutations
+from swissisoform.utils import save_analysis_results, parse_gene_list
 
 # Configure logger
 logging.basicConfig(
