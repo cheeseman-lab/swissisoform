@@ -11,8 +11,6 @@ import asyncio
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict
-import os
 import argparse
 import logging
 import warnings
@@ -23,8 +21,13 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 from swissisoform.genome import GenomeHandler
 from swissisoform.visualize import GenomeVisualizer
 from swissisoform.alternative_isoforms import AlternativeIsoform
-from swissisoform.mutations import MutationHandler, analyze_mutations
-from swissisoform.utils import save_analysis_results, parse_gene_list
+from swissisoform.mutations import MutationHandler
+from swissisoform.utils import (
+    parse_gene_list,
+    save_gene_level_results,
+    save_truncation_level_results,
+    print_analysis_summary,
+)
 
 # Configure logger
 logging.basicConfig(
@@ -41,7 +44,7 @@ async def process_gene(
     output_dir: str,
     visualize: bool = False,
     include_unfiltered: bool = False,
-    impact_types: Optional[Dict[str, List[str]]] = None,
+    impact_types: dict = None,
 ) -> dict:
     """Process a single gene with visualizations and mutation analysis.
 
@@ -62,105 +65,332 @@ async def process_gene(
         # Get alternative isoform features
         print(f"  ├─ Getting alternative features...", end="", flush=True)
         alt_features = alt_isoforms.get_visualization_features(gene_name)
-
         if alt_features.empty:
             print(f"\r  ├─ No alternative features found")
             return {"gene_name": gene_name, "status": "no_features", "error": None}
-
         print(f"\r  ├─ Found {len(alt_features)} alternative features")
 
         # Get transcript information
         print(f"  ├─ Getting transcript information...", end="", flush=True)
         transcript_info = genome.get_transcript_ids(gene_name)
-
         if transcript_info.empty:
             print(f"\r  ├─ No transcript info found")
             return {"gene_name": gene_name, "status": "no_transcripts", "error": None}
 
-        print(f"\r  ├─ Found {len(transcript_info)} transcripts")
+        # Create transcript-truncation pairs based on overlap
+        print(f"\r  ├─ Creating transcript-truncation pairs...", end="", flush=True)
+        transcript_truncation_pairs = []
 
-        # Get mutations (unfiltered) if requested
-        mutations_unfiltered = None
-        unfiltered_count = 0
-        if include_unfiltered:
-            print(f"  ├─ Fetching unfiltered mutations...", end="", flush=True)
-            mutations_unfiltered = await analyze_mutations(
-                gene_name=gene_name,
-                mutation_handler=mutation_handler,
-                alt_features=alt_features,
-                sources=["clinvar"],
-            )
-            unfiltered_count = (
-                len(mutations_unfiltered) if mutations_unfiltered is not None else 0
-            )
-            print(f"\r  ├─ Found {unfiltered_count} unfiltered mutations")
+        for _, transcript in transcript_info.iterrows():
+            transcript_id = transcript["transcript_id"]
+            transcript_start = transcript["start"]
+            transcript_end = transcript["end"]
+            transcript_chromosome = transcript["chromosome"]
+            transcript_strand = transcript["strand"]
 
-        # Get mutations (filtered)
-        print(f"  ├─ Analyzing mutations...", end="", flush=True)
-        mutations_filtered = await analyze_mutations(
+            # Check each truncation feature for overlap with this transcript
+            for idx, truncation in alt_features.iterrows():
+                trunc_start = truncation["start"]
+                trunc_end = truncation["end"]
+                trunc_chrom = truncation["chromosome"]
+
+                # Skip if chromosomes don't match
+                if transcript_chromosome != trunc_chrom:
+                    continue
+
+                # Check for overlap
+                if not (transcript_end < trunc_start or transcript_start > trunc_end):
+                    # Create an entry for this transcript-truncation pair
+                    truncation_id = f"trunc_{idx}"
+
+                    # If we have more identifiable information about the truncation, use it
+                    if "start_codon" in truncation and not pd.isna(
+                        truncation["start_codon"]
+                    ):
+                        truncation_id = f"trunc_{truncation['start_codon']}_{trunc_start}_{trunc_end}"
+
+                    transcript_truncation_pairs.append(
+                        {
+                            "transcript_id": transcript_id,
+                            "truncation_id": truncation_id,
+                            "truncation_idx": idx,
+                            "transcript_start": transcript_start,
+                            "transcript_end": transcript_end,
+                            "transcript_strand": transcript_strand,
+                            "truncation_start": trunc_start,
+                            "truncation_end": trunc_end,
+                        }
+                    )
+
+        if not transcript_truncation_pairs:
+            print(f"\r  ├─ No transcripts overlap with truncation regions")
+            return {
+                "gene_name": gene_name,
+                "status": "no_overlapping_transcripts",
+                "error": None,
+            }
+
+        print(
+            f"\r  ├─ Found {len(transcript_truncation_pairs)} transcript-truncation pairs across {len(transcript_info)} transcripts"
+        )
+
+        # Get the list of desired impact types for each source
+        desired_impact_types = []
+        if impact_types:
+            for source, impacts in impact_types.items():
+                desired_impact_types.extend(impacts)
+
+        # Fetch raw mutations and filter them for each transcript-truncation pair
+        print(f"  ├─ Fetching mutation data...", end="", flush=True)
+
+        # Get raw mutation data from ClinVar (we're not filtering yet)
+        all_mutations = await mutation_handler.get_visualization_ready_mutations(
             gene_name=gene_name,
-            mutation_handler=mutation_handler,
-            alt_features=alt_features,
+            alt_features=None,  # Don't filter by alt_features yet
             sources=["clinvar"],
-            impact_types=impact_types,
+            aggregator_csv_path=None,
         )
 
-        filtered_count = (
-            len(mutations_filtered) if mutations_filtered is not None else 0
-        )
-        print(f"\r  ├─ Found {filtered_count} mutations after filtering")
+        if all_mutations is None or all_mutations.empty:
+            print(f"\r  ├─ No mutations found for this gene")
+            all_mutations = pd.DataFrame()
+        else:
+            print(f"\r  ├─ Found {len(all_mutations)} total mutations for this gene")
 
+            # Apply impact type filtering if specified
+            if impact_types:
+                print(f"  ├─ Filtering for impact types: {impact_types}")
+                for source, impacts in impact_types.items():
+                    source_mutations = all_mutations[
+                        all_mutations["source"].str.lower() == source.lower()
+                    ]
+
+                    if not source_mutations.empty:
+                        filtered_mutations = source_mutations[
+                            source_mutations["impact"].isin(impacts)
+                        ]
+                        # Replace the original mutations with filtered ones
+                        all_mutations = all_mutations[
+                            all_mutations["source"].str.lower() != source.lower()
+                        ]
+                        all_mutations = pd.concat([all_mutations, filtered_mutations])
+
+        # Container for all transcript-truncation analysis results
+        pair_results = []
+
+        # Process each transcript-truncation pair
+        print(f"  ├─ Analyzing mutations for each transcript-truncation pair...")
+
+        for pair_idx, pair in enumerate(transcript_truncation_pairs, 1):
+            transcript_id = pair["transcript_id"]
+            truncation_id = pair["truncation_id"]
+            truncation_idx = pair["truncation_idx"]
+
+            # Get truncation start and end positions
+            trunc_start = pair["truncation_start"]
+            trunc_end = pair["truncation_end"]
+
+            # Initialize default counts for all desired impact types
+            mutation_categories = {}
+
+            # Ensure all our desired impact types have columns, even if zero
+            for impact_type in desired_impact_types:
+                category_key = f"mutations_{impact_type.replace(' ', '_').lower()}"
+                mutation_categories[category_key] = 0
+
+                # Also create empty columns for ClinVar IDs for each impact type
+                impact_key = f"clinvar_ids_{impact_type.replace(' ', '_').lower()}"
+                mutation_categories[impact_key] = ""
+
+            # Create a truncation-specific filter for mutations
+            if not all_mutations.empty:
+                # Filter mutations to only those in this truncation region
+                pair_mutations = all_mutations[
+                    (all_mutations["position"] >= trunc_start)
+                    & (all_mutations["position"] <= trunc_end)
+                ].copy()
+
+                pair_mutation_count = len(pair_mutations)
+
+                if pair_mutation_count > 0:
+                    print(
+                        f"  │  ├─ {transcript_id} × {truncation_id}: {pair_mutation_count} mutations"
+                    )
+
+                    clinvar_ids = []
+
+                    # Count by impact category
+                    for impact in pair_mutations["impact"].unique():
+                        if pd.isna(impact):
+                            continue
+
+                        # Get mutations for this impact
+                        impact_mutations = pair_mutations[
+                            pair_mutations["impact"] == impact
+                        ]
+                        category_count = len(impact_mutations)
+
+                        # Store count for this impact type
+                        category_key = f"mutations_{impact.replace(' ', '_').lower()}"
+                        mutation_categories[category_key] = category_count
+
+                        # Store ClinVar IDs for this impact type
+                        if "variant_id" in impact_mutations.columns:
+                            impact_ids = (
+                                impact_mutations["variant_id"]
+                                .dropna()
+                                .unique()
+                                .tolist()
+                            )
+                            # Convert to strings (to handle numeric IDs), filter empty strings
+                            impact_ids = [
+                                str(id).strip() for id in impact_ids if str(id).strip()
+                            ]
+
+                            # Add to the category-specific IDs
+                            if impact_ids:
+                                impact_key = (
+                                    f"clinvar_ids_{impact.replace(' ', '_').lower()}"
+                                )
+                                mutation_categories[impact_key] = ",".join(impact_ids)
+
+                    # Collect all ClinVar IDs for this truncation region
+                    if "variant_id" in pair_mutations.columns:
+                        clinvar_ids = (
+                            pair_mutations["variant_id"].dropna().unique().tolist()
+                        )
+                        clinvar_ids = [
+                            str(id).strip() for id in clinvar_ids if str(id).strip()
+                        ]
+
+                    # Add results for this pair with detailed mutation categories
+                    pair_results.append(
+                        {
+                            "transcript_id": transcript_id,
+                            "truncation_id": truncation_id,
+                            "truncation_start": trunc_start,
+                            "truncation_end": trunc_end,
+                            "mutation_count_total": pair_mutation_count,
+                            "clinvar_variant_ids": ",".join(clinvar_ids)
+                            if clinvar_ids
+                            else "",
+                            **mutation_categories,
+                        }
+                    )
+                else:
+                    # No mutations for this pair, still record it with zeros
+                    pair_results.append(
+                        {
+                            "transcript_id": transcript_id,
+                            "truncation_id": truncation_id,
+                            "truncation_start": trunc_start,
+                            "truncation_end": trunc_end,
+                            "mutation_count_total": 0,
+                            "clinvar_variant_ids": "",
+                            **mutation_categories,  # Include zero counts for all categories
+                        }
+                    )
+            else:
+                # No mutations at all, record with zeros
+                pair_results.append(
+                    {
+                        "transcript_id": transcript_id,
+                        "truncation_id": truncation_id,
+                        "truncation_start": trunc_start,
+                        "truncation_end": trunc_end,
+                        "mutation_count_total": 0,
+                        "clinvar_variant_ids": "",
+                        **mutation_categories,  # Include zero counts for all categories
+                    }
+                )
+
+        # Generate visualizations if requested
         if visualize:
             visualizer = GenomeVisualizer(genome)
             gene_dir = Path(output_dir) / gene_name
             gene_dir.mkdir(parents=True, exist_ok=True)
 
-            print(f"  ├─ Generating visualizations:")
-            for _, transcript in transcript_info.iterrows():
-                transcript_id = transcript["transcript_id"]
-                print(f"  │  ├─ Processing {transcript_id}")
+            print(
+                f"  ├─ Generating visualizations for each transcript-truncation pair:"
+            )
 
-                if include_unfiltered and mutations_unfiltered is not None:
-                    print(f"  │  │  ├─ Creating unfiltered view")
-                    visualizer.visualize_transcript(
-                        gene_name=gene_name,
-                        transcript_id=transcript_id,
-                        alt_features=alt_features,
-                        mutations_df=mutations_unfiltered,
-                        output_file=str(gene_dir / f"{transcript_id}_unfiltered.png"),
+            for pair_idx, pair in enumerate(transcript_truncation_pairs, 1):
+                transcript_id = pair["transcript_id"]
+                truncation_id = pair["truncation_id"]
+                truncation_idx = pair["truncation_idx"]
+
+                # Get the specific truncation for this pair
+                if truncation_idx in alt_features.index:
+                    truncation_feature = alt_features.loc[[truncation_idx]].copy()
+                else:
+                    print(
+                        f"  │  ├─ Warning: Invalid truncation index {truncation_idx}, skipping visualization"
                     )
+                    continue
 
-                if mutations_filtered is not None:
-                    print(f"  │  │  ├─ Creating filtered view")
+                print(
+                    f"  │  ├─ Visualizing pair {pair_idx}/{len(transcript_truncation_pairs)}: {transcript_id} × {truncation_id}"
+                )
+
+                # Create directories organized by transcript and truncation
+                transcript_dir = gene_dir / transcript_id
+                transcript_dir.mkdir(exist_ok=True)
+
+                # Prepare output paths
+                pair_base_filename = f"{transcript_id}_{truncation_id}"
+
+                # Filter mutations for this specific truncation
+                if not all_mutations.empty:
+                    trunc_start = pair["truncation_start"]
+                    trunc_end = pair["truncation_end"]
+
+                    pair_mutations = all_mutations[
+                        (all_mutations["position"] >= trunc_start)
+                        & (all_mutations["position"] <= trunc_end)
+                    ].copy()
+
+                    # Create the visualization using only this truncation feature
+                    print(
+                        f"  │  │  ├─ Creating view with {len(pair_mutations)} mutations"
+                    )
                     visualizer.visualize_transcript(
                         gene_name=gene_name,
                         transcript_id=transcript_id,
-                        alt_features=alt_features,
-                        mutations_df=mutations_filtered,
-                        output_file=str(gene_dir / f"{transcript_id}_filtered.png"),
+                        alt_features=truncation_feature,
+                        mutations_df=pair_mutations,
+                        output_file=str(
+                            transcript_dir / f"{pair_base_filename}_filtered.png"
+                        ),
                     )
 
                     print(f"  │  │  └─ Creating zoomed view")
                     visualizer.visualize_transcript_zoomed(
                         gene_name=gene_name,
                         transcript_id=transcript_id,
-                        alt_features=alt_features,
-                        mutations_df=mutations_filtered,
+                        alt_features=truncation_feature,
+                        mutations_df=pair_mutations,
                         output_file=str(
-                            gene_dir / f"{transcript_id}_filtered_zoom.png"
+                            transcript_dir / f"{pair_base_filename}_filtered_zoom.png"
                         ),
                         padding=100,
                     )
-                print(f"  │  └─ Completed {transcript_id}")
+
+        # Calculate total mutations across all pairs
+        total_mutations = (
+            sum(pair["mutation_count_total"] for pair in pair_results)
+            if pair_results
+            else 0
+        )
 
         print("  └─ Processing complete")
         return {
             "gene_name": gene_name,
             "status": "success",
-            "transcripts": len(transcript_info),
-            "alt_features": len(alt_features),
-            "mutations_unfiltered": unfiltered_count if include_unfiltered else None,
-            "mutations_filtered": filtered_count,
+            "total_transcripts": len(transcript_info),
+            "truncation_features": len(alt_features),
+            "transcript_truncation_pairs": len(transcript_truncation_pairs),
+            "mutations_filtered": total_mutations,
+            "pair_results": pair_results,
             "error": None,
         }
 
@@ -221,9 +451,11 @@ async def main(
     total_genes = len(gene_names)
     print(f"\nStarting analysis of {total_genes} genes")
     print(f"Impact types filter: {impact_types['clinvar']}")
+    print(f"Analyzing transcript-truncation pairs with mutations in truncation regions")
 
     # Process all genes
     results = []
+
     for idx, gene_name in enumerate(gene_names, 1):
         print(f"\nProcessing gene {idx}/{total_genes}: {gene_name}")
         result = await process_gene(
@@ -238,28 +470,18 @@ async def main(
         )
         results.append(result)
 
-        # Save intermediate results
-        save_analysis_results(results, output_dir)
+        # Save both levels of results
+        save_gene_level_results(results, output_dir)
+        save_truncation_level_results(results, output_dir)
 
     # Final summary
     end_time = datetime.now()
     duration = end_time - start_time
 
-    print("\nAnalysis Summary:")
+    # Create and print summary
     results_df = pd.DataFrame(results)
-    print(f"  ├─ Total genes processed: {len(results_df)}")
-    print("\n  ├─ Status breakdown:")
-    for status, count in results_df["status"].value_counts().items():
-        print(f"  │  ├─ {status}: {count}")
+    print_analysis_summary(results_df, output_dir)
 
-    # Genes with errors
-    error_genes = results_df[results_df["status"] == "error"]
-    if not error_genes.empty:
-        print("\n  ├─ Genes with errors:")
-        for _, row in error_genes.iterrows():
-            print(f"  │  ├─ {row['gene_name']}: {row['error']}")
-
-    print(f"\n  ├─ Results saved to: {output_dir}")
     print(
         f"  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
     )
@@ -281,7 +503,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--bed",
-        default="../data/ribosome_profiling/RiboTISHV6_MD2025_AnnoToTruncation_exonintersect.bed",
+        default="../data/ribosome_profiling/full_truncations_JL_cleaned.bed",
         help="Path to alternative isoform BED file",
     )
     parser.add_argument(
