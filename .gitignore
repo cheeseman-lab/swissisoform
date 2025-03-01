@@ -16,3 +16,4 @@ notebooks/**/
 # script outputs
 scripts/out
 scripts/results
+scripts/results_reduced
