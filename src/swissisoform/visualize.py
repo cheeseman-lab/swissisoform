@@ -138,6 +138,122 @@ class GenomeVisualizer:
                 )
 
         return legend_elements
+    
+
+    def _preprocess_features(self, features):
+        """Preprocess features to ensure proper visualization with connected elements.
+
+        Makes minimal adjustments to maintain biological accuracy while enhancing visualization.
+        
+        Args:
+            features: DataFrame of transcript features
+
+        Returns:
+            Preprocessed features DataFrame
+        """
+        # Make a copy to avoid modifying the original
+        features = features.copy()
+        
+        # Constants for maximum allowed adjustments (in base pairs)
+        MAX_UTR_ADJUSTMENT = 3
+        MAX_CODON_ADJUSTMENT = 3
+        MAX_CDS_ADJUSTMENT = 0  # No CDS modifications by default
+        
+        # Get transcript strand
+        transcript_strand = "+"
+        transcript_info = features[features["feature_type"] == "transcript"]
+        if not transcript_info.empty:
+            transcript_strand = transcript_info.iloc[0]["strand"]
+        
+        # Find relevant features
+        utr_5prime = features[features["feature_type"] == "5UTR"]
+        utr_3prime = features[features["feature_type"] == "3UTR"]
+        start_codons = features[features["feature_type"] == "start_codon"]
+        stop_codons = features[features["feature_type"] == "stop_codon"]
+        cds_features = features[features["feature_type"] == "CDS"]
+        
+        # Handle 5'UTR and start codon connection
+        if not utr_5prime.empty and not start_codons.empty:
+            for utr_idx in utr_5prime.index:
+                utr = features.loc[utr_idx]
+                
+                for _, start_codon in start_codons.iterrows():
+                    # For positive strand
+                    if transcript_strand == "+":
+                        gap = start_codon["start"] - utr["end"]
+                        if 0 < gap <= MAX_UTR_ADJUSTMENT:
+                            features.loc[utr_idx, "end"] = start_codon["start"]
+                    # For negative strand
+                    elif transcript_strand == "-":
+                        gap = utr["start"] - start_codon["end"]
+                        if 0 < gap <= MAX_UTR_ADJUSTMENT:
+                            features.loc[utr_idx, "start"] = start_codon["end"]
+        
+        # Handle start codon and CDS connection (only adjust start codon, not CDS)
+        if not start_codons.empty and not cds_features.empty:
+            for start_idx in start_codons.index:
+                start_codon = features.loc[start_idx]
+                
+                if transcript_strand == "+":
+                    # On positive strand, connect to first CDS
+                    first_cds = cds_features.sort_values("start").iloc[0]
+                    gap = first_cds["start"] - start_codon["end"]
+                    
+                    # If there's a small gap, extend start codon (not CDS)
+                    if 0 < gap <= MAX_CODON_ADJUSTMENT:
+                        features.loc[start_idx, "end"] = first_cds["start"]
+                else:
+                    # On negative strand, connect to last CDS (by end position)
+                    last_cds = cds_features.sort_values("end", ascending=False).iloc[0]
+                    gap = start_codon["start"] - last_cds["end"]
+                    
+                    # If there's a small gap, adjust start codon (not CDS)
+                    if 0 < gap <= MAX_CODON_ADJUSTMENT:
+                        features.loc[start_idx, "start"] = last_cds["end"]
+        
+        # Handle last CDS and stop codon connection (only adjust stop codon, not CDS)
+        if not stop_codons.empty and not cds_features.empty:
+            for stop_idx in stop_codons.index:
+                stop_codon = features.loc[stop_idx]
+                
+                if transcript_strand == "+":
+                    last_cds = cds_features.sort_values("end", ascending=False).iloc[0]
+                    gap = stop_codon["start"] - last_cds["end"]
+                    
+                    # If there's a small gap, adjust stop codon
+                    if 0 < gap <= MAX_CODON_ADJUSTMENT:
+                        features.loc[stop_idx, "start"] = last_cds["end"]
+                else:
+                    # For negative strand, connect to first CDS (by start position)
+                    first_cds = cds_features.sort_values("start").iloc[0]
+                    gap = first_cds["start"] - stop_codon["end"]
+                    
+                    # If there's a small gap, adjust stop codon
+                    if 0 < gap <= MAX_CODON_ADJUSTMENT:
+                        features.loc[stop_idx, "end"] = first_cds["start"]
+        
+        # Handle stop codon and 3'UTR connection
+        if not utr_3prime.empty and not stop_codons.empty:
+            for utr_idx in utr_3prime.index:
+                utr = features.loc[utr_idx]
+                
+                for _, stop_codon in stop_codons.iterrows():
+                    # For positive strand
+                    if transcript_strand == "+":
+                        gap = utr["start"] - stop_codon["end"]
+                        if 0 < gap <= MAX_UTR_ADJUSTMENT:
+                            features.loc[utr_idx, "start"] = stop_codon["end"]
+                    # For negative strand
+                    elif transcript_strand == "-":
+                        gap = stop_codon["start"] - utr["end"]
+                        if 0 < gap <= MAX_UTR_ADJUSTMENT:
+                            features.loc[utr_idx, "end"] = stop_codon["start"]
+        
+        # Log any changes made
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.debug(f"Feature preprocessing completed, adjustments limited to: UTR={MAX_UTR_ADJUSTMENT}bp, Codon={MAX_CODON_ADJUSTMENT}bp, CDS={MAX_CDS_ADJUSTMENT}bp")
+        
+        return features
 
     def visualize_transcript(
         self,
@@ -160,9 +276,8 @@ class GenomeVisualizer:
             transcript_id
         )
         features = transcript_data["features"]
-
-        if features.empty:
-            raise ValueError(f"No features found for transcript {transcript_id}")
+        
+        features = self._preprocess_features(features)
 
         # Get transcript bounds and create figure
         transcript_info = features[features["feature_type"] == "transcript"].iloc[0]
@@ -212,55 +327,82 @@ class GenomeVisualizer:
                 )
                 ax.add_patch(rect)
 
-        # Plot alternative start sites
+        # Plot alternative start sites - update in both visualization methods
         if alt_features is not None and not alt_features.empty:
             for _, alt_feature in alt_features.iterrows():
                 alt_start = alt_feature["start"]
                 alt_end = alt_feature["end"]
-
-                # Draw truncation bracket
-                bracket_height = 0.05
-                bracket_y = 0.2
-
-                ax.hlines(
-                    y=bracket_y,
-                    xmin=alt_start - 0.5,
-                    xmax=alt_end + 0.5,
+                
+                # Get transcript strand
+                transcript_strand = "+"  # Default to positive strand
+                if features is not None and not features.empty:
+                    transcript_info = features[features["feature_type"] == "transcript"]
+                    if not transcript_info.empty:
+                        transcript_strand = transcript_info.iloc[0]["strand"]
+                
+                # Draw a complete truncation bracket with corners (facing downward)
+                bracket_y = 0.2  # Position for the top of the bracket
+                bracket_height = 0.05  # Height of the bracket
+                
+                # Create a custom bracket shape with corners (flipped to open downward)
+                bracket_vertices = [
+                    (alt_start, bracket_y),  # Top left corner
+                    (alt_start, bracket_y - bracket_height),  # Bottom left corner
+                    (alt_end, bracket_y - bracket_height),  # Bottom right corner
+                    (alt_end, bracket_y)  # Top right corner
+                ]
+                
+                # Draw the bracket as a continuous line
+                xs, ys = zip(*bracket_vertices)
+                ax.plot(
+                    xs, 
+                    ys, 
                     color=self.feature_colors["truncation"],
-                    linewidth=1.5,
-                    label="Truncation",
+                    linewidth=1.0,
+                    solid_capstyle='butt',  # Sharp corners
+                    label="Truncation"
                 )
-
-                ax.vlines(
-                    x=[alt_start, alt_end - 0.5],
-                    ymin=bracket_y,
-                    ymax=bracket_y + bracket_height,
-                    color=self.feature_colors["truncation"],
-                    linewidth=0.5,
-                )
-
-                # Alternative start marker
+                
+                # Alternative start marker positioning depends on strand
                 black_bar_y = 0.4
                 alt_start_height = self.codon_height
                 alt_start_ymin = black_bar_y - (alt_start_height / 2)
                 alt_start_ymax = black_bar_y + (alt_start_height / 2)
-
+                
+                # Place alternative start marker based on strand direction
+                if transcript_strand == "+":
+                    # For positive strand, place at right side (end of truncation)
+                    alt_start_pos = alt_end
+                else:
+                    # For negative strand, place at left side (start of truncation)
+                    alt_start_pos = alt_start
+                
+                # Draw the alternative start marker
                 ax.vlines(
-                    x=alt_end,
+                    x=alt_start_pos,
                     ymin=alt_start_ymin,
                     ymax=alt_start_ymax,
                     color=self.feature_colors["alternative_start"],
-                    linewidth=2,
+                    linewidth=1.5,
                     label="Alternative start",
                 )
-
+                
+                # Place the start codon label
                 if "start_codon" in alt_feature:
+                    if transcript_strand == "+":
+                        # For positive strand, place the label at the right side
+                        label_x = alt_end
+                    else:
+                        # For negative strand, place the label at the left side
+                        label_x = alt_start
+                        
                     plt.text(
-                        alt_end - span * 0.01,
+                        label_x,
                         alt_start_ymax + 0.05,
                         alt_feature["start_codon"],
                         fontsize=8,
                         rotation=45,
+                        ha='center',
                     )
 
         # Plot mutations if provided
@@ -476,14 +618,16 @@ class GenomeVisualizer:
         """
         if alt_features is None or alt_features.empty:
             raise ValueError("alt_features is required for zoomed visualization")
-
+        
         transcript_data = self.genome.get_transcript_features_with_sequence(
             transcript_id
         )
         features = transcript_data["features"]
-
+        
         if features.empty:
             raise ValueError(f"No features found for transcript {transcript_id}")
+        
+        features = self._preprocess_features(features)
 
         # Calculate zoom region based on alt_features
         zoom_start = alt_features["start"].min() - padding
@@ -530,55 +674,83 @@ class GenomeVisualizer:
                 )
                 ax.add_patch(rect)
 
-        # Plot alternative start sites
-        for _, alt_feature in alt_features.iterrows():
-            alt_start = alt_feature["start"]
-            alt_end = alt_feature["end"]
-
-            # Draw truncation bracket
-            bracket_height = 0.05
-            bracket_y = 0.2
-
-            ax.hlines(
-                y=bracket_y,
-                xmin=alt_start,
-                xmax=alt_end,
-                color=self.feature_colors["truncation"],
-                linewidth=1.5,
-                label="Truncation",
-            )
-
-            ax.vlines(
-                x=[alt_start, alt_end],
-                ymin=bracket_y,
-                ymax=bracket_y + bracket_height,
-                color=self.feature_colors["truncation"],
-                linewidth=1,
-            )
-
-            # Alternative start marker
-            black_bar_y = 0.4
-            alt_start_height = self.codon_height
-            alt_start_ymin = black_bar_y - (alt_start_height / 2)
-            alt_start_ymax = black_bar_y + (alt_start_height / 2)
-
-            ax.vlines(
-                x=alt_end,
-                ymin=alt_start_ymin,
-                ymax=alt_start_ymax,
-                color=self.feature_colors["alternative_start"],
-                linewidth=2,
-                label="Alternative start",
-            )
-
-            if "start_codon" in alt_feature:
-                plt.text(
-                    alt_end - 5,
-                    alt_start_ymax + 0.05,
-                    alt_feature["start_codon"],
-                    fontsize=8,
-                    rotation=45,
+        # Plot alternative start sites - update in both visualization methods
+        if alt_features is not None and not alt_features.empty:
+            for _, alt_feature in alt_features.iterrows():
+                alt_start = alt_feature["start"]
+                alt_end = alt_feature["end"]
+                
+                # Get transcript strand
+                transcript_strand = "+"  # Default to positive strand
+                if features is not None and not features.empty:
+                    transcript_info = features[features["feature_type"] == "transcript"]
+                    if not transcript_info.empty:
+                        transcript_strand = transcript_info.iloc[0]["strand"]
+                
+                # Draw a complete truncation bracket with corners (facing downward)
+                bracket_y = 0.2  # Position for the top of the bracket
+                bracket_height = 0.05  # Height of the bracket
+                
+                # Create a custom bracket shape with corners (flipped to open downward)
+                bracket_vertices = [
+                    (alt_start, bracket_y),  # Top left corner
+                    (alt_start, bracket_y - bracket_height),  # Bottom left corner
+                    (alt_end, bracket_y - bracket_height),  # Bottom right corner
+                    (alt_end, bracket_y)  # Top right corner
+                ]
+                
+                # Draw the bracket as a continuous line
+                xs, ys = zip(*bracket_vertices)
+                ax.plot(
+                    xs, 
+                    ys, 
+                    color=self.feature_colors["truncation"],
+                    linewidth=1.0,
+                    solid_capstyle='butt',  # Sharp corners
+                    label="Truncation"
                 )
+                
+                # Alternative start marker positioning depends on strand
+                black_bar_y = 0.4
+                alt_start_height = self.codon_height
+                alt_start_ymin = black_bar_y - (alt_start_height / 2)
+                alt_start_ymax = black_bar_y + (alt_start_height / 2)
+                
+                # Place alternative start marker based on strand direction
+                if transcript_strand == "+":
+                    # For positive strand, place at right side (end of truncation)
+                    alt_start_pos = alt_end
+                else:
+                    # For negative strand, place at left side (start of truncation)
+                    alt_start_pos = alt_start
+                
+                # Draw the alternative start marker
+                ax.vlines(
+                    x=alt_start_pos,
+                    ymin=alt_start_ymin,
+                    ymax=alt_start_ymax,
+                    color=self.feature_colors["alternative_start"],
+                    linewidth=1.5,
+                    label="Alternative start",
+                )
+                
+                # Place the start codon label
+                if "start_codon" in alt_feature:
+                    if transcript_strand == "+":
+                        # For positive strand, place the label at the right side
+                        label_x = alt_end
+                    else:
+                        # For negative strand, place the label at the left side
+                        label_x = alt_start
+                        
+                    plt.text(
+                        label_x,
+                        alt_start_ymax + 0.05,
+                        alt_feature["start_codon"],
+                        fontsize=8,
+                        rotation=45,
+                        ha='center',
+                    )
 
         # Plot mutations if provided (only those in zoom region)
         if mutations_df is not None and not mutations_df.empty:
