@@ -138,45 +138,71 @@ class GenomeVisualizer:
                 )
 
         return legend_elements
-    
 
     def _preprocess_features(self, features):
-        """Preprocess features to ensure proper visualization with connected elements.
+        """Preprocess features to ensure proper visualization with connected elements. Makes minimal adjustments to maintain biological accuracy while enhancing visualization.
 
-        Makes minimal adjustments to maintain biological accuracy while enhancing visualization.
-        
         Args:
             features: DataFrame of transcript features
-
         Returns:
             Preprocessed features DataFrame
         """
         # Make a copy to avoid modifying the original
         features = features.copy()
-        
+
         # Constants for maximum allowed adjustments (in base pairs)
         MAX_UTR_ADJUSTMENT = 3
         MAX_CODON_ADJUSTMENT = 3
         MAX_CDS_ADJUSTMENT = 0  # No CDS modifications by default
-        
+
         # Get transcript strand
         transcript_strand = "+"
         transcript_info = features[features["feature_type"] == "transcript"]
         if not transcript_info.empty:
             transcript_strand = transcript_info.iloc[0]["strand"]
-        
+
         # Find relevant features
-        utr_5prime = features[features["feature_type"] == "5UTR"]
-        utr_3prime = features[features["feature_type"] == "3UTR"]
+        utr_features = features[features["feature_type"] == "UTR"]
         start_codons = features[features["feature_type"] == "start_codon"]
         stop_codons = features[features["feature_type"] == "stop_codon"]
         cds_features = features[features["feature_type"] == "CDS"]
-        
+
+        # Classify UTRs based on their position relative to CDS
+        if not utr_features.empty and not cds_features.empty:
+            # Get the CDS boundaries
+            cds_start = cds_features["start"].min()
+            cds_end = cds_features["end"].max()
+
+            # Create empty dataframes for 5' and 3' UTRs
+            utr_5prime = pd.DataFrame()
+            utr_3prime = pd.DataFrame()
+
+            # Classify each UTR as 5' or 3' based on strand and position
+            for idx, utr in utr_features.iterrows():
+                if transcript_strand == "+":
+                    if utr["end"] <= cds_start:
+                        # This is a 5' UTR (before CDS in + strand)
+                        utr_5prime = pd.concat([utr_5prime, utr.to_frame().T])
+                    elif utr["start"] >= cds_end:
+                        # This is a 3' UTR (after CDS in + strand)
+                        utr_3prime = pd.concat([utr_3prime, utr.to_frame().T])
+                else:  # negative strand
+                    if utr["start"] >= cds_end:
+                        # This is a 5' UTR (after CDS in - strand)
+                        utr_5prime = pd.concat([utr_5prime, utr.to_frame().T])
+                    elif utr["end"] <= cds_start:
+                        # This is a 3' UTR (before CDS in - strand)
+                        utr_3prime = pd.concat([utr_3prime, utr.to_frame().T])
+        else:
+            # If no CDS or UTR features, create empty dataframes
+            utr_5prime = pd.DataFrame()
+            utr_3prime = pd.DataFrame()
+
         # Handle 5'UTR and start codon connection
         if not utr_5prime.empty and not start_codons.empty:
             for utr_idx in utr_5prime.index:
                 utr = features.loc[utr_idx]
-                
+
                 for _, start_codon in start_codons.iterrows():
                     # For positive strand
                     if transcript_strand == "+":
@@ -188,17 +214,17 @@ class GenomeVisualizer:
                         gap = utr["start"] - start_codon["end"]
                         if 0 < gap <= MAX_UTR_ADJUSTMENT:
                             features.loc[utr_idx, "start"] = start_codon["end"]
-        
+
         # Handle start codon and CDS connection (only adjust start codon, not CDS)
         if not start_codons.empty and not cds_features.empty:
             for start_idx in start_codons.index:
                 start_codon = features.loc[start_idx]
-                
+
                 if transcript_strand == "+":
                     # On positive strand, connect to first CDS
                     first_cds = cds_features.sort_values("start").iloc[0]
                     gap = first_cds["start"] - start_codon["end"]
-                    
+
                     # If there's a small gap, extend start codon (not CDS)
                     if 0 < gap <= MAX_CODON_ADJUSTMENT:
                         features.loc[start_idx, "end"] = first_cds["start"]
@@ -206,20 +232,20 @@ class GenomeVisualizer:
                     # On negative strand, connect to last CDS (by end position)
                     last_cds = cds_features.sort_values("end", ascending=False).iloc[0]
                     gap = start_codon["start"] - last_cds["end"]
-                    
+
                     # If there's a small gap, adjust start codon (not CDS)
                     if 0 < gap <= MAX_CODON_ADJUSTMENT:
                         features.loc[start_idx, "start"] = last_cds["end"]
-        
+
         # Handle last CDS and stop codon connection (only adjust stop codon, not CDS)
         if not stop_codons.empty and not cds_features.empty:
             for stop_idx in stop_codons.index:
                 stop_codon = features.loc[stop_idx]
-                
+
                 if transcript_strand == "+":
                     last_cds = cds_features.sort_values("end", ascending=False).iloc[0]
                     gap = stop_codon["start"] - last_cds["end"]
-                    
+
                     # If there's a small gap, adjust stop codon
                     if 0 < gap <= MAX_CODON_ADJUSTMENT:
                         features.loc[stop_idx, "start"] = last_cds["end"]
@@ -227,16 +253,16 @@ class GenomeVisualizer:
                     # For negative strand, connect to first CDS (by start position)
                     first_cds = cds_features.sort_values("start").iloc[0]
                     gap = first_cds["start"] - stop_codon["end"]
-                    
+
                     # If there's a small gap, adjust stop codon
                     if 0 < gap <= MAX_CODON_ADJUSTMENT:
                         features.loc[stop_idx, "end"] = first_cds["start"]
-        
+
         # Handle stop codon and 3'UTR connection
         if not utr_3prime.empty and not stop_codons.empty:
             for utr_idx in utr_3prime.index:
                 utr = features.loc[utr_idx]
-                
+
                 for _, stop_codon in stop_codons.iterrows():
                     # For positive strand
                     if transcript_strand == "+":
@@ -248,11 +274,13 @@ class GenomeVisualizer:
                         gap = stop_codon["start"] - utr["end"]
                         if 0 < gap <= MAX_UTR_ADJUSTMENT:
                             features.loc[utr_idx, "end"] = stop_codon["start"]
-        
+
         # Log any changes made
-        if hasattr(self, 'logger') and self.logger:
-            self.logger.debug(f"Feature preprocessing completed, adjustments limited to: UTR={MAX_UTR_ADJUSTMENT}bp, Codon={MAX_CODON_ADJUSTMENT}bp, CDS={MAX_CDS_ADJUSTMENT}bp")
-        
+        if hasattr(self, "logger") and self.logger:
+            self.logger.debug(
+                f"Feature preprocessing completed, adjustments limited to: UTR={MAX_UTR_ADJUSTMENT}bp, Codon={MAX_CODON_ADJUSTMENT}bp, CDS={MAX_CDS_ADJUSTMENT}bp"
+            )
+
         return features
 
     def visualize_transcript(
@@ -276,7 +304,7 @@ class GenomeVisualizer:
             transcript_id
         )
         features = transcript_data["features"]
-        
+
         features = self._preprocess_features(features)
 
         # Get transcript bounds and create figure
@@ -286,15 +314,6 @@ class GenomeVisualizer:
         span = transcript_end - transcript_start
 
         fig, ax = plt.subplots(figsize=(15, 4))
-
-        # Draw base transcript line
-        ax.hlines(
-            y=0.4,
-            xmin=transcript_start,
-            xmax=transcript_end,
-            color="black",
-            linewidth=1.5,
-        )
 
         # Plot transcript features
         for _, feature in features.iterrows():
@@ -309,7 +328,7 @@ class GenomeVisualizer:
                 )
                 ax.add_patch(rect)
 
-            elif feature["feature_type"] in ["5UTR", "3UTR"]:
+            elif feature["feature_type"] == "UTR":
                 rect = Rectangle(
                     (feature["start"], 0.325),
                     width,
@@ -332,43 +351,43 @@ class GenomeVisualizer:
             for _, alt_feature in alt_features.iterrows():
                 alt_start = alt_feature["start"]
                 alt_end = alt_feature["end"]
-                
+
                 # Get transcript strand
                 transcript_strand = "+"  # Default to positive strand
                 if features is not None and not features.empty:
                     transcript_info = features[features["feature_type"] == "transcript"]
                     if not transcript_info.empty:
                         transcript_strand = transcript_info.iloc[0]["strand"]
-                
+
                 # Draw a complete truncation bracket with corners (facing downward)
                 bracket_y = 0.2  # Position for the top of the bracket
                 bracket_height = 0.05  # Height of the bracket
-                
+
                 # Create a custom bracket shape with corners (flipped to open downward)
                 bracket_vertices = [
                     (alt_start, bracket_y),  # Top left corner
                     (alt_start, bracket_y - bracket_height),  # Bottom left corner
                     (alt_end, bracket_y - bracket_height),  # Bottom right corner
-                    (alt_end, bracket_y)  # Top right corner
+                    (alt_end, bracket_y),  # Top right corner
                 ]
-                
+
                 # Draw the bracket as a continuous line
                 xs, ys = zip(*bracket_vertices)
                 ax.plot(
-                    xs, 
-                    ys, 
+                    xs,
+                    ys,
                     color=self.feature_colors["truncation"],
                     linewidth=1.0,
-                    solid_capstyle='butt',  # Sharp corners
-                    label="Truncation"
+                    solid_capstyle="butt",  # Sharp corners
+                    label="Truncation",
                 )
-                
+
                 # Alternative start marker positioning depends on strand
                 black_bar_y = 0.4
                 alt_start_height = self.codon_height
                 alt_start_ymin = black_bar_y - (alt_start_height / 2)
                 alt_start_ymax = black_bar_y + (alt_start_height / 2)
-                
+
                 # Place alternative start marker based on strand direction
                 if transcript_strand == "+":
                     # For positive strand, place at right side (end of truncation)
@@ -376,7 +395,7 @@ class GenomeVisualizer:
                 else:
                     # For negative strand, place at left side (start of truncation)
                     alt_start_pos = alt_start
-                
+
                 # Draw the alternative start marker
                 ax.vlines(
                     x=alt_start_pos,
@@ -386,7 +405,7 @@ class GenomeVisualizer:
                     linewidth=1.5,
                     label="Alternative start",
                 )
-                
+
                 # Place the start codon label
                 if "start_codon" in alt_feature:
                     if transcript_strand == "+":
@@ -395,14 +414,14 @@ class GenomeVisualizer:
                     else:
                         # For negative strand, place the label at the left side
                         label_x = alt_start
-                        
+
                     plt.text(
                         label_x,
                         alt_start_ymax + 0.05,
                         alt_feature["start_codon"],
                         fontsize=8,
                         rotation=45,
-                        ha='center',
+                        ha="center",
                     )
 
         # Plot mutations if provided
@@ -575,6 +594,12 @@ class GenomeVisualizer:
         plt.xticks(tick_positions, [f"{pos:,}" for pos in tick_positions])
         plt.xticks(rotation=45)
 
+        # Draw the transcript line after setting the ticks
+        xlim = ax.get_xlim()
+        ax.hlines(
+            y=0.4, xmin=xlim[0], xmax=xlim[1], color="black", linewidth=1.5, zorder=1
+        )
+
         # Remove y-axis and spines
         ax.set_yticks([])
         ax.spines["top"].set_visible(False)
@@ -618,15 +643,15 @@ class GenomeVisualizer:
         """
         if alt_features is None or alt_features.empty:
             raise ValueError("alt_features is required for zoomed visualization")
-        
+
         transcript_data = self.genome.get_transcript_features_with_sequence(
             transcript_id
         )
         features = transcript_data["features"]
-        
+
         if features.empty:
             raise ValueError(f"No features found for transcript {transcript_id}")
-        
+
         features = self._preprocess_features(features)
 
         # Calculate zoom region based on alt_features
@@ -635,9 +660,6 @@ class GenomeVisualizer:
 
         # Create figure
         fig, ax = plt.subplots(figsize=(15, 4))
-
-        # Draw base transcript line
-        ax.hlines(y=0.4, xmin=zoom_start, xmax=zoom_end, color="black", linewidth=1.5)
 
         # Plot transcript features (only those in view)
         for _, feature in features.iterrows():
@@ -656,7 +678,7 @@ class GenomeVisualizer:
                 )
                 ax.add_patch(rect)
 
-            elif feature["feature_type"] in ["5UTR", "3UTR"]:
+            elif feature["feature_type"] == "UTR":
                 rect = Rectangle(
                     (feature["start"], 0.325),
                     width,
@@ -679,43 +701,43 @@ class GenomeVisualizer:
             for _, alt_feature in alt_features.iterrows():
                 alt_start = alt_feature["start"]
                 alt_end = alt_feature["end"]
-                
+
                 # Get transcript strand
                 transcript_strand = "+"  # Default to positive strand
                 if features is not None and not features.empty:
                     transcript_info = features[features["feature_type"] == "transcript"]
                     if not transcript_info.empty:
                         transcript_strand = transcript_info.iloc[0]["strand"]
-                
+
                 # Draw a complete truncation bracket with corners (facing downward)
                 bracket_y = 0.2  # Position for the top of the bracket
                 bracket_height = 0.05  # Height of the bracket
-                
+
                 # Create a custom bracket shape with corners (flipped to open downward)
                 bracket_vertices = [
                     (alt_start, bracket_y),  # Top left corner
                     (alt_start, bracket_y - bracket_height),  # Bottom left corner
                     (alt_end, bracket_y - bracket_height),  # Bottom right corner
-                    (alt_end, bracket_y)  # Top right corner
+                    (alt_end, bracket_y),  # Top right corner
                 ]
-                
+
                 # Draw the bracket as a continuous line
                 xs, ys = zip(*bracket_vertices)
                 ax.plot(
-                    xs, 
-                    ys, 
+                    xs,
+                    ys,
                     color=self.feature_colors["truncation"],
                     linewidth=1.0,
-                    solid_capstyle='butt',  # Sharp corners
-                    label="Truncation"
+                    solid_capstyle="butt",  # Sharp corners
+                    label="Truncation",
                 )
-                
+
                 # Alternative start marker positioning depends on strand
                 black_bar_y = 0.4
                 alt_start_height = self.codon_height
                 alt_start_ymin = black_bar_y - (alt_start_height / 2)
                 alt_start_ymax = black_bar_y + (alt_start_height / 2)
-                
+
                 # Place alternative start marker based on strand direction
                 if transcript_strand == "+":
                     # For positive strand, place at right side (end of truncation)
@@ -723,7 +745,7 @@ class GenomeVisualizer:
                 else:
                     # For negative strand, place at left side (start of truncation)
                     alt_start_pos = alt_start
-                
+
                 # Draw the alternative start marker
                 ax.vlines(
                     x=alt_start_pos,
@@ -733,7 +755,7 @@ class GenomeVisualizer:
                     linewidth=1.5,
                     label="Alternative start",
                 )
-                
+
                 # Place the start codon label
                 if "start_codon" in alt_feature:
                     if transcript_strand == "+":
@@ -742,14 +764,14 @@ class GenomeVisualizer:
                     else:
                         # For negative strand, place the label at the left side
                         label_x = alt_start
-                        
+
                     plt.text(
                         label_x,
                         alt_start_ymax + 0.05,
                         alt_feature["start_codon"],
                         fontsize=8,
                         rotation=45,
-                        ha='center',
+                        ha="center",
                     )
 
         # Plot mutations if provided (only those in zoom region)
@@ -911,6 +933,12 @@ class GenomeVisualizer:
 
         plt.xticks(tick_positions, [f"{pos:,}" for pos in tick_positions])
         plt.xticks(rotation=45)
+
+        # Draw the transcript line after setting the ticks
+        xlim = ax.get_xlim()
+        ax.hlines(
+            y=0.4, xmin=xlim[0], xmax=xlim[1], color="black", linewidth=1.5, zorder=1
+        )
 
         # Remove spines
         ax.set_yticks([])

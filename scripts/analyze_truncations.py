@@ -14,6 +14,7 @@ from pathlib import Path
 import argparse
 import logging
 import warnings
+from typing import Optional
 
 # Suppress pandas FutureWarning
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -27,6 +28,7 @@ from swissisoform.utils import (
     save_gene_level_results,
     save_truncation_level_results,
     print_analysis_summary,
+    load_preferred_transcripts,  # New utility function to add
 )
 
 # Configure logger
@@ -45,6 +47,7 @@ async def process_gene(
     visualize: bool = False,
     include_unfiltered: bool = False,
     impact_types: dict = None,
+    preferred_transcripts: set = None,  # New parameter
 ) -> dict:
     """Process a single gene with visualizations and mutation analysis.
 
@@ -57,7 +60,7 @@ async def process_gene(
         visualize: Whether to generate visualizations
         include_unfiltered: Whether to include unfiltered mutation analysis
         impact_types: Optional dict of mutation impact types to filter by source
-
+        preferred_transcripts: Optional set of transcript IDs to prioritize
     Returns:
         Dictionary containing analysis results
     """
@@ -76,6 +79,34 @@ async def process_gene(
         if transcript_info.empty:
             print(f"\r  ├─ No transcript info found")
             return {"gene_name": gene_name, "status": "no_transcripts", "error": None}
+
+        # Filter by preferred transcripts if provided
+        original_transcript_count = len(transcript_info)
+        if preferred_transcripts and not transcript_info.empty:
+            # First try exact matches
+            filtered = transcript_info[
+                transcript_info["transcript_id"].isin(preferred_transcripts)
+            ]
+
+            # If nothing matched and versions might be present, try matching base IDs
+            if filtered.empty and any("." in t for t in preferred_transcripts):
+                base_preferred = {t.split(".")[0] for t in preferred_transcripts}
+                filtered = transcript_info[
+                    transcript_info["transcript_id"]
+                    .str.split(".", expand=True)[0]
+                    .isin(base_preferred)
+                ]
+
+            # If we found matches, use the filtered set
+            if not filtered.empty:
+                transcript_info = filtered
+                print(
+                    f"\r  ├─ Filtered to {len(transcript_info)} preferred transcripts (out of {original_transcript_count})"
+                )
+            else:
+                print(
+                    f"\r  ├─ No preferred transcripts found for gene {gene_name}, using all {len(transcript_info)} transcripts"
+                )
 
         # Create transcript-truncation pairs based on overlap
         print(f"\r  ├─ Creating transcript-truncation pairs...", end="", flush=True)
@@ -399,13 +430,13 @@ async def process_gene(
         print(f"  └─ Error: {str(e)}")
         return {"gene_name": gene_name, "status": "error", "error": str(e)}
 
-
 async def main(
     gene_list_path: str,
     output_dir: str,
-    genome_path: str = "../data/genome_data/hg38.fa",
-    annotation_path: str = "../data/genome_data/hg38.ncbiRefSeq.gtf",
-    bed_path: str = "../data/ribosome_profiling/RiboTISHV6_MD2025_AnnoToTruncation_exonintersect.bed",
+    genome_path: str,
+    annotation_path: str,
+    bed_path: str,
+    preferred_transcripts_path: Optional[str] = None,
     visualize: bool = False,
     include_unfiltered: bool = False,
 ):
@@ -417,6 +448,7 @@ async def main(
         genome_path: Path to the genome FASTA file
         annotation_path: Path to the genome annotation GTF file
         bed_path: Path to the alternative isoform BED file
+        preferred_transcripts_path: Optional path to file with preferred transcript IDs
         visualize: Whether to generate visualizations
         include_unfiltered: Whether to include unfiltered mutation analysis
     """
@@ -431,13 +463,18 @@ async def main(
     print("\nInitializing components:")
     print("  ├─ Loading genome data...")
     genome = GenomeHandler(genome_path, annotation_path)
-
     print("  ├─ Loading alternative isoform data...")
     alt_isoforms = AlternativeIsoform()
     alt_isoforms.load_bed(bed_path)
-
     print("  └─ Initializing mutation handler...")
     mutation_handler = MutationHandler()
+
+    # Load preferred transcripts if provided
+    preferred_transcripts = None
+    if preferred_transcripts_path:
+        print(f"\nLoading preferred transcripts from {preferred_transcripts_path}")
+        preferred_transcripts = load_preferred_transcripts(preferred_transcripts_path)
+        print(f"Loaded {len(preferred_transcripts)} preferred transcript IDs")
 
     # Define impact types for filtering
     impact_types = {
@@ -452,6 +489,10 @@ async def main(
     print(f"\nStarting analysis of {total_genes} genes")
     print(f"Impact types filter: {impact_types['clinvar']}")
     print(f"Analyzing transcript-truncation pairs with mutations in truncation regions")
+    if preferred_transcripts:
+        print(
+            f"Using {len(preferred_transcripts)} preferred transcripts when available"
+        )
 
     # Process all genes
     results = []
@@ -467,6 +508,7 @@ async def main(
             visualize=visualize,
             include_unfiltered=include_unfiltered,
             impact_types=impact_types,
+            preferred_transcripts=preferred_transcripts,
         )
         results.append(result)
 
@@ -494,17 +536,24 @@ if __name__ == "__main__":
     parser.add_argument("gene_list", help="Path to file containing gene names")
     parser.add_argument("output_dir", help="Directory to save output files")
     parser.add_argument(
-        "--genome", default="../data/genome_data/hg38.fa", help="Path to genome FASTA"
+        "--genome",
+        default="../data/genome_data/GRCh38.p7.genome.fa",
+        help="Path to genome FASTA",
     )
     parser.add_argument(
         "--annotation",
-        default="../data/genome_data/hg38.ncbiRefSeq.gtf",
+        default="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf",
         help="Path to genome annotation",
     )
     parser.add_argument(
         "--bed",
         default="../data/ribosome_profiling/full_truncations_JL_cleaned.bed",
         help="Path to alternative isoform BED file",
+    )
+    parser.add_argument(
+        "--preferred-transcripts",
+        default="../data/genome_data/hela_top_transcript.txt",
+        help="Path to file containing preferred transcript IDs",
     )
     parser.add_argument(
         "--visualize", action="store_true", help="Generate visualizations"
@@ -524,6 +573,7 @@ if __name__ == "__main__":
             genome_path=args.genome,
             annotation_path=args.annotation,
             bed_path=args.bed,
+            preferred_transcripts_path=args.preferred_transcripts,
             visualize=args.visualize,
             include_unfiltered=args.include_unfiltered,
         )

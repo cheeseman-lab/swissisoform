@@ -5,15 +5,21 @@ src/swissisoform.egg-info
 src/swissisoform/__pycache__
 
 # data
-data/genome_data/hg38.fa
-data/genome_data/hg38.ncbiRefSeq.gtf
+data/genome_data/*.fa
+data/genome_data/*.gtf
+data/genome_data/*.txt
 data/ribosome_profiling
 data/mutation_data
 
 # output folders
 notebooks/**/
+notebooks/*_test.ipynb
 
 # script outputs
 scripts/out
 scripts/results
 scripts/results_reduced
+
+# All DS store files
+.DS_Store
+scripts/.DS_Store

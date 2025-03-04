@@ -383,7 +383,6 @@ class TruncatedProteinGenerator:
             print(f"Error generating sequences for gene {gene_name}: {str(e)}")
             return result
 
-
     def create_protein_sequence_dataset_pairs(
         self,
         gene_list: List[str],
@@ -392,17 +391,17 @@ class TruncatedProteinGenerator:
         max_length: int = 1000,
     ) -> pd.DataFrame:
         """Create a dataset of protein sequences from paired canonical and truncated transcripts.
-        
+
         This function processes multiple genes and creates a dataset containing only
         canonical transcripts and their truncated versions where the truncation
         affects the transcript (overlaps with coding region).
-        
+
         Args:
             gene_list: List of gene names to process
             output_format: Format to save sequences ('fasta', 'csv', or both)
             min_length: Minimum protein length to include
             max_length: Maximum protein length to include
-            
+
         Returns:
             DataFrame with the dataset information
         """
@@ -413,24 +412,30 @@ class TruncatedProteinGenerator:
         # Process each gene
         for gene_idx, gene_name in enumerate(gene_list, 1):
             print(f"\nProcessing gene {gene_idx}/{len(gene_list)}: {gene_name}")
-            
+
             try:
                 # Get transcript information
                 transcript_info = self.genome.get_transcript_ids(gene_name)
                 if transcript_info.empty:
-                    print(f"  ├─ No transcript info found for gene {gene_name}, skipping")
+                    print(
+                        f"  ├─ No transcript info found for gene {gene_name}, skipping"
+                    )
                     skipped_genes.append(gene_name)
                     continue
-                    
+
                 # Get truncation sites
                 truncations = self.alt_isoforms.get_visualization_features(gene_name)
                 if truncations.empty:
-                    print(f"  ├─ No truncation features found for gene {gene_name}, skipping")
+                    print(
+                        f"  ├─ No truncation features found for gene {gene_name}, skipping"
+                    )
                     skipped_genes.append(gene_name)
                     continue
-                    
-                print(f"  ├─ Found {len(transcript_info)} transcripts and {len(truncations)} truncation sites")
-                
+
+                print(
+                    f"  ├─ Found {len(transcript_info)} transcripts and {len(truncations)} truncation sites"
+                )
+
                 # For each transcript, identify overlapping truncations and generate pairs
                 gene_pairs = 0
                 for _, transcript in transcript_info.iterrows():
@@ -438,41 +443,51 @@ class TruncatedProteinGenerator:
                     transcript_start = transcript["start"]
                     transcript_end = transcript["end"]
                     transcript_chrom = transcript["chromosome"]
-                    
+
                     # Get CDS regions to determine coding regions
                     cds_features = self.genome.annotations[
-                        (self.genome.annotations["transcript_id"] == transcript_id) &
-                        (self.genome.annotations["feature_type"] == "CDS")
+                        (self.genome.annotations["transcript_id"] == transcript_id)
+                        & (self.genome.annotations["feature_type"] == "CDS")
                     ]
-                    
+
                     if cds_features.empty:
-                        print(f"  │  ├─ No CDS features for transcript {transcript_id}, skipping")
+                        print(
+                            f"  │  ├─ No CDS features for transcript {transcript_id}, skipping"
+                        )
                         continue
-                        
+
                     # Get CDS bounds
                     cds_start = cds_features["start"].min()
                     cds_end = cds_features["end"].max()
-                    
+
                     # Generate canonical protein first
                     canonical_cds = self.build_truncated_cds(
                         transcript_id,
-                        pd.Series({"start": -1, "end": -1})  # Special values to get full CDS
+                        pd.Series(
+                            {"start": -1, "end": -1}
+                        ),  # Special values to get full CDS
                     )
-                    
+
                     if not canonical_cds:
-                        print(f"  │  ├─ Failed to get CDS for {transcript_id}, skipping")
+                        print(
+                            f"  │  ├─ Failed to get CDS for {transcript_id}, skipping"
+                        )
                         continue
-                        
+
                     canonical_protein = self.translate_sequence(canonical_cds)
-                    
+
                     if not canonical_protein:
-                        print(f"  │  ├─ Failed to translate canonical sequence for {transcript_id}, skipping")
+                        print(
+                            f"  │  ├─ Failed to translate canonical sequence for {transcript_id}, skipping"
+                        )
                         continue
-                        
+
                     if not (min_length <= len(canonical_protein) <= max_length):
-                        print(f"  │  ├─ Canonical protein length {len(canonical_protein)} outside range {min_length}-{max_length}, skipping")
+                        print(
+                            f"  │  ├─ Canonical protein length {len(canonical_protein)} outside range {min_length}-{max_length}, skipping"
+                        )
                         continue
-                    
+
                     # Store canonical sequence
                     canonical_entry = {
                         "gene": gene_name,
@@ -482,113 +497,141 @@ class TruncatedProteinGenerator:
                         "length": len(canonical_protein),
                         "is_truncated": 0,
                     }
-                    
+
                     # Check for truncations that overlap with the CDS
                     affecting_truncations = []
                     for idx, trunc in truncations.iterrows():
                         trunc_start = trunc["start"]
                         trunc_end = trunc["end"]
                         trunc_chrom = trunc["chromosome"]
-                        
+
                         # Skip truncations on different chromosomes
                         if trunc_chrom != transcript_chrom:
                             continue
-                            
+
                         # Check for overlap with CDS
                         if not (trunc_end < cds_start or trunc_start > cds_end):
                             trunc_id = f"trunc_{idx}"
-                            if "start_codon" in trunc and not pd.isna(trunc["start_codon"]):
+                            if "start_codon" in trunc and not pd.isna(
+                                trunc["start_codon"]
+                            ):
                                 trunc_id = f"trunc_{trunc['start_codon']}_{trunc_start}_{trunc_end}"
-                            
+
                             affecting_truncations.append((idx, trunc_id, trunc))
-                    
+
                     if not affecting_truncations:
-                        print(f"  │  ├─ No truncations affect CDS of transcript {transcript_id}, skipping")
+                        print(
+                            f"  │  ├─ No truncations affect CDS of transcript {transcript_id}, skipping"
+                        )
                         continue
-                    
+
                     # Process truncations that affect this transcript
                     transcript_pairs = 0
                     for trunc_idx, trunc_id, trunc in affecting_truncations:
                         # Build truncated CDS
                         truncated_cds = self.build_truncated_cds(transcript_id, trunc)
-                        
+
                         if not truncated_cds:
-                            print(f"  │  │  ├─ Failed to build truncated CDS for {transcript_id} - {trunc_id}, skipping")
+                            print(
+                                f"  │  │  ├─ Failed to build truncated CDS for {transcript_id} - {trunc_id}, skipping"
+                            )
                             continue
-                            
+
                         if truncated_cds == canonical_cds:
-                            print(f"  │  │  ├─ Truncation {trunc_id} does not affect protein sequence of {transcript_id}, skipping")
+                            print(
+                                f"  │  │  ├─ Truncation {trunc_id} does not affect protein sequence of {transcript_id}, skipping"
+                            )
                             continue
-                            
+
                         # Translate truncated sequence
                         truncated_protein = self.translate_sequence(truncated_cds)
-                        
+
                         if not truncated_protein:
-                            print(f"  │  │  ├─ Failed to translate truncated sequence for {transcript_id} - {trunc_id}, skipping")
+                            print(
+                                f"  │  │  ├─ Failed to translate truncated sequence for {transcript_id} - {trunc_id}, skipping"
+                            )
                             continue
-                            
+
                         if not (min_length <= len(truncated_protein) <= max_length):
-                            print(f"  │  │  ├─ Truncated protein length {len(truncated_protein)} outside range {min_length}-{max_length}, skipping")
+                            print(
+                                f"  │  │  ├─ Truncated protein length {len(truncated_protein)} outside range {min_length}-{max_length}, skipping"
+                            )
                             continue
-                        
+
                         # Check if the sequences are actually different
                         if truncated_protein == canonical_protein:
-                            print(f"  │  │  ├─ Truncation {trunc_id} results in identical protein, skipping")
+                            print(
+                                f"  │  │  ├─ Truncation {trunc_id} results in identical protein, skipping"
+                            )
                             continue
-                            
+
                         # Add the canonical sequence for this pair
                         all_sequences.append(canonical_entry)
-                        
+
                         # Add the truncated sequence
-                        all_sequences.append({
-                            "gene": gene_name,
-                            "transcript_id": transcript_id,
-                            "variant_id": trunc_id,
-                            "sequence": truncated_protein,
-                            "length": len(truncated_protein),
-                            "is_truncated": 1,
-                        })
-                        
-                        print(f"  │  │  ├─ Generated pair: {transcript_id} + {trunc_id}")
+                        all_sequences.append(
+                            {
+                                "gene": gene_name,
+                                "transcript_id": transcript_id,
+                                "variant_id": trunc_id,
+                                "sequence": truncated_protein,
+                                "length": len(truncated_protein),
+                                "is_truncated": 1,
+                            }
+                        )
+
+                        print(
+                            f"  │  │  ├─ Generated pair: {transcript_id} + {trunc_id}"
+                        )
                         transcript_pairs += 1
                         gene_pairs += 1
                         total_pairs += 1
-                    
+
                     if transcript_pairs > 0:
-                        print(f"  │  ├─ Generated {transcript_pairs} pairs for transcript {transcript_id}")
+                        print(
+                            f"  │  ├─ Generated {transcript_pairs} pairs for transcript {transcript_id}"
+                        )
                     else:
                         # Remove the canonical entry if no truncated versions were created
                         # (This ensures we only have true pairs)
-                        all_sequences = [seq for seq in all_sequences if seq["transcript_id"] != transcript_id]
-                
+                        all_sequences = [
+                            seq
+                            for seq in all_sequences
+                            if seq["transcript_id"] != transcript_id
+                        ]
+
                 if gene_pairs > 0:
-                    print(f"  └─ Generated {gene_pairs} total pairs for gene {gene_name}")
+                    print(
+                        f"  └─ Generated {gene_pairs} total pairs for gene {gene_name}"
+                    )
                 else:
                     print(f"  └─ No valid pairs generated for gene {gene_name}")
                     skipped_genes.append(gene_name)
-                    
+
             except Exception as e:
                 print(f"  └─ Error processing gene {gene_name}: {str(e)}")
                 skipped_genes.append(gene_name)
-        
+
         # Create dataset
         dataset = pd.DataFrame(all_sequences)
-        
+
         # Save dataset
         if not dataset.empty:
             if "fasta" in output_format.lower():
                 self._save_dataset_fasta(dataset)
-                
+
             if "csv" in output_format.lower():
                 output_file = self.output_dir / "protein_sequence_dataset_pairs.csv"
                 dataset.to_csv(output_file, index=False)
                 print(f"Saved dataset CSV to {output_file}")
-        
+
         print(f"\nPairs generation summary:")
         print(f"  ├─ Total transcript-truncation pairs: {total_pairs}")
         print(f"  ├─ Total sequences: {len(all_sequences)}")
-        print(f"  ├─ Genes with pairs: {len(gene_list) - len(skipped_genes)}/{len(gene_list)}")
-        
+        print(
+            f"  ├─ Genes with pairs: {len(gene_list) - len(skipped_genes)}/{len(gene_list)}"
+        )
+
         if skipped_genes:
             print(f"  └─ Skipped genes: {len(skipped_genes)}")
             if len(skipped_genes) <= 10:
@@ -598,7 +641,7 @@ class TruncatedProteinGenerator:
                 for gene in skipped_genes[:10]:
                     print(f"      - {gene}")
                 print(f"      - ... and {len(skipped_genes) - 10} more")
-        
+
         return dataset
 
     def create_protein_sequence_dataset(

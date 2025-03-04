@@ -48,20 +48,22 @@ class GenomeHandler:
                 if len(fields) != 9:
                     continue
 
-                # Parse attributes
+                # Parse attributes - GENCODE format is different from NCBI RefSeq
                 attrs = {}
                 attribute_string = fields[8]
-                attr_pairs = [
-                    x.strip() for x in attribute_string.rstrip(";").split(";")
-                ]
+                attr_pairs = [x.strip() for x in attribute_string.split(";")]
 
                 for attr in attr_pairs:
-                    if attr:
-                        parts = attr.strip().split(' "')
-                        if len(parts) == 2:
-                            key = parts[0].strip()
-                            value = parts[1].rstrip('"').strip()
-                            attrs[key] = value
+                    if not attr:
+                        continue
+
+                    # GENCODE format: key "value"
+                    match = attr.strip().split(" ", 1)
+                    if len(match) == 2:
+                        key = match[0].strip()
+                        # Remove quotes from value
+                        value = match[1].strip().strip('"')
+                        attrs[key] = value
 
                 feature_dict = {
                     "chromosome": fields[0],
@@ -126,10 +128,17 @@ class GenomeHandler:
         Raises:
             ValueError: If chromosome not found in genome
         """
-        if chrom not in self.genome:
+        # Try to find chromosome in the genome, checking different prefix formats
+        if chrom in self.genome:
+            seq_id = chrom
+        elif chrom.startswith("chr") and chrom[3:] in self.genome:
+            seq_id = chrom[3:]  # Try without "chr" prefix
+        elif not chrom.startswith("chr") and f"chr{chrom}" in self.genome:
+            seq_id = f"chr{chrom}"  # Try with "chr" prefix
+        else:
             raise ValueError(f"Chromosome {chrom} not found in genome")
 
-        seq = self.genome[chrom].seq[start - 1 : end]
+        seq = self.genome[seq_id].seq[start - 1 : end]
         return seq if strand == "+" else seq.reverse_complement()
 
     def get_transcript_features(self, transcript_id: str) -> pd.DataFrame:
@@ -204,10 +213,12 @@ class GenomeHandler:
         ].drop_duplicates()
 
         if standard_chroms_only:
-            # Define standard chromosomes
-            standard_chromosomes = {f"chr{i}" for i in range(1, 23)}.union(
-                {"chrX", "chrY", "chrM"}
-            )
+            # Define standard chromosomes for both formats (with and without "chr" prefix)
+            standard_chromosomes = set()
+            for i in range(1, 23):
+                standard_chromosomes.add(f"chr{i}")
+                standard_chromosomes.add(str(i))
+            standard_chromosomes.update(["chrX", "chrY", "chrM", "X", "Y", "MT", "M"])
 
             # Filter and count
             original_count = len(transcript_info)

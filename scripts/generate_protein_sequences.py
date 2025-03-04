@@ -23,6 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 async def generate_protein_sequences(
     gene_list_path: str,
     output_dir: str,
@@ -34,9 +35,10 @@ async def generate_protein_sequences(
     max_length: int = 1000,
     output_format: str = "fasta,csv",
     pairs_only: bool = False,
+    preferred_transcript_path: Optional[str] = None,
 ):
     """Generate amino acid sequences from truncated transcripts for a list of genes.
-    
+
     Args:
         gene_list_path: Path to file containing gene names
         output_dir: Directory to save output files
@@ -48,6 +50,7 @@ async def generate_protein_sequences(
         max_length: Maximum protein length to include
         output_format: Format to save sequences ('fasta', 'csv', or 'fasta,csv')
         pairs_only: Only include WT and truncated pairs where truncation affects the transcript
+        preferred_transcript_path: Path to file mapping genes to preferred transcripts
     """
     print("Initializing components:")
     # Initialize required handlers
@@ -60,16 +63,62 @@ async def generate_protein_sequences(
     protein_generator = TruncatedProteinGenerator(
         genome_handler=genome, alt_isoform_handler=alt_isoforms, output_dir=output_dir
     )
-    
+
     # Read gene list
     print(f"\nReading gene list from {gene_list_path}")
     gene_names = parse_gene_list(gene_list_path)
     total_genes = len(gene_names)
     print(f"Found {total_genes} genes to process")
-    
+
+    # Load preferred transcripts if provided
+    preferred_transcripts = {}
+    if preferred_transcript_path:
+        print(f"\nLoading preferred transcripts from {preferred_transcript_path}")
+        try:
+            with open(preferred_transcript_path, "r") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        gene, transcript = parts[0], parts[1]
+                        preferred_transcripts[gene] = transcript
+            print(f"Loaded {len(preferred_transcripts)} preferred transcript mappings")
+        except Exception as e:
+            print(f"Error loading preferred transcripts: {str(e)}")
+
+    # Modify the TruncatedProteinGenerator behavior to use preferred transcripts
+    if preferred_transcripts:
+        original_get_transcript_ids = genome.get_transcript_ids
+
+        def get_transcript_ids_with_preference(gene_name):
+            transcript_info = original_get_transcript_ids(gene_name)
+
+            if gene_name in preferred_transcripts:
+                preferred_id = preferred_transcripts[gene_name]
+                # Filter to only keep the preferred transcript if it exists
+                preferred_info = transcript_info[
+                    transcript_info["transcript_id"] == preferred_id
+                ]
+
+                if not preferred_info.empty:
+                    print(
+                        f"Using preferred transcript {preferred_id} for gene {gene_name}"
+                    )
+                    return preferred_info
+                else:
+                    print(
+                        f"Preferred transcript {preferred_id} not found for gene {gene_name}, using all transcripts"
+                    )
+
+            return transcript_info
+
+        # Replace the method with our custom one
+        genome.get_transcript_ids = get_transcript_ids_with_preference
+
     if pairs_only:
         # Generate dataset with only paired WT and truncations that affect transcripts
-        print("\nGenerating paired canonical and truncated sequences (truncations must affect canonical)")
+        print(
+            "\nGenerating paired canonical and truncated sequences (truncations must affect canonical)"
+        )
         dataset = protein_generator.create_protein_sequence_dataset_pairs(
             gene_list=gene_names,
             output_format=output_format,
@@ -86,35 +135,41 @@ async def generate_protein_sequences(
             min_length=min_length,
             max_length=max_length,
         )
-    
+
     # Print summary
     print("\nDataset summary:")
     print(f"  ├─ Total sequences: {len(dataset)}")
-    
+
     if not dataset.empty:
         truncated_count = dataset[dataset["is_truncated"] == 1].shape[0]
         canonical_count = dataset[dataset["is_truncated"] == 0].shape[0]
-        
+
         print(f"  ├─ Truncated sequences: {truncated_count}")
         print(f"  ├─ Canonical sequences: {canonical_count}")
         print(f"  ├─ Average sequence length: {dataset['length'].mean():.1f}")
         print(f"  ├─ Minimum sequence length: {dataset['length'].min()}")
         print(f"  ├─ Maximum sequence length: {dataset['length'].max()}")
-        
+
         genes_with_data = dataset["gene"].nunique()
         print(f"  └─ Genes with valid sequences: {genes_with_data}/{total_genes}")
-        
+
         if pairs_only:
             # Count the number of transcript-truncation pairs
             transcript_pairs = dataset.groupby("transcript_id").filter(
-                lambda x: (x["is_truncated"] == 0).any() and (x["is_truncated"] == 1).any()
+                lambda x: (x["is_truncated"] == 0).any()
+                and (x["is_truncated"] == 1).any()
             )
             unique_transcripts_with_pairs = transcript_pairs["transcript_id"].nunique()
-            
-            print(f"  ├─ Transcripts with paired WT/truncated sequences: {unique_transcripts_with_pairs}")
-            print(f"  └─ Total pairs: {len(transcript_pairs) // 2}")  # Divide by 2 since each pair has WT and truncated
+
+            print(
+                f"  ├─ Transcripts with paired WT/truncated sequences: {unique_transcripts_with_pairs}"
+            )
+            print(
+                f"  └─ Total pairs: {len(transcript_pairs) // 2}"
+            )  # Divide by 2 since each pair has WT and truncated
     else:
         print("  └─ No valid sequences generated")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -123,11 +178,13 @@ if __name__ == "__main__":
     parser.add_argument("gene_list", help="Path to file containing gene names")
     parser.add_argument("output_dir", help="Directory to save output files")
     parser.add_argument(
-        "--genome", default="../data/genome_data/hg38.fa", help="Path to genome FASTA"
+        "--genome",
+        default="../data/genome_data/GRCh38.p7.genome.fa",
+        help="Path to genome FASTA",
     )
     parser.add_argument(
         "--annotation",
-        default="../data/genome_data/hg38.ncbiRefSeq.gtf",
+        default="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf",
         help="Path to genome annotation",
     )
     parser.add_argument(
@@ -139,9 +196,9 @@ if __name__ == "__main__":
         "--include-canonical", action="store_true", help="Include canonical sequences"
     )
     parser.add_argument(
-        "--pairs-only", 
-        action="store_true", 
-        help="Only include canonical/truncated pairs where truncation affects the transcript"
+        "--pairs-only",
+        action="store_true",
+        help="Only include canonical/truncated pairs where truncation affects the transcript",
     )
     parser.add_argument(
         "--min-length", type=int, default=0, help="Minimum protein length"
@@ -152,13 +209,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--format", default="fasta,csv", help="Output format: fasta, csv, or fasta,csv"
     )
-    
+    parser.add_argument(
+        "--preferred-transcripts",
+        default="../data/genome_data/hela_top_transcript.txt",
+        help="Path to file containing preferred transcript IDs",
+    )
+
     args = parser.parse_args()
-    
+
     # Create output directory if it doesn't exist
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     asyncio.run(
         generate_protein_sequences(
             gene_list_path=args.gene_list,
@@ -171,5 +233,6 @@ if __name__ == "__main__":
             max_length=args.max_length,
             output_format=args.format,
             pairs_only=args.pairs_only,
+            preferred_transcript_path=args.preferred_transcripts,
         )
     )
