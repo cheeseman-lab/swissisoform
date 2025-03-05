@@ -28,8 +28,7 @@ python3 analyze_truncations.py "$GENE_LIST" "$OUTPUT_DIR" \
   --genome "$GENOME_PATH" \
   --annotation "$ANNOTATION_PATH" \
   --bed "$BED_PATH" \
-  --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
-  --visualize
+  --preferred-transcripts "$PREFERRED_TRANSCRIPTS" 
 
 # Print completion message
 echo "Analysis completed at $(date)"
