@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1                      # Run a single task
 #SBATCH --cpus-per-task=12              # Single CPU for the controller job
 #SBATCH --mem=24G                       # Memory for the controller job
-#SBATCH --time=1:00:00                  # Time limit (hrs:min:sec)
+#SBATCH --time=12:00:00                  # Time limit (hrs:min:sec)
 #SBATCH --output=out/truncations-%j.out # Standard output log
 
 # Activate conda environment (adjust path as needed)
@@ -13,7 +13,7 @@ source ~/.bashrc
 conda activate swissisoform
 
 # Create output directory
-mkdir -p results_reduced
+mkdir -p results
 
 # Define paths for command-line arguments
 GENE_LIST="../data/ribosome_profiling/gene_list.txt"

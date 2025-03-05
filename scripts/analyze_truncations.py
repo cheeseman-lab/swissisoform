@@ -390,7 +390,7 @@ async def process_gene(
                         alt_features=truncation_feature,
                         mutations_df=pair_mutations,
                         output_file=str(
-                            transcript_dir / f"{pair_base_filename}_filtered.png"
+                            transcript_dir / f"{pair_base_filename}_filtered.pdf"
                         ),
                     )
 
@@ -401,7 +401,7 @@ async def process_gene(
                         alt_features=truncation_feature,
                         mutations_df=pair_mutations,
                         output_file=str(
-                            transcript_dir / f"{pair_base_filename}_filtered_zoom.png"
+                            transcript_dir / f"{pair_base_filename}_filtered_zoom.pdf"
                         ),
                         padding=100,
                     )

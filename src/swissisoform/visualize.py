@@ -31,28 +31,28 @@ class GenomeVisualizer:
 
         # Feature colors
         self.feature_colors = {
-            "CDS": "#2196F3",  # blue
-            "UTR": "#FFA500",  # orange
-            "start_codon": "#FF0000",  # red
-            "stop_codon": "#800080",  # purple
-            "truncation": "#FF1493",  # deep pink
-            "alternative_start": "#FFD700",  # yellow
+            "CDS": "#cacfd2",  # light gray (as specified)
+            "UTR": "#a6acaf",  # medium gray (as specified)
+            "start_codon": "#f27e20",  # annotated start site (as specified)
+            "stop_codon": "#e74c3c",  # black (as specified)
+            "truncation": "#412D78",  # purple (as specified) 
+            "alternative_start": "#652d90",  # alternative (as specified)
         }
 
-        # Mutation impact colors
+        # Mutation impact colors (updated to shades of pink for mutations)
         self.mutation_colors = {
-            "missense variant": "#FF9900",  # orange
-            "synonymous variant": "#00CC00",  # green
-            "nonsense variant": "#CC0000",  # dark red
-            "inframe deletion": "#FF3333",  # light red
-            "inframe insertion": "#FF6666",  # lighter red
-            "frameshift variant": "#FF0000",  # red
-            "splice variant": "#9933FF",  # purple
-            "start lost variant": "#990000",  # dark red
-            "5 prime utr variant": "#FFB366",  # light orange
-            "3 prime utr variant": "#FFB366",  # light orange
-            "other variant": "#999999",  # gray
-            "unknown": "#000000",  # black
+            "missense variant": "#FF3399",  # pink (as specified)
+            "synonymous variant": "#FFA6CF",  # lighter pink
+            "nonsense variant": "#FF0066",  # darker pink
+            "inframe deletion": "#FF66B2",  # medium pink
+            "inframe insertion": "#FF99CC",  # lighter medium pink
+            "frameshift variant": "#FF0080",  # bright pink
+            "splice variant": "#9933FF",  # purple (keeping original)
+            "start lost variant": "#CC0066",  # dark pink
+            "5 prime utr variant": "#FFB366",  # light orange (keeping original)
+            "3 prime utr variant": "#FFB366",  # light orange (keeping original)
+            "other variant": "#999999",  # gray (keeping original)
+            "unknown": "#000000",  # black (keeping original)
         }
 
         # Source-specific markers
@@ -315,6 +315,11 @@ class GenomeVisualizer:
 
         fig, ax = plt.subplots(figsize=(15, 4))
 
+        transcript_strand = "+"  # Default to positive strand
+        transcript_info = features[features["feature_type"] == "transcript"]
+        if not transcript_info.empty:
+            transcript_strand = transcript_info.iloc[0]["strand"]        
+
         # Plot transcript features
         for _, feature in features.iterrows():
             width = feature["end"] - feature["start"]
@@ -338,11 +343,33 @@ class GenomeVisualizer:
                 ax.add_patch(rect)
 
             elif feature["feature_type"] in ["start_codon", "stop_codon"]:
-                rect = Rectangle(
-                    (feature["start"], 0.3),
-                    width,
-                    self.codon_height,
-                    facecolor=self.feature_colors[feature["feature_type"]],
+                # Position the markers based on strand direction and codon type
+                if transcript_strand == "+":
+                    # On positive strand:
+                    # - Start codons should be at their start position
+                    # - Stop codons should be at their end position
+                    if feature["feature_type"] == "start_codon":
+                        codon_position = feature["start"] 
+                    else:  # stop_codon
+                        codon_position = feature["end"]
+                else:  # Negative strand
+                    # On negative strand:
+                    # - Start codons should be at their end position
+                    # - Stop codons should be at their start position
+                    if feature["feature_type"] == "start_codon":
+                        codon_position = feature["end"]
+                    else:  # stop_codon
+                        codon_position = feature["start"]
+                
+                codon_y = 0.4  # Same as the transcript line
+                codon_height = self.codon_height
+                # Draw a vertical line
+                ax.vlines(
+                    x=codon_position,
+                    ymin=codon_y - (codon_height / 2),
+                    ymax=codon_y + (codon_height / 2),
+                    color=self.feature_colors[feature["feature_type"]],
+                    linewidth=3,  # Same width as alternative start
                 )
                 ax.add_patch(rect)
 
@@ -402,7 +429,7 @@ class GenomeVisualizer:
                     ymin=alt_start_ymin,
                     ymax=alt_start_ymax,
                     color=self.feature_colors["alternative_start"],
-                    linewidth=1.5,
+                    linewidth=3,
                     label="Alternative start",
                 )
 
@@ -480,41 +507,50 @@ class GenomeVisualizer:
             plt.Rectangle(
                 (0, 0), 1, 1, facecolor=self.feature_colors["UTR"], label="UTR"
             ),
-            plt.Rectangle(
-                (0, 0),
-                1,
-                1,
-                facecolor=self.feature_colors["start_codon"],
+            # Use a straight vertical line for start codon in legend
+            Line2D(
+                [0], [0],  # Single point
+                marker="|",  # Vertical line marker
+                color=self.feature_colors["start_codon"],
                 label="Start codon",
+                markersize=12,  # Control height
+                markeredgewidth=3,  # Control width - same as alternative start
+                linestyle='None'  # Only show the marker
             ),
-            plt.Rectangle(
-                (0, 0),
-                1,
-                1,
-                facecolor=self.feature_colors["stop_codon"],
+            # Use a straight vertical line for stop codon in legend
+            Line2D(
+                [0], [0],
+                marker="|",
+                color=self.feature_colors["stop_codon"],
                 label="Stop codon",
+                markersize=12,
+                markeredgewidth=3,  # Match width with other codons
+                linestyle='None'
             ),
         ]
 
         if alt_features is not None and not alt_features.empty:
             feature_legend_elements.extend(
                 [
+                    # Use a straight vertical line for alternative start in legend
                     Line2D(
-                        [0],
-                        [0],
+                        [0], [0],
+                        marker="|",
+                        color=self.feature_colors["alternative_start"],
+                        label="Alternative start",
+                        markersize=12,
+                        markeredgewidth=3,  # Make width consistent with other codon markers
+                        linestyle='None'  # Only show the marker
+                    ),
+                    Line2D(
+                        [0], [0],
                         color=self.feature_colors["truncation"],
                         label="Truncation",
                         linewidth=1.5,
                     ),
-                    Line2D(
-                        [0],
-                        [0],
-                        color=self.feature_colors["alternative_start"],
-                        label="Alternative start",
-                        linewidth=2,
-                    ),
                 ]
             )
+
 
         # Add legends with improved spacing and spine handling
         if mutations_df is not None and not mutations_df.empty:
@@ -597,7 +633,7 @@ class GenomeVisualizer:
         # Draw the transcript line after setting the ticks
         xlim = ax.get_xlim()
         ax.hlines(
-            y=0.4, xmin=xlim[0], xmax=xlim[1], color="black", linewidth=1.5, zorder=1
+            y=0.4, xmin=xlim[0], xmax=xlim[1], color="black", linewidth=1.5, zorder=0
         )
 
         # Remove y-axis and spines
@@ -617,6 +653,7 @@ class GenomeVisualizer:
                 dpi=300,
                 facecolor="white",
                 edgecolor="none",
+                format="pdf",
             )
             plt.close()
         else:
@@ -661,6 +698,11 @@ class GenomeVisualizer:
         # Create figure
         fig, ax = plt.subplots(figsize=(15, 4))
 
+        transcript_strand = "+"  # Default to positive strand
+        transcript_info = features[features["feature_type"] == "transcript"]
+        if not transcript_info.empty:
+            transcript_strand = transcript_info.iloc[0]["strand"]
+
         # Plot transcript features (only those in view)
         for _, feature in features.iterrows():
             # Skip features entirely outside zoom region
@@ -688,13 +730,35 @@ class GenomeVisualizer:
                 ax.add_patch(rect)
 
             elif feature["feature_type"] in ["start_codon", "stop_codon"]:
-                rect = Rectangle(
-                    (feature["start"], 0.3),
-                    width,
-                    self.codon_height,
-                    facecolor=self.feature_colors[feature["feature_type"]],
+                # Position the markers based on strand direction and codon type
+                if transcript_strand == "+":
+                    # On positive strand:
+                    # - Start codons should be at their start position
+                    # - Stop codons should be at their end position
+                    if feature["feature_type"] == "start_codon":
+                        codon_position = feature["start"] 
+                    else:  # stop_codon
+                        codon_position = feature["end"]
+                else:  # Negative strand
+                    # On negative strand:
+                    # - Start codons should be at their end position
+                    # - Stop codons should be at their start position
+                    if feature["feature_type"] == "start_codon":
+                        codon_position = feature["end"]
+                    else:  # stop_codon
+                        codon_position = feature["start"]
+                
+                codon_y = 0.4  # Same as the transcript line
+                codon_height = self.codon_height
+                
+                # Draw a vertical line
+                ax.vlines(
+                    x=codon_position,
+                    ymin=codon_y - (codon_height / 2),
+                    ymax=codon_y + (codon_height / 2),
+                    color=self.feature_colors[feature["feature_type"]],
+                    linewidth=3,  # Same width as alternative start
                 )
-                ax.add_patch(rect)
 
         # Plot alternative start sites - update in both visualization methods
         if alt_features is not None and not alt_features.empty:
@@ -752,7 +816,7 @@ class GenomeVisualizer:
                     ymin=alt_start_ymin,
                     ymax=alt_start_ymax,
                     color=self.feature_colors["alternative_start"],
-                    linewidth=1.5,
+                    linewidth=3,
                     label="Alternative start",
                 )
 
@@ -834,33 +898,41 @@ class GenomeVisualizer:
             plt.Rectangle(
                 (0, 0), 1, 1, facecolor=self.feature_colors["UTR"], label="UTR"
             ),
-            plt.Rectangle(
-                (0, 0),
-                1,
-                1,
-                facecolor=self.feature_colors["start_codon"],
+            # Use a straight vertical line for start codon in legend
+            Line2D(
+                [0], [0],  # Single point
+                marker="|",  # Vertical line marker
+                color=self.feature_colors["start_codon"],
                 label="Start codon",
+                markersize=15,  # Control height
+                markeredgewidth=3,  # Control width - same as alternative start
+                linestyle='None'  # Only show the marker
             ),
-            plt.Rectangle(
-                (0, 0),
-                1,
-                1,
-                facecolor=self.feature_colors["stop_codon"],
+            # Use a straight vertical line for stop codon in legend
+            Line2D(
+                [0], [0],
+                marker="|",
+                color=self.feature_colors["stop_codon"],
                 label="Stop codon",
+                markersize=12,
+                markeredgewidth=3,  # Match width with other codons
+                linestyle='None'
+            ),
+            # Use a straight vertical line for alternative start in legend
+            Line2D(
+                [0], [0],
+                marker="|",
+                color=self.feature_colors["alternative_start"],
+                label="Alternative start",
+                markersize=12,
+                markeredgewidth=3,  # Make width consistent with other codon markers
+                linestyle='None'  # Only show the marker
             ),
             Line2D(
-                [0],
-                [0],
+                [0], [0],
                 color=self.feature_colors["truncation"],
                 label="Truncation",
                 linewidth=1.5,
-            ),
-            Line2D(
-                [0],
-                [0],
-                color=self.feature_colors["alternative_start"],
-                label="Alternative start",
-                linewidth=2,
             ),
         ]
 
@@ -937,7 +1009,7 @@ class GenomeVisualizer:
         # Draw the transcript line after setting the ticks
         xlim = ax.get_xlim()
         ax.hlines(
-            y=0.4, xmin=xlim[0], xmax=xlim[1], color="black", linewidth=1.5, zorder=1
+            y=0.4, xmin=xlim[0], xmax=xlim[1], color="black", linewidth=1.5, zorder=0
         )
 
         # Remove spines
@@ -957,6 +1029,7 @@ class GenomeVisualizer:
                 dpi=300,
                 facecolor="white",
                 edgecolor="none",
+                format="pdf",
             )
             plt.close()
         else:

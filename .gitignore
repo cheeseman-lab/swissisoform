@@ -11,9 +11,8 @@ data/genome_data/*.txt
 data/ribosome_profiling
 data/mutation_data
 
-# output folders
-notebooks/**/
-notebooks/*_test.ipynb
+# test notebooks
+notebooks/
 
 # script outputs
 scripts/out
