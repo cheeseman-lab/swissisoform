@@ -430,6 +430,7 @@ async def process_gene(
         print(f"  └─ Error: {str(e)}")
         return {"gene_name": gene_name, "status": "error", "error": str(e)}
 
+
 async def main(
     gene_list_path: str,
     output_dir: str,

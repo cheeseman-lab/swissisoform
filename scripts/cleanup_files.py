@@ -10,7 +10,7 @@ It also cleans up the BED files to update gene names and remove duplicates.
 from swissisoform.alternative_isoforms import AlternativeIsoform
 from swissisoform.utils import cleanup_bed, update_gencode_gene_names
 
-# GTF: update gene names 
+# GTF: update gene names
 input_gtf = "../data/genome_data/gencode.v25.annotation.gtf"
 output_gtf = "../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
 reference_gtf = "../data/genome_data/gencode.v47.annotation.gtf"

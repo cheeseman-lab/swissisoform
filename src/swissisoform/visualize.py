@@ -35,7 +35,7 @@ class GenomeVisualizer:
             "UTR": "#a6acaf",  # medium gray (as specified)
             "start_codon": "#f27e20",  # annotated start site (as specified)
             "stop_codon": "#e74c3c",  # black (as specified)
-            "truncation": "#412D78",  # purple (as specified) 
+            "truncation": "#412D78",  # purple (as specified)
             "alternative_start": "#652d90",  # alternative (as specified)
         }
 
@@ -318,7 +318,7 @@ class GenomeVisualizer:
         transcript_strand = "+"  # Default to positive strand
         transcript_info = features[features["feature_type"] == "transcript"]
         if not transcript_info.empty:
-            transcript_strand = transcript_info.iloc[0]["strand"]        
+            transcript_strand = transcript_info.iloc[0]["strand"]
 
         # Plot transcript features
         for _, feature in features.iterrows():
@@ -349,7 +349,7 @@ class GenomeVisualizer:
                     # - Start codons should be at their start position
                     # - Stop codons should be at their end position
                     if feature["feature_type"] == "start_codon":
-                        codon_position = feature["start"] 
+                        codon_position = feature["start"]
                     else:  # stop_codon
                         codon_position = feature["end"]
                 else:  # Negative strand
@@ -360,7 +360,7 @@ class GenomeVisualizer:
                         codon_position = feature["end"]
                     else:  # stop_codon
                         codon_position = feature["start"]
-                
+
                 codon_y = 0.4  # Same as the transcript line
                 codon_height = self.codon_height
                 # Draw a vertical line
@@ -509,23 +509,25 @@ class GenomeVisualizer:
             ),
             # Use a straight vertical line for start codon in legend
             Line2D(
-                [0], [0],  # Single point
+                [0],
+                [0],  # Single point
                 marker="|",  # Vertical line marker
                 color=self.feature_colors["start_codon"],
                 label="Start codon",
                 markersize=12,  # Control height
                 markeredgewidth=3,  # Control width - same as alternative start
-                linestyle='None'  # Only show the marker
+                linestyle="None",  # Only show the marker
             ),
             # Use a straight vertical line for stop codon in legend
             Line2D(
-                [0], [0],
+                [0],
+                [0],
                 marker="|",
                 color=self.feature_colors["stop_codon"],
                 label="Stop codon",
                 markersize=12,
                 markeredgewidth=3,  # Match width with other codons
-                linestyle='None'
+                linestyle="None",
             ),
         ]
 
@@ -534,23 +536,24 @@ class GenomeVisualizer:
                 [
                     # Use a straight vertical line for alternative start in legend
                     Line2D(
-                        [0], [0],
+                        [0],
+                        [0],
                         marker="|",
                         color=self.feature_colors["alternative_start"],
                         label="Alternative start",
                         markersize=12,
                         markeredgewidth=3,  # Make width consistent with other codon markers
-                        linestyle='None'  # Only show the marker
+                        linestyle="None",  # Only show the marker
                     ),
                     Line2D(
-                        [0], [0],
+                        [0],
+                        [0],
                         color=self.feature_colors["truncation"],
                         label="Truncation",
                         linewidth=1.5,
                     ),
                 ]
             )
-
 
         # Add legends with improved spacing and spine handling
         if mutations_df is not None and not mutations_df.empty:
@@ -736,7 +739,7 @@ class GenomeVisualizer:
                     # - Start codons should be at their start position
                     # - Stop codons should be at their end position
                     if feature["feature_type"] == "start_codon":
-                        codon_position = feature["start"] 
+                        codon_position = feature["start"]
                     else:  # stop_codon
                         codon_position = feature["end"]
                 else:  # Negative strand
@@ -747,10 +750,10 @@ class GenomeVisualizer:
                         codon_position = feature["end"]
                     else:  # stop_codon
                         codon_position = feature["start"]
-                
+
                 codon_y = 0.4  # Same as the transcript line
                 codon_height = self.codon_height
-                
+
                 # Draw a vertical line
                 ax.vlines(
                     x=codon_position,
@@ -900,36 +903,40 @@ class GenomeVisualizer:
             ),
             # Use a straight vertical line for start codon in legend
             Line2D(
-                [0], [0],  # Single point
+                [0],
+                [0],  # Single point
                 marker="|",  # Vertical line marker
                 color=self.feature_colors["start_codon"],
                 label="Start codon",
                 markersize=15,  # Control height
                 markeredgewidth=3,  # Control width - same as alternative start
-                linestyle='None'  # Only show the marker
+                linestyle="None",  # Only show the marker
             ),
             # Use a straight vertical line for stop codon in legend
             Line2D(
-                [0], [0],
+                [0],
+                [0],
                 marker="|",
                 color=self.feature_colors["stop_codon"],
                 label="Stop codon",
                 markersize=12,
                 markeredgewidth=3,  # Match width with other codons
-                linestyle='None'
+                linestyle="None",
             ),
             # Use a straight vertical line for alternative start in legend
             Line2D(
-                [0], [0],
+                [0],
+                [0],
                 marker="|",
                 color=self.feature_colors["alternative_start"],
                 label="Alternative start",
                 markersize=12,
                 markeredgewidth=3,  # Make width consistent with other codon markers
-                linestyle='None'  # Only show the marker
+                linestyle="None",  # Only show the marker
             ),
             Line2D(
-                [0], [0],
+                [0],
+                [0],
                 color=self.feature_colors["truncation"],
                 label="Truncation",
                 linewidth=1.5,

@@ -25,7 +25,7 @@ class MutationHandler:
     - ClinVar
     """
 
-    def __init__(self, api_key: Optional[str] = '26214372a9ab53b26a43ba8546f4a5195308'):
+    def __init__(self, api_key: Optional[str] = "26214372a9ab53b26a43ba8546f4a5195308"):
         """Initialize the mutation handler with API endpoints.
 
         Args:
@@ -284,12 +284,12 @@ class MutationHandler:
 
         # Get variant IDs from esearch
         search_params = {
-            'db': 'clinvar',
-            'term': f"{gene_name}[gene]",
-            'retmax': 500,  # Adjust as needed
-            'retmode': 'json',
-            'tool': 'swissisoform',
-            'email': 'mdiberna@wi.mit.edu'  # Replace with actual email
+            "db": "clinvar",
+            "term": f"{gene_name}[gene]",
+            "retmax": 500,  # Adjust as needed
+            "retmode": "json",
+            "tool": "swissisoform",
+            "email": "mdiberna@wi.mit.edu",  # Replace with actual email
         }
 
         if self.api_key:
@@ -319,11 +319,11 @@ class MutationHandler:
 
                 # Get summaries for batch
                 summary_params = {
-                    'db': 'clinvar',
-                    'id': ','.join(batch_ids),
-                    'retmode': 'json',
-                    'tool': 'swissisoform',
-                    'email': 'mdiberna@wi.mit.edu'  # Replace with actual email
+                    "db": "clinvar",
+                    "id": ",".join(batch_ids),
+                    "retmode": "json",
+                    "tool": "swissisoform",
+                    "email": "mdiberna@wi.mit.edu",  # Replace with actual email
                 }
 
                 if self.api_key:
