@@ -13,11 +13,11 @@ source ~/.bashrc
 conda activate swissisoform
 
 # Create output directory
-mkdir -p results
+mkdir -p results_reduced
 
 # Define paths for command-line arguments
 GENE_LIST="../data/ribosome_profiling/gene_list.txt"
-OUTPUT_DIR="results"
+OUTPUT_DIR="results_reduced"
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
 ANNOTATION_PATH="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
 BED_PATH="../data/ribosome_profiling/selected_truncations_JL_cleaned.bed"
