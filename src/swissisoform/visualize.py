@@ -39,26 +39,26 @@ class GenomeVisualizer:
             "alternative_start": "#652d90",  # alternative (as specified)
         }
 
-        # Mutation impact colors (updated to shades of pink for mutations)
+        # Mutation impact colors (updated to distinct random colors)
         self.mutation_colors = {
-            "missense variant": "#FF3399",  # pink (as specified)
-            "synonymous variant": "#FFA6CF",  # lighter pink
-            "nonsense variant": "#FF0066",  # darker pink
-            "inframe deletion": "#FF66B2",  # medium pink
-            "inframe insertion": "#FF99CC",  # lighter medium pink
-            "frameshift variant": "#FF0080",  # bright pink
-            "splice variant": "#9933FF",  # purple (keeping original)
-            "start lost variant": "#CC0066",  # dark pink
-            "5 prime utr variant": "#FFB366",  # light orange (keeping original)
-            "3 prime utr variant": "#FFB366",  # light orange (keeping original)
-            "other variant": "#999999",  # gray (keeping original)
-            "unknown": "#000000",  # black (keeping original)
+            "missense variant": "#1b9e77",  # bright red
+            "synonymous variant": "#d95f02",  # bright blue
+            "nonsense variant": "#d95f02",  # blue
+            "inframe deletion": "#FF9800",  # orange
+            "inframe insertion": "#9C27B0",  # purple
+            "frameshift variant": "#7570b3",  # yellow
+            "splice variant": "#00BCD4",  # cyan
+            "start lost variant": "#795548",  # brown
+            "5 prime utr variant": "#607D8B",  # blue-gray
+            "3 prime utr variant": "#FF5722",  # deep orange
+            "other variant": "#9E9E9E",  # medium gray
+            "unknown": "#000000",  # black (kept original)
         }
 
         # Source-specific markers
         self.source_markers = {
             "gnomAD": "o",  # circle
-            "ClinVar": "^",  # triangle
+            "ClinVar": "x",  # heavy asterisk
             "Aggregator": "s",  # square
         }
 
@@ -495,8 +495,8 @@ class GenomeVisualizer:
                             y_pos,
                             marker=self.source_markers[source],
                             c=color,
-                            s=8,  # Smaller dots
-                            alpha=0.8,
+                            s=10,  # Smaller dots
+                            alpha=1,
                         )  # Slight transparency
 
         # Create legends
