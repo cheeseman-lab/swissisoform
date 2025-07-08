@@ -28,7 +28,7 @@ from swissisoform.utils import (
     save_gene_level_results,
     save_truncation_level_results,
     print_analysis_summary,
-    load_preferred_transcripts,  # New utility function to add
+    load_preferred_transcripts, 
 )
 
 # Configure logger
@@ -47,7 +47,7 @@ async def process_gene(
     visualize: bool = False,
     include_unfiltered: bool = False,
     impact_types: dict = None,
-    preferred_transcripts: set = None,  # New parameter
+    preferred_transcripts: set = None, 
 ) -> dict:
     """Process a single gene with visualizations and mutation analysis.
 

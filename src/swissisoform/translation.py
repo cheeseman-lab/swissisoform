@@ -268,7 +268,7 @@ class TruncatedProteinGenerator:
 
             # Translate directly (without requiring start codon)
             seq_obj = Seq(nucleotide_seq)
-            protein_seq = str(seq_obj.translate(to_stop=True))
+            protein_seq = str(seq_obj.translate())
 
             return protein_seq
 
