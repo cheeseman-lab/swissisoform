@@ -71,9 +71,9 @@ async def process_gene(
                 "error": "Could not extract proteins for gene",
             }
 
-        canonical_protein = gene_result['canonical']['protein']
-        truncated_protein = gene_result['truncated']['protein']
-        transcript_id = gene_result['transcript_id']
+        canonical_protein = gene_result["canonical"]["protein"]
+        truncated_protein = gene_result["truncated"]["protein"]
+        transcript_id = gene_result["transcript_id"]
 
         # Check length constraints
         if not (min_length <= len(canonical_protein) <= max_length):
@@ -100,7 +100,7 @@ async def process_gene(
 
         # Create sequence entries
         all_sequences = []
-        
+
         # Add canonical sequence
         if include_canonical or pairs_only:
             canonical_entry = {
@@ -115,7 +115,9 @@ async def process_gene(
 
         # Add truncated sequence
         trunc_id = f"trunc_{gene_result['truncation']['start']}_{gene_result['truncation']['end']}"
-        if "start_codon" in gene_result['truncation'] and not pd.isna(gene_result['truncation']["start_codon"]):
+        if "start_codon" in gene_result["truncation"] and not pd.isna(
+            gene_result["truncation"]["start_codon"]
+        ):
             trunc_id = f"trunc_{gene_result['truncation']['start_codon']}_{gene_result['truncation']['start']}_{gene_result['truncation']['end']}"
 
         truncated_entry = {
@@ -128,7 +130,9 @@ async def process_gene(
         }
         all_sequences.append(truncated_entry)
 
-        print(f"  │  ├─ Generated pair: canonical ({len(canonical_protein)} aa) + {trunc_id} ({len(truncated_protein)} aa)")
+        print(
+            f"  │  ├─ Generated pair: canonical ({len(canonical_protein)} aa) + {trunc_id} ({len(truncated_protein)} aa)"
+        )
 
         return {
             "gene_name": gene_name,
@@ -175,7 +179,9 @@ async def main(
         pairs_only: Only include WT and truncated pairs where truncation affects the transcript
     """
     start_time = datetime.now()
-    print(f"Starting protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(
+        f"Starting protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
     # Create output directory
     output_dir_path = Path(output_dir)
@@ -205,9 +211,13 @@ async def main(
     gene_names = parse_gene_list(gene_list_path)
     total_genes = len(gene_names)
     print(f"\nStarting protein sequence generation for {total_genes} genes")
-    print(f"Parameters: min_length={min_length}, max_length={max_length}, pairs_only={pairs_only}")
+    print(
+        f"Parameters: min_length={min_length}, max_length={max_length}, pairs_only={pairs_only}"
+    )
     if preferred_transcripts:
-        print(f"Using {len(preferred_transcripts)} preferred transcripts when available")
+        print(
+            f"Using {len(preferred_transcripts)} preferred transcripts when available"
+        )
 
     # Process all genes
     results = []
@@ -225,7 +235,7 @@ async def main(
             include_canonical=include_canonical,
         )
         results.append(result)
-        
+
         # Collect sequences from successful results
         if result["status"] == "success" and "sequences" in result:
             all_sequences.extend(result["sequences"])
@@ -240,21 +250,25 @@ async def main(
             from Bio.Seq import Seq
             from Bio.SeqRecord import SeqRecord
             from Bio import SeqIO
-            
+
             records = []
             for _, row in dataset.iterrows():
                 record_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
-                description = f"{'Truncated' if row['is_truncated'] else 'Canonical'} protein"
-                
-                records.append(
-                    SeqRecord(Seq(row["sequence"]), id=record_id, description=description)
+                description = (
+                    f"{'Truncated' if row['is_truncated'] else 'Canonical'} protein"
                 )
-            
+
+                records.append(
+                    SeqRecord(
+                        Seq(row["sequence"]), id=record_id, description=description
+                    )
+                )
+
             if pairs_only:
                 output_file = output_dir_path / "protein_sequence_dataset_pairs.fasta"
             else:
                 output_file = output_dir_path / "protein_sequence_dataset.fasta"
-            
+
             SeqIO.write(records, output_file, "fasta")
             print(f"Saved dataset FASTA to {output_file}")
 
@@ -263,7 +277,7 @@ async def main(
                 output_file = output_dir_path / "protein_sequence_dataset_pairs.csv"
             else:
                 output_file = output_dir_path / "protein_sequence_dataset.csv"
-            
+
             dataset.to_csv(output_file, index=False)
             print(f"Saved dataset CSV to {output_file}")
 
@@ -302,12 +316,16 @@ async def main(
             )
             unique_transcripts_with_pairs = transcript_pairs["transcript_id"].nunique()
 
-            print(f"  │  ├─ Transcripts with paired WT/truncated sequences: {unique_transcripts_with_pairs}")
+            print(
+                f"  │  ├─ Transcripts with paired WT/truncated sequences: {unique_transcripts_with_pairs}"
+            )
             print(f"  │  └─ Total pairs: {len(transcript_pairs) // 2}")
     else:
         print("\n  └─ No valid sequences generated")
 
-    print(f"\n  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(
+        f"\n  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
 
 if __name__ == "__main__":
