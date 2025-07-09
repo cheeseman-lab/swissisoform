@@ -151,6 +151,23 @@ for _, transcript in transcript_info.iterrows():
 
 For more detailed examples and use cases, see the Jupyter notebooks in `notebooks/`.
 
+## Deeploc installation
+
+```bash
+# Create and activate a conda environment (recommended)
+conda create -n deeploc python=3.8
+conda activate deeploc
+
+# Then install DeepLoc 2.1
+pip install DeepLoc-2.1.0.tar.gz
+
+# Run results_reduced
+deeploc2 -f scripts/results_reduced/protein_sequence_dataset_pairs.fasta -o scripts/results_reduced/
+
+# Run results
+deeploc2 -f scripts/results/protein_sequence_dataset_pairs.fasta -o scripts/results/
+```
+
 ## License
 
 MIT License - see LICENSE file for details.

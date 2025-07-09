@@ -22,3 +22,6 @@ scripts/results_reduced
 # All DS store files
 .DS_Store
 scripts/.DS_Store
+
+# deeploc2
+deeploc-2.1.All.tar.gz
