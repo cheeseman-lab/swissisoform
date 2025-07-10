@@ -291,44 +291,82 @@ class TruncatedProteinGenerator:
         self, 
         gene_name: str, 
         preferred_transcripts: Optional[Set[str]] = None
-    ) -> Optional[Dict]:
-        """Extract both canonical and truncated proteins for a gene.
+    ) -> Optional[List[Dict]]:
+        """Extract canonical and truncated proteins for ALL transcript-truncation pairs.
 
         Args:
             gene_name: Name of the gene
             preferred_transcripts: Set of preferred transcript IDs
 
         Returns:
-            Dict with canonical and truncated results or None if failed
+            List of dicts with canonical and truncated results for each pair
         """
-        # Get preferred transcript
-        transcript_id = self.get_preferred_transcript(gene_name, preferred_transcripts)
-        if not transcript_id:
+        # Get transcript information
+        transcript_info = self.genome.get_transcript_ids(gene_name)
+        if transcript_info.empty:
             return None
+
+        # Filter by preferred transcripts if provided
+        if preferred_transcripts:
+            filtered = transcript_info[
+                transcript_info["transcript_id"].isin(preferred_transcripts)
+            ]
+            if not filtered.empty:
+                transcript_info = filtered
 
         # Get truncation features
         truncation_features = self.alt_isoforms.get_visualization_features(gene_name)
         if truncation_features.empty:
             return None
 
-        # Extract canonical protein
-        canonical_result = self.extract_canonical_protein(transcript_id)
-        if not canonical_result:
-            return None
+        all_pairs = []
 
-        # Extract truncated protein (using first truncation)
-        truncation = truncation_features.iloc[0]
-        truncated_result = self.extract_truncated_protein(transcript_id, truncation)
-        if not truncated_result:
-            return None
+        # Process each transcript-truncation pair (like analyze_truncations.py)
+        for _, transcript in transcript_info.iterrows():
+            transcript_id = transcript["transcript_id"]
+            transcript_start = transcript["start"]
+            transcript_end = transcript["end"]
+            transcript_chromosome = transcript["chromosome"]
 
-        return {
-            'gene_name': gene_name,
-            'transcript_id': transcript_id,
-            'canonical': canonical_result,
-            'truncated': truncated_result,
-            'truncation': truncation
-        }
+            # Extract canonical protein once per transcript
+            canonical_result = self.extract_canonical_protein(transcript_id)
+            if not canonical_result:
+                continue
+
+            # Check each truncation for overlap with this transcript
+            for idx, truncation in truncation_features.iterrows():
+                trunc_start = truncation["start"]
+                trunc_end = truncation["end"]
+                trunc_chrom = truncation["chromosome"]
+
+                # Skip if chromosomes don't match
+                if transcript_chromosome != trunc_chrom:
+                    continue
+
+                # Check for overlap
+                if not (transcript_end < trunc_start or transcript_start > trunc_end):
+                    # Extract truncated protein for this specific pair
+                    truncated_result = self.extract_truncated_protein(transcript_id, truncation)
+                    if not truncated_result:
+                        continue
+
+                    # Create truncation ID (matching analyze_truncations.py logic)
+                    truncation_id = f"trunc_{idx}"
+                    if "start_codon" in truncation and not pd.isna(truncation["start_codon"]):
+                        truncation_id = f"trunc_{truncation['start_codon']}_{trunc_start}_{trunc_end}"
+
+                    all_pairs.append({
+                        'gene_name': gene_name,
+                        'transcript_id': transcript_id,
+                        'truncation_id': truncation_id,
+                        'truncation_idx': idx,
+                        'canonical': canonical_result,
+                        'truncated': truncated_result,
+                        'truncation': truncation
+                    })
+
+        return all_pairs if all_pairs else None
+
 
     def generate_protein_variants(
         self,

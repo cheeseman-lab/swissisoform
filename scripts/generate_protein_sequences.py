@@ -42,10 +42,10 @@ async def process_gene(
     pairs_only: bool = False,
     include_canonical: bool = True,
 ) -> dict:
-    """Process a single gene to generate protein sequences.
+    """Process a single gene to generate protein sequences for ALL transcript-truncation pairs.
 
     Args:
-        gene_name: Name of the gene to process
+        gene_name: Name of the gene
         protein_generator: Initialized TruncatedProteinGenerator instance
         preferred_transcripts: Optional set of transcript IDs to prioritize
         min_length: Minimum protein length to include
@@ -54,92 +54,115 @@ async def process_gene(
         include_canonical: Whether to include canonical transcripts
 
     Returns:
-        Dictionary containing processing results
+        Dictionary containing analysis results
     """
     try:
         print(f"  ├─ Processing gene {gene_name}...")
 
-        # Use the new extract_gene_proteins method which handles everything
-        gene_result = protein_generator.extract_gene_proteins(
+        # Use the new extract_gene_proteins method which returns a LIST of pairs
+        all_pairs = protein_generator.extract_gene_proteins(
             gene_name, preferred_transcripts
         )
 
-        if not gene_result:
+        if not all_pairs:
             return {
                 "gene_name": gene_name,
                 "status": "no_data",
                 "error": "Could not extract proteins for gene",
             }
 
-        canonical_protein = gene_result["canonical"]["protein"]
-        truncated_protein = gene_result["truncated"]["protein"]
-        transcript_id = gene_result["transcript_id"]
-
-        # Check length constraints
-        if not (min_length <= len(canonical_protein) <= max_length):
-            return {
-                "gene_name": gene_name,
-                "status": "length_filter",
-                "error": f"Canonical protein length {len(canonical_protein)} outside range {min_length}-{max_length}",
-            }
-
-        if not (min_length <= len(truncated_protein) <= max_length):
-            return {
-                "gene_name": gene_name,
-                "status": "length_filter",
-                "error": f"Truncated protein length {len(truncated_protein)} outside range {min_length}-{max_length}",
-            }
-
-        # Check if the sequences are actually different
-        if truncated_protein == canonical_protein:
-            return {
-                "gene_name": gene_name,
-                "status": "identical_sequences",
-                "error": "Truncation results in identical protein",
-            }
-
-        # Create sequence entries
+        # Track which canonical sequences we've already added to avoid duplicates
+        canonical_sequences_added = set()
         all_sequences = []
+        valid_pairs = 0
+        skipped_pairs = 0
 
-        # Add canonical sequence
-        if include_canonical or pairs_only:
-            canonical_entry = {
+        # Process each transcript-truncation pair
+        for pair in all_pairs:
+            canonical_protein = pair["canonical"]["protein"]
+            truncated_protein = pair["truncated"]["protein"]
+            transcript_id = pair["transcript_id"]
+            truncation_id = pair["truncation_id"]
+
+            # Check length constraints
+            if not (min_length <= len(canonical_protein) <= max_length):
+                skipped_pairs += 1
+                continue
+
+            if not (min_length <= len(truncated_protein) <= max_length):
+                skipped_pairs += 1
+                continue
+
+            # Check if the sequences are actually different
+            if truncated_protein == canonical_protein:
+                skipped_pairs += 1
+                continue
+
+            # Add canonical sequence (once per transcript to avoid duplicates)
+            if (include_canonical or pairs_only) and transcript_id not in canonical_sequences_added:
+                canonical_entry = {
+                    "gene": gene_name,
+                    "transcript_id": transcript_id,
+                    "variant_id": "canonical",
+                    "sequence": canonical_protein,
+                    "length": len(canonical_protein),
+                    "is_truncated": 0,
+                }
+                all_sequences.append(canonical_entry)
+                canonical_sequences_added.add(transcript_id)
+
+            # Add truncated sequence
+            truncated_entry = {
                 "gene": gene_name,
                 "transcript_id": transcript_id,
-                "variant_id": "canonical",
-                "sequence": canonical_protein,
-                "length": len(canonical_protein),
-                "is_truncated": 0,
+                "variant_id": truncation_id,
+                "sequence": truncated_protein,
+                "length": len(truncated_protein),
+                "is_truncated": 1,
             }
-            all_sequences.append(canonical_entry)
+            all_sequences.append(truncated_entry)
+            valid_pairs += 1
 
-        # Add truncated sequence
-        trunc_id = f"trunc_{gene_result['truncation']['start']}_{gene_result['truncation']['end']}"
-        if "start_codon" in gene_result["truncation"] and not pd.isna(
-            gene_result["truncation"]["start_codon"]
-        ):
-            trunc_id = f"trunc_{gene_result['truncation']['start_codon']}_{gene_result['truncation']['start']}_{gene_result['truncation']['end']}"
+        if not all_sequences:
+            return {
+                "gene_name": gene_name,
+                "status": "length_filter",
+                "error": f"No pairs passed filters (skipped {skipped_pairs} pairs)",
+            }
 
-        truncated_entry = {
-            "gene": gene_name,
-            "transcript_id": transcript_id,
-            "variant_id": trunc_id,
-            "sequence": truncated_protein,
-            "length": len(truncated_protein),
-            "is_truncated": 1,
-        }
-        all_sequences.append(truncated_entry)
+        # Calculate some summary statistics
+        total_canonical = len(canonical_sequences_added)
+        total_truncated = valid_pairs
+        avg_canonical_length = sum(
+            seq["length"] for seq in all_sequences if seq["is_truncated"] == 0
+        ) / max(total_canonical, 1)
+        avg_truncated_length = sum(
+            seq["length"] for seq in all_sequences if seq["is_truncated"] == 1
+        ) / max(total_truncated, 1)
 
         print(
-            f"  │  ├─ Generated pair: canonical ({len(canonical_protein)} aa) + {trunc_id} ({len(truncated_protein)} aa)"
+            f"  │  ├─ Generated {valid_pairs} valid transcript-truncation pairs from {len(all_pairs)} total pairs"
         )
+        print(
+            f"  │  ├─ Canonical: {total_canonical} transcripts (avg length: {avg_canonical_length:.0f} aa)"
+        )
+        print(
+            f"  │  ├─ Truncated: {total_truncated} variants (avg length: {avg_truncated_length:.0f} aa)"
+        )
+        if skipped_pairs > 0:
+            print(f"  │  └─ Skipped {skipped_pairs} pairs due to length/identity filters")
 
         return {
             "gene_name": gene_name,
             "status": "success",
-            "transcript_id": transcript_id,
-            "canonical_length": len(canonical_protein),
-            "truncated_length": len(truncated_protein),
+            "total_pairs_found": len(all_pairs),
+            "valid_pairs": valid_pairs,
+            "skipped_pairs": skipped_pairs,
+            "canonical_transcripts": total_canonical,
+            "truncated_variants": total_truncated,
+            "total_sequences": len(all_sequences),
+            "avg_canonical_length": avg_canonical_length,
+            "avg_truncated_length": avg_truncated_length,
             "sequences": all_sequences,
             "error": None,
         }
@@ -148,7 +171,6 @@ async def process_gene(
         logger.error(f"Error processing gene {gene_name}: {str(e)}")
         print(f"  └─ Error: {str(e)}")
         return {"gene_name": gene_name, "status": "error", "error": str(e)}
-
 
 async def main(
     gene_list_path: str,
