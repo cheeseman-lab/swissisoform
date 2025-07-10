@@ -81,7 +81,9 @@ class TruncatedProteinGenerator:
         """
         # Get features and transcript data
         features = self.genome.get_transcript_features(transcript_id)
-        transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
+        transcript_data = self.genome.get_transcript_features_with_sequence(
+            transcript_id
+        )
 
         if not transcript_data or "sequence" not in transcript_data:
             return None
@@ -132,29 +134,30 @@ class TruncatedProteinGenerator:
                 continue
 
             # Calculate effective boundaries within this CDS
-            effective_start = max(cds_start, extract_start) if extract_start else cds_start
+            effective_start = (
+                max(cds_start, extract_start) if extract_start else cds_start
+            )
             effective_end = min(cds_end, extract_end) if extract_end else cds_end
 
-            overlapping_cds.append({
-                'start': effective_start,
-                'end': effective_end,
-                'length': effective_end - effective_start + 1
-            })
+            overlapping_cds.append(
+                {
+                    "start": effective_start,
+                    "end": effective_end,
+                    "length": effective_end - effective_start + 1,
+                }
+            )
 
         # Sort CDS regions properly for extraction
         if strand == "+":
-            overlapping_cds.sort(key=lambda x: x['start'])
+            overlapping_cds.sort(key=lambda x: x["start"])
         else:
-            overlapping_cds.sort(key=lambda x: x['start'], reverse=True)
+            overlapping_cds.sort(key=lambda x: x["start"], reverse=True)
 
         # Extract sequence from each CDS region
         coding_sequence = ""
         for cds in overlapping_cds:
             cds_seq = self.genome.get_sequence(
-                chromosome,
-                cds['start'],
-                cds['end'],
-                strand
+                chromosome, cds["start"], cds["end"], strand
             )
             coding_sequence += str(cds_seq)
 
@@ -165,10 +168,10 @@ class TruncatedProteinGenerator:
             protein = ""
 
         return {
-            'coding_sequence': coding_sequence,
-            'protein': protein,
-            'strand': strand,
-            'transcript_id': transcript_id
+            "coding_sequence": coding_sequence,
+            "protein": protein,
+            "strand": strand,
+            "transcript_id": transcript_id,
         }
 
     def extract_truncated_protein(
@@ -185,7 +188,9 @@ class TruncatedProteinGenerator:
         """
         # Get features and transcript data
         features = self.genome.get_transcript_features(transcript_id)
-        transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
+        transcript_data = self.genome.get_transcript_features_with_sequence(
+            transcript_id
+        )
 
         if not transcript_data or "sequence" not in transcript_data:
             return None
@@ -238,30 +243,31 @@ class TruncatedProteinGenerator:
                 if extract_end and cds_end < extract_end:
                     continue
 
-                effective_start = max(cds_start, extract_end) if extract_end else cds_start
+                effective_start = (
+                    max(cds_start, extract_end) if extract_end else cds_start
+                )
                 effective_end = min(cds_end, alt_start_pos)
 
             if effective_end >= effective_start:
-                overlapping_cds.append({
-                    'start': effective_start,
-                    'end': effective_end,
-                    'length': effective_end - effective_start + 1
-                })
+                overlapping_cds.append(
+                    {
+                        "start": effective_start,
+                        "end": effective_end,
+                        "length": effective_end - effective_start + 1,
+                    }
+                )
 
         # Sort CDS regions properly for extraction
         if strand == "+":
-            overlapping_cds.sort(key=lambda x: x['start'])
+            overlapping_cds.sort(key=lambda x: x["start"])
         else:
-            overlapping_cds.sort(key=lambda x: x['start'], reverse=True)
+            overlapping_cds.sort(key=lambda x: x["start"], reverse=True)
 
         # Extract sequence from each CDS region
         coding_sequence = ""
         for cds in overlapping_cds:
             cds_seq = self.genome.get_sequence(
-                chromosome,
-                cds['start'],
-                cds['end'],
-                strand
+                chromosome, cds["start"], cds["end"], strand
             )
             coding_sequence += str(cds_seq)
 
@@ -277,20 +283,18 @@ class TruncatedProteinGenerator:
             protein = ""
 
         return {
-            'coding_sequence': coding_sequence,
-            'protein': protein,
-            'strand': strand,
-            'transcript_id': transcript_id,
-            'truncation_start': truncation_start,
-            'truncation_end': truncation_end,
-            'alternative_start_pos': alt_start_pos,
-            'total_cds_regions': len(overlapping_cds)
+            "coding_sequence": coding_sequence,
+            "protein": protein,
+            "strand": strand,
+            "transcript_id": transcript_id,
+            "truncation_start": truncation_start,
+            "truncation_end": truncation_end,
+            "alternative_start_pos": alt_start_pos,
+            "total_cds_regions": len(overlapping_cds),
         }
 
     def extract_gene_proteins(
-        self, 
-        gene_name: str, 
-        preferred_transcripts: Optional[Set[str]] = None
+        self, gene_name: str, preferred_transcripts: Optional[Set[str]] = None
     ) -> Optional[List[Dict]]:
         """Extract canonical and truncated proteins for ALL transcript-truncation pairs.
 
@@ -346,27 +350,32 @@ class TruncatedProteinGenerator:
                 # Check for overlap
                 if not (transcript_end < trunc_start or transcript_start > trunc_end):
                     # Extract truncated protein for this specific pair
-                    truncated_result = self.extract_truncated_protein(transcript_id, truncation)
+                    truncated_result = self.extract_truncated_protein(
+                        transcript_id, truncation
+                    )
                     if not truncated_result:
                         continue
 
                     # Create truncation ID (matching analyze_truncations.py logic)
                     truncation_id = f"trunc_{idx}"
-                    if "start_codon" in truncation and not pd.isna(truncation["start_codon"]):
+                    if "start_codon" in truncation and not pd.isna(
+                        truncation["start_codon"]
+                    ):
                         truncation_id = f"trunc_{truncation['start_codon']}_{trunc_start}_{trunc_end}"
 
-                    all_pairs.append({
-                        'gene_name': gene_name,
-                        'transcript_id': transcript_id,
-                        'truncation_id': truncation_id,
-                        'truncation_idx': idx,
-                        'canonical': canonical_result,
-                        'truncated': truncated_result,
-                        'truncation': truncation
-                    })
+                    all_pairs.append(
+                        {
+                            "gene_name": gene_name,
+                            "transcript_id": transcript_id,
+                            "truncation_id": truncation_id,
+                            "truncation_idx": idx,
+                            "canonical": canonical_result,
+                            "truncated": truncated_result,
+                            "truncation": truncation,
+                        }
+                    )
 
         return all_pairs if all_pairs else None
-
 
     def generate_protein_variants(
         self,
@@ -415,7 +424,7 @@ class TruncatedProteinGenerator:
                 if not canonical_result:
                     continue
 
-                canonical_protein = canonical_result['protein']
+                canonical_protein = canonical_result["protein"]
                 if not canonical_protein:
                     continue
 
@@ -430,11 +439,13 @@ class TruncatedProteinGenerator:
                             trunc_id = f"trunc_{trunc['start_codon']}_{trunc['start']}_{trunc['end']}"
 
                         # Extract truncated protein
-                        truncated_result = self.extract_truncated_protein(transcript_id, trunc)
+                        truncated_result = self.extract_truncated_protein(
+                            transcript_id, trunc
+                        )
                         if not truncated_result:
                             continue
 
-                        truncated_protein = truncated_result['protein']
+                        truncated_protein = truncated_result["protein"]
                         if not truncated_protein:
                             continue
 
@@ -482,15 +493,17 @@ class TruncatedProteinGenerator:
         for gene_idx, gene_name in enumerate(gene_list, 1):
             try:
                 # Extract both canonical and truncated proteins
-                gene_result = self.extract_gene_proteins(gene_name, preferred_transcripts)
-                
+                gene_result = self.extract_gene_proteins(
+                    gene_name, preferred_transcripts
+                )
+
                 if not gene_result:
                     skipped_genes.append(gene_name)
                     continue
 
-                canonical_protein = gene_result['canonical']['protein']
-                truncated_protein = gene_result['truncated']['protein']
-                transcript_id = gene_result['transcript_id']
+                canonical_protein = gene_result["canonical"]["protein"]
+                truncated_protein = gene_result["truncated"]["protein"]
+                transcript_id = gene_result["transcript_id"]
 
                 # Check length constraints
                 if not (min_length <= len(canonical_protein) <= max_length):
@@ -507,25 +520,29 @@ class TruncatedProteinGenerator:
                     continue
 
                 # Add canonical sequence
-                all_sequences.append({
-                    "gene": gene_name,
-                    "transcript_id": transcript_id,
-                    "variant_id": "canonical",
-                    "sequence": canonical_protein,
-                    "length": len(canonical_protein),
-                    "is_truncated": 0,
-                })
+                all_sequences.append(
+                    {
+                        "gene": gene_name,
+                        "transcript_id": transcript_id,
+                        "variant_id": "canonical",
+                        "sequence": canonical_protein,
+                        "length": len(canonical_protein),
+                        "is_truncated": 0,
+                    }
+                )
 
                 # Add truncated sequence
                 trunc_id = f"trunc_{gene_result['truncation']['start']}_{gene_result['truncation']['end']}"
-                all_sequences.append({
-                    "gene": gene_name,
-                    "transcript_id": transcript_id,
-                    "variant_id": trunc_id,
-                    "sequence": truncated_protein,
-                    "length": len(truncated_protein),
-                    "is_truncated": 1,
-                })
+                all_sequences.append(
+                    {
+                        "gene": gene_name,
+                        "transcript_id": transcript_id,
+                        "variant_id": trunc_id,
+                        "sequence": truncated_protein,
+                        "length": len(truncated_protein),
+                        "is_truncated": 1,
+                    }
+                )
 
                 total_pairs += 1
                 successful_genes += 1
@@ -545,9 +562,13 @@ class TruncatedProteinGenerator:
                 output_file = self.output_dir / "protein_sequence_dataset_pairs.csv"
                 dataset.to_csv(output_file, index=False)
 
-        print(f"Generated {total_pairs} transcript-truncation pairs from {successful_genes}/{len(gene_list)} genes")
+        print(
+            f"Generated {total_pairs} transcript-truncation pairs from {successful_genes}/{len(gene_list)} genes"
+        )
         if skipped_genes:
-            print(f"Skipped {len(skipped_genes)} genes due to missing data or constraints")
+            print(
+                f"Skipped {len(skipped_genes)} genes due to missing data or constraints"
+            )
 
         return dataset
 
@@ -597,14 +618,16 @@ class TruncatedProteinGenerator:
                     canonical_seq = variants["canonical"]
 
                     if min_length <= len(canonical_seq) <= max_length:
-                        all_sequences.append({
-                            "gene": gene_name,
-                            "transcript_id": transcript_id,
-                            "variant_id": "canonical",
-                            "sequence": canonical_seq,
-                            "length": len(canonical_seq),
-                            "is_truncated": 0,
-                        })
+                        all_sequences.append(
+                            {
+                                "gene": gene_name,
+                                "transcript_id": transcript_id,
+                                "variant_id": "canonical",
+                                "sequence": canonical_seq,
+                                "length": len(canonical_seq),
+                                "is_truncated": 0,
+                            }
+                        )
 
                 # Add truncated sequences
                 for variant_id, seq in variants.items():
@@ -612,14 +635,16 @@ class TruncatedProteinGenerator:
                         continue
 
                     if min_length <= len(seq) <= max_length:
-                        all_sequences.append({
-                            "gene": gene_name,
-                            "transcript_id": transcript_id,
-                            "variant_id": variant_id,
-                            "sequence": seq,
-                            "length": len(seq),
-                            "is_truncated": 1,
-                        })
+                        all_sequences.append(
+                            {
+                                "gene": gene_name,
+                                "transcript_id": transcript_id,
+                                "variant_id": variant_id,
+                                "sequence": seq,
+                                "length": len(seq),
+                                "is_truncated": 1,
+                            }
+                        )
 
         # Create dataset
         dataset = pd.DataFrame(all_sequences)
@@ -633,7 +658,9 @@ class TruncatedProteinGenerator:
                 output_file = self.output_dir / "protein_sequence_dataset.csv"
                 dataset.to_csv(output_file, index=False)
 
-        print(f"Generated protein dataset from {successful_genes}/{len(gene_list)} genes")
+        print(
+            f"Generated protein dataset from {successful_genes}/{len(gene_list)} genes"
+        )
         return dataset
 
     def _save_sequences(
@@ -693,24 +720,28 @@ class TruncatedProteinGenerator:
             for transcript_id, variants in sequences.items():
                 # Add canonical sequence if requested
                 if not exclude_canonical and "canonical" in variants:
-                    rows.append({
-                        "gene": gene_name,
-                        "transcript_id": transcript_id,
-                        "variant_id": "canonical",
-                        "sequence": variants["canonical"],
-                    })
+                    rows.append(
+                        {
+                            "gene": gene_name,
+                            "transcript_id": transcript_id,
+                            "variant_id": "canonical",
+                            "sequence": variants["canonical"],
+                        }
+                    )
 
                 # Add truncated sequences
                 for variant_id, seq in variants.items():
                     if variant_id == "canonical":
                         continue
 
-                    rows.append({
-                        "gene": gene_name,
-                        "transcript_id": transcript_id,
-                        "variant_id": variant_id,
-                        "sequence": seq,
-                    })
+                    rows.append(
+                        {
+                            "gene": gene_name,
+                            "transcript_id": transcript_id,
+                            "variant_id": variant_id,
+                            "sequence": seq,
+                        }
+                    )
 
             # Write to file
             output_file = gene_dir / f"{gene_name}_protein_sequences.csv"
@@ -726,7 +757,9 @@ class TruncatedProteinGenerator:
 
         for _, row in dataset.iterrows():
             record_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
-            description = f"{'Truncated' if row['is_truncated'] else 'Canonical'} protein"
+            description = (
+                f"{'Truncated' if row['is_truncated'] else 'Canonical'} protein"
+            )
 
             records.append(
                 SeqRecord(Seq(row["sequence"]), id=record_id, description=description)

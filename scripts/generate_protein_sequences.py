@@ -99,7 +99,9 @@ async def process_gene(
                 continue
 
             # Add canonical sequence (once per transcript to avoid duplicates)
-            if (include_canonical or pairs_only) and transcript_id not in canonical_sequences_added:
+            if (
+                include_canonical or pairs_only
+            ) and transcript_id not in canonical_sequences_added:
                 canonical_entry = {
                     "gene": gene_name,
                     "transcript_id": transcript_id,
@@ -150,7 +152,9 @@ async def process_gene(
             f"  │  ├─ Truncated: {total_truncated} variants (avg length: {avg_truncated_length:.0f} aa)"
         )
         if skipped_pairs > 0:
-            print(f"  │  └─ Skipped {skipped_pairs} pairs due to length/identity filters")
+            print(
+                f"  │  └─ Skipped {skipped_pairs} pairs due to length/identity filters"
+            )
 
         return {
             "gene_name": gene_name,
@@ -171,6 +175,7 @@ async def process_gene(
         logger.error(f"Error processing gene {gene_name}: {str(e)}")
         print(f"  └─ Error: {str(e)}")
         return {"gene_name": gene_name, "status": "error", "error": str(e)}
+
 
 async def main(
     gene_list_path: str,
