@@ -36,7 +36,8 @@ python3 generate_protein_sequences_mutations.py "$GENE_LIST" "$OUTPUT_DIR" \
   --max-length "$MAX_LENGTH" \
   --format "$FORMAT" \
   --include-mutations \
-  --impact-types "missense variant" 
+  --impact-types "missense variant" \
+  --debug 
 
 # Print completion message
 echo "Protein sequence generation completed at $(date)"

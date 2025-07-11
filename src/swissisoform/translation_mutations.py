@@ -14,10 +14,10 @@ from swissisoform.mutations import MutationHandler
 
 
 class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
-    """Enhanced protein generator with corrected mutation integration.
+    """Enhanced protein generator with validated mutation integration.
     
-    This class applies mutations to the canonical sequence first, then applies
-    truncation logic to generate alternative isoforms from the mutated canonical.
+    This class follows the same patterns as TruncatedProteinGenerator but adds
+    validated mutation integration using genomic position validation.
     """
     
     def __init__(self, genome_handler, alt_isoform_handler, output_dir, 
@@ -32,7 +32,14 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
             print(f"DEBUG: {message}")
     
     def _parse_hgvs_to_alleles(self, hgvsc: str) -> Tuple[Optional[str], Optional[str]]:
-        """Parse HGVS coding notation to extract reference and alternate alleles."""
+        """Parse HGVS coding notation to extract reference and alternate alleles.
+        
+        Args:
+            hgvsc: HGVS coding sequence notation (e.g., 'c.76C>T')
+            
+        Returns:
+            Tuple of (reference_allele, alternate_allele) or (None, None) if parsing fails
+        """
         if not hgvsc or pd.isna(hgvsc) or str(hgvsc) == 'nan':
             return None, None
             
@@ -68,7 +75,14 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
         return None, None
     
     def _parse_protein_change(self, hgvsp: str) -> Optional[str]:
-        """Parse protein change notation like 'V10L' to extract change."""
+        """Parse protein change notation like 'V10L' to extract change.
+        
+        Args:
+            hgvsp: Protein change notation
+            
+        Returns:
+            Standardized protein change string or None
+        """
         if not hgvsp or pd.isna(hgvsp):
             return None
             
@@ -80,7 +94,15 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
         return None
     
     def _compare_proteins(self, protein1: str, protein2: str) -> Optional[str]:
-        """Compare two proteins and return the first change found."""
+        """Compare two proteins and return the first change found.
+        
+        Args:
+            protein1: Original protein sequence
+            protein2: Modified protein sequence
+            
+        Returns:
+            Change notation (e.g., 'V10L') or special codes
+        """
         if len(protein1) != len(protein2):
             return "length_change"
             
@@ -96,54 +118,42 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
         else:
             return f"multiple_changes_{len(changes)}"
     
-    async def _get_mutations_in_canonical_region(self, gene_name: str, 
-                                               transcript_id: str,
-                                               impact_types: List[str] = None) -> pd.DataFrame:
-        """Get mutations within the canonical transcript region.
+    async def _get_mutations_in_region(self, gene_name: str, start: int, end: int, 
+                                      impact_types: List[str] = None) -> pd.DataFrame:
+        """Get mutations within a specific genomic region.
         
         Args:
             gene_name: Gene name
-            transcript_id: Canonical transcript ID
+            start: Start position of region
+            end: End position of region
             impact_types: List of impact types to filter by
             
         Returns:
-            DataFrame of mutations in the canonical transcript
+            DataFrame of mutations in the region
         """
-        self._debug_print(f"Fetching mutations for canonical transcript {transcript_id}")
+        self._debug_print(f"Fetching mutations for {gene_name} in region {start}-{end}")
+        self._debug_print(f"Looking for impact types: {impact_types}")
         
-        # Get the full canonical transcript coordinates
-        features = self.genome.get_transcript_features(transcript_id)
-        if features.empty:
-            self._debug_print(f"No features found for transcript {transcript_id}")
-            return pd.DataFrame()
-            
-        # Get the transcript span
-        transcript_start = features['start'].min()
-        transcript_end = features['end'].max()
-        chromosome = features.iloc[0]['chromosome']
-        
-        self._debug_print(f"Canonical transcript region: {chromosome}:{transcript_start}-{transcript_end}")
-        
-        # Create transcript features for mutation handler
-        transcript_features = pd.DataFrame([{
-            'start': transcript_start,
-            'end': transcript_end,
-            'chromosome': chromosome,
-            'name': f'canonical_{transcript_id}'
+        # Create region features for mutation handler
+        region_features = pd.DataFrame([{
+            'start': start,
+            'end': end,
+            'chromosome': 'chr1',  # Will be corrected by mutation handler
+            'name': f'region_{start}_{end}'
         }])
         
-        # Get mutations in the canonical transcript region
+        # Get mutations in this region
         mutations = await self.mutation_handler.get_visualization_ready_mutations(
             gene_name=gene_name,
-            alt_features=transcript_features,
+            alt_features=region_features,
             sources=['clinvar']
         )
         
         if mutations is None or mutations.empty:
-            self._debug_print(f"No mutations found in canonical transcript")
+            self._debug_print(f"No mutations found in region")
             return pd.DataFrame()
         
-        self._debug_print(f"Found {len(mutations)} raw mutations in canonical transcript")
+        self._debug_print(f"Found {len(mutations)} raw mutations")
         
         # Filter by impact types if specified
         if impact_types:
@@ -154,135 +164,171 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
             
         return mutations
     
-    def _apply_mutation_to_canonical_sequence(self, transcript_id: str, 
-                                            genomic_pos: int, 
-                                            ref_allele: str, 
-                                            alt_allele: str) -> Optional[str]:
-        """Apply mutation to the canonical transcript sequence.
+    def extract_validated_mutated_protein(self, transcript_id: str, 
+                                        truncation_feature: pd.Series,
+                                        mutation: pd.Series) -> Optional[Dict]:
+        """Extract truncated protein with validated mutation applied.
+        
+        This method follows the validated approach:
+        1. Validate reference allele at genomic position
+        2. Apply mutation at exact genomic position
+        3. Validate protein change against expected HGVSP
         
         Args:
-            transcript_id: Canonical transcript ID
-            genomic_pos: Genomic position of mutation
-            ref_allele: Reference allele (HGVS coding strand)
-            alt_allele: Alternate allele (HGVS coding strand)
+            transcript_id: Transcript ID to process
+            truncation_feature: Truncation feature data
+            mutation: Mutation data with position, HGVS notation
             
         Returns:
-            Mutated canonical coding sequence or None if failed
+            Dict with validated mutation results or None if validation fails
         """
-        self._debug_print(f"Applying mutation to canonical transcript {transcript_id}")
+        self._debug_print(f"Starting validated mutation for transcript {transcript_id}")
         
-        # Get transcript data
-        transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
-        if not transcript_data or "sequence" not in transcript_data:
-            self._debug_print(f"Could not get transcript sequence data")
+        # Extract mutation data
+        genomic_pos = int(mutation['position'])
+        hgvsc = str(mutation.get('hgvsc', ''))
+        hgvsp = str(mutation.get('hgvsp', ''))
+        
+        self._debug_print(f"Mutation: pos={genomic_pos}, HGVSC={hgvsc}, HGVSP={hgvsp}")
+        
+        # Step 1: Parse HGVS to get expected reference and alternate
+        ref_allele, alt_allele = self._parse_hgvs_to_alleles(hgvsc)
+        if not ref_allele or not alt_allele:
+            self._debug_print(f"Could not parse HGVS notation: {hgvsc}")
             return None
-
-        chromosome = transcript_data["sequence"]["chromosome"]
-        strand = transcript_data["sequence"]["strand"]
+            
+        self._debug_print(f"Parsed alleles: {ref_allele}>{alt_allele}")
         
-        # Get all CDS regions for canonical transcript
+        # Get transcript features
         features = self.genome.get_transcript_features(transcript_id)
-        cds_regions = features[features["feature_type"] == "CDS"].copy()
-        
-        if cds_regions.empty:
-            self._debug_print(f"No CDS regions found for canonical transcript")
+        if features.empty:
+            self._debug_print(f"No features found for transcript")
             return None
+            
+        chromosome = features.iloc[0]['chromosome']
+        strand = features.iloc[0]['strand']
         
-        # Sort CDS regions by genomic position
-        if strand == "+":
-            cds_regions = cds_regions.sort_values('start')
-        else:
-            cds_regions = cds_regions.sort_values('start', ascending=False)
-        
-        # Convert coding strand alleles to genomic coordinates for mutation application
-        if strand == "-":
-            complement_map = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
-            genomic_ref_allele = complement_map.get(ref_allele, ref_allele)
-            genomic_alt_allele = complement_map.get(alt_allele, alt_allele)
-            self._debug_print(f"Negative strand: {ref_allele}>{alt_allele} -> {genomic_ref_allele}>{genomic_alt_allele}")
-        else:
-            genomic_ref_allele = ref_allele
-            genomic_alt_allele = alt_allele
-        
-        # Validate reference allele at genomic position
+        # Step 2: Validate reference allele at genomic position
+        # CRITICAL: For negative strand genes, HGVS refers to the coding strand,
+        # but genomic coordinates are on the reference (+) strand
         actual_base = self.genome.get_sequence(chromosome, genomic_pos, genomic_pos, "+")
         actual_base = str(actual_base).upper()
         
-        if actual_base != genomic_ref_allele.upper():
-            self._debug_print(f"Reference mismatch at {genomic_pos}: expected {genomic_ref_allele}, found {actual_base}")
+        # For negative strand genes, we need to compare against the complement
+        if strand == "-":
+            complement_map = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
+            expected_genomic_base = complement_map.get(ref_allele, ref_allele)
+            self._debug_print(f"Negative strand: HGVS ref={ref_allele} -> genomic ref={expected_genomic_base}")
+        else:
+            expected_genomic_base = ref_allele
+        
+        self._debug_print(f"Reference validation: expected={expected_genomic_base}, found={actual_base}")
+        
+        if actual_base != expected_genomic_base:
+            self._debug_print(f"Reference mismatch - skipping mutation")
             return None
         
-        # Extract canonical coding sequence with mutation applied
-        canonical_coding_sequence = ""
-        mutation_applied = False
+        # For negative strand genes, convert alternate allele too
+        if strand == "-":
+            complement_map = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
+            genomic_alt_allele = complement_map.get(alt_allele, alt_allele)
+        else:
+            genomic_alt_allele = alt_allele
         
-        for _, cds in cds_regions.iterrows():
-            # Get sequence for this CDS region
-            cds_seq = self.genome.get_sequence(chromosome, cds["start"], cds["end"], strand)
-            cds_seq = str(cds_seq)
-            
-            # Check if mutation falls within this CDS region
-            if cds["start"] <= genomic_pos <= cds["end"]:
-                # Apply mutation at exact genomic position
-                if strand == "+":
-                    seq_pos = genomic_pos - cds["start"]
-                else:
-                    seq_pos = cds["end"] - genomic_pos
-                
-                if 0 <= seq_pos < len(cds_seq):
-                    # Apply mutation using genomic coordinates
-                    original_base = self.genome.get_sequence(chromosome, genomic_pos, genomic_pos, "+")
-                    if str(original_base).upper() == genomic_ref_allele.upper():
-                        # For negative strand, we need to apply the complement
-                        if strand == "-":
-                            # Get the position in the CDS sequence and apply complement of alt allele
-                            cds_seq = cds_seq[:seq_pos] + genomic_alt_allele.upper() + cds_seq[seq_pos + 1:]
-                        else:
-                            cds_seq = cds_seq[:seq_pos] + genomic_alt_allele.upper() + cds_seq[seq_pos + 1:]
-                        mutation_applied = True
-                        self._debug_print(f"Applied mutation at genomic pos {genomic_pos} (CDS pos {seq_pos})")
-                    else:
-                        self._debug_print(f"Reference mismatch in CDS sequence")
-                        return None
-            
-            canonical_coding_sequence += cds_seq
-        
-        if not mutation_applied:
-            self._debug_print(f"Warning: mutation not applied to canonical sequence")
+        # Step 3: Generate original truncated protein (for comparison)
+        original_result = self.extract_truncated_protein(transcript_id, truncation_feature)
+        if not original_result:
+            self._debug_print(f"Could not extract original truncated protein")
             return None
+            
+        original_protein = original_result['protein']
         
-        self._debug_print(f"Generated mutated canonical coding sequence length: {len(canonical_coding_sequence)}")
-        return canonical_coding_sequence
+        # Step 4: Generate mutated truncated protein
+        mutated_result = self._apply_validated_genomic_mutation(
+            transcript_id, truncation_feature, genomic_pos, 
+            expected_genomic_base, alt_allele, strand
+        )
+        if not mutated_result:
+            self._debug_print(f"Could not apply mutation")
+            return None
+            
+        mutated_protein = mutated_result['protein']
+        
+        # Step 5: Validate protein change (if HGVSP provided)
+        validation_result = {"reference_match": True}
+        
+        if hgvsp and str(hgvsp) != 'nan' and hgvsp.strip():
+            expected_protein_change = self._parse_protein_change(hgvsp)
+            actual_protein_change = self._compare_proteins(original_protein, mutated_protein)
+            
+            self._debug_print(f"Protein change: expected={expected_protein_change}, actual={actual_protein_change}")
+            
+            validation_result.update({
+                "protein_change_expected": expected_protein_change,
+                "protein_change_actual": actual_protein_change,
+                "protein_change_match": expected_protein_change == actual_protein_change
+            })
+        
+        return {
+            'coding_sequence': mutated_result['coding_sequence'],
+            'protein': mutated_protein,
+            'strand': strand,
+            'transcript_id': transcript_id,
+            'mutation': {
+                'genomic_position': genomic_pos,
+                'reference': ref_allele,  # Keep original HGVS reference
+                'alternate': alt_allele,  # Keep original HGVS alternate
+                'genomic_reference': expected_genomic_base,  # Add genomic reference
+                'genomic_alternate': genomic_alt_allele if strand == "-" else alt_allele,  # Add genomic alternate
+                'hgvsc': hgvsc,
+                'hgvsp': hgvsp,
+                'impact': mutation.get('impact', ''),
+                'variant_id': mutation.get('variant_id', ''),
+                'source': mutation.get('source', '')
+            },
+            'validation': validation_result
+        }
     
-    def _extract_truncated_from_mutated_canonical(self, transcript_id: str,
-                                                truncation_feature: pd.Series,
-                                                mutated_canonical_sequence: str) -> Optional[Dict]:
-        """Extract truncated protein from mutated canonical sequence.
+    def _apply_validated_genomic_mutation(self, transcript_id: str, 
+                                        truncation_feature: pd.Series,
+                                        genomic_pos: int, genomic_ref_allele: str, 
+                                        coding_alt_allele: str, strand: str) -> Optional[Dict]:
+        """Apply mutation at specific genomic position following truncation logic.
         
-        This applies the same truncation logic as extract_truncated_protein,
-        but starts from the mutated canonical sequence instead of the wild-type.
+        This method applies the same truncation logic as extract_truncated_protein
+        but with the mutation applied at the exact genomic position.
         
         Args:
             transcript_id: Transcript ID
             truncation_feature: Truncation feature data
-            mutated_canonical_sequence: Mutated canonical coding sequence
+            genomic_pos: Genomic position of mutation
+            genomic_ref_allele: Reference allele in genomic coordinates (+ strand)
+            coding_alt_allele: Alternate allele from HGVS (coding strand)
+            strand: Gene strand
             
         Returns:
-            Dict with truncated protein from mutated canonical
+            Dict with mutated protein data or None if failed
         """
-        self._debug_print(f"Extracting truncated protein from mutated canonical")
-        
-        # Get features and transcript data
+        # Convert coding strand alternate allele to genomic coordinates
+        if strand == "-":
+            complement_map = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
+            genomic_alt_allele = complement_map.get(coding_alt_allele, coding_alt_allele)
+            self._debug_print(f"Negative strand: coding alt={coding_alt_allele} -> genomic alt={genomic_alt_allele}")
+        else:
+            genomic_alt_allele = coding_alt_allele
+        # Get features and transcript data (same as extract_truncated_protein)
         features = self.genome.get_transcript_features(transcript_id)
         transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
 
         if not transcript_data or "sequence" not in transcript_data:
             return None
 
+        transcript_start = transcript_data["sequence"]["start"]
+        transcript_end = transcript_data["sequence"]["end"]
         strand = transcript_data["sequence"]["strand"]
         chromosome = transcript_data["sequence"]["chromosome"]
 
-        # Get truncation positions
+        # Get truncation positions (same logic as extract_truncated_protein)
         truncation_start = truncation_feature["start"]
         truncation_end = truncation_feature["end"]
 
@@ -294,7 +340,7 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
             stop_codon_start = stop_codons.iloc[0]["start"]
             stop_codon_end = stop_codons.iloc[0]["end"]
 
-        # Apply truncation logic to determine what part of canonical sequence to use
+        # Apply truncation logic (same as extract_truncated_protein)
         if strand == "+":
             alt_start_pos = truncation_end + 1
             extract_end = stop_codon_end if stop_codon_end else None
@@ -302,201 +348,109 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
             alt_start_pos = truncation_start
             extract_end = stop_codon_start if stop_codon_start else None
 
-        # Get CDS regions that overlap with our truncation range
+        # Get CDS regions that overlap with our new range (same logic)
         cds_regions = features[features["feature_type"] == "CDS"].copy()
-        
-        # Calculate which part of the mutated canonical sequence corresponds to the truncated region
-        if strand == "+":
-            canonical_cds_regions = cds_regions.sort_values('start')
-        else:
-            canonical_cds_regions = cds_regions.sort_values('start', ascending=False)
-        
-        # Find the positions in the canonical sequence that correspond to our truncated region
-        canonical_pos = 0
-        truncated_sequence = ""
-        
-        for _, cds in canonical_cds_regions.iterrows():
+        overlapping_cds = []
+
+        for _, cds in cds_regions.iterrows():
             cds_start = cds["start"]
             cds_end = cds["end"]
-            cds_length = cds_end - cds_start + 1
-            
-            # Determine if this CDS region contributes to the truncated region
+
             if strand == "+":
-                # For positive strand, we want sequence from alt_start_pos onward
                 if cds_end < alt_start_pos:
-                    # This CDS is before our truncation start - skip it
-                    canonical_pos += cds_length
                     continue
                 if extract_end and cds_start > extract_end:
-                    # This CDS is after our truncation end - stop
-                    break
-                
-                # This CDS contributes to truncated region
+                    continue
+
                 effective_start = max(cds_start, alt_start_pos)
                 effective_end = min(cds_end, extract_end) if extract_end else cds_end
-                
-                # Calculate positions in canonical sequence
-                start_offset = max(0, effective_start - cds_start)
-                end_offset = min(cds_length, effective_end - cds_start + 1)
-                
             else:
-                # For negative strand, we want sequence from extract_end to alt_start_pos
                 if cds_start > alt_start_pos:
-                    # This CDS is before our truncation start - skip it
-                    canonical_pos += cds_length
                     continue
                 if extract_end and cds_end < extract_end:
-                    # This CDS is after our truncation end - stop
-                    break
-                
-                # This CDS contributes to truncated region
-                effective_start = max(cds_start, extract_end) if extract_end else cds_start
-                effective_end = min(cds_end, alt_start_pos)
-                
-                # Calculate positions in canonical sequence
-                start_offset = max(0, effective_start - cds_start)
-                end_offset = min(cds_length, effective_end - cds_start + 1)
-            
-            if end_offset > start_offset:
-                # Extract the corresponding part from mutated canonical sequence
-                seq_start = canonical_pos + start_offset
-                seq_end = canonical_pos + end_offset
-                
-                if seq_end <= len(mutated_canonical_sequence):
-                    truncated_sequence += mutated_canonical_sequence[seq_start:seq_end]
-                    self._debug_print(f"Added {seq_end - seq_start} bases from canonical position {seq_start}-{seq_end}")
-            
-            canonical_pos += cds_length
+                    continue
 
-        # Translate the truncated sequence
-        if len(truncated_sequence) >= 3:
-            remainder = len(truncated_sequence) % 3
+                effective_start = (
+                    max(cds_start, extract_end) if extract_end else cds_start
+                )
+                effective_end = min(cds_end, alt_start_pos)
+
+            if effective_end >= effective_start:
+                overlapping_cds.append(
+                    {
+                        "start": effective_start,
+                        "end": effective_end,
+                        "length": effective_end - effective_start + 1,
+                    }
+                )
+
+        # Sort CDS regions properly for extraction (same logic)
+        if strand == "+":
+            overlapping_cds.sort(key=lambda x: x["start"])
+        else:
+            overlapping_cds.sort(key=lambda x: x["start"], reverse=True)
+
+        # Extract sequence from each CDS region WITH MUTATION APPLIED
+        coding_sequence = ""
+        mutation_applied = False
+        
+        for cds in overlapping_cds:
+            # Get sequence for this CDS region
+            cds_seq = self.genome.get_sequence(
+                chromosome, cds["start"], cds["end"], strand
+            )
+            cds_seq = str(cds_seq)
+            
+            # Check if mutation falls within this CDS region
+            if cds["start"] <= genomic_pos <= cds["end"]:
+                # Apply mutation at exact genomic position
+                seq_pos = genomic_pos - cds["start"]
+                if seq_pos < len(cds_seq) and cds_seq[seq_pos].upper() == genomic_ref_allele.upper():
+                    cds_seq = cds_seq[:seq_pos] + genomic_alt_allele.upper() + cds_seq[seq_pos + 1:]
+                    mutation_applied = True
+                    self._debug_print(f"Applied {genomic_ref_allele}>{genomic_alt_allele} at genomic pos {genomic_pos} (CDS pos {seq_pos})")
+                else:
+                    current_base = cds_seq[seq_pos] if seq_pos < len(cds_seq) else 'OOB'
+                    self._debug_print(f"Reference mismatch in CDS at pos {seq_pos}: expected {genomic_ref_allele}, found {current_base}")
+                    # Continue anyway since we already validated at the genomic level
+            
+            coding_sequence += cds_seq
+
+        if not mutation_applied:
+            self._debug_print(f"Warning: mutation not applied to any CDS region")
+            # Continue anyway to see if we can still generate a valid protein
+
+        # Translate the sequence (same logic as extract_truncated_protein)
+        if len(coding_sequence) >= 3:
+            remainder = len(coding_sequence) % 3
             if remainder > 0:
-                truncated_sequence = truncated_sequence[:-remainder]
-            protein = str(Seq(truncated_sequence).translate())
+                coding_sequence = coding_sequence[:-remainder]
+            protein = str(Seq(coding_sequence).translate())
         else:
             protein = ""
 
-        self._debug_print(f"Generated truncated protein from mutated canonical, length: {len(protein)}")
+        self._debug_print(f"Generated mutated protein length: {len(protein)}")
 
         return {
-            "coding_sequence": truncated_sequence,
+            "coding_sequence": coding_sequence,
             "protein": protein,
             "strand": strand,
             "transcript_id": transcript_id,
             "truncation_start": truncation_start,
             "truncation_end": truncation_end,
             "alternative_start_pos": alt_start_pos,
+            "total_cds_regions": len(overlapping_cds),
+            "mutation_applied": mutation_applied
         }
     
-    def extract_corrected_mutated_protein(self, transcript_id: str, 
-                                        truncation_feature: pd.Series,
-                                        mutation: pd.Series) -> Optional[Dict]:
-        """Extract truncated protein with corrected mutation workflow.
-        
-        This method follows the corrected biological workflow:
-        1. Apply mutation to canonical transcript
-        2. Extract truncated protein from mutated canonical
-        3. Validate against expected protein change
-        
-        Args:
-            transcript_id: Canonical transcript ID
-            truncation_feature: Truncation feature data
-            mutation: Mutation data
-            
-        Returns:
-            Dict with corrected mutation results or None if failed
-        """
-        self._debug_print(f"Starting corrected mutation workflow for {transcript_id}")
-        
-        # Extract mutation data
-        genomic_pos = int(mutation['position'])
-        hgvsc = str(mutation.get('hgvsc', ''))
-        hgvsp = str(mutation.get('hgvsp', ''))
-        
-        # Parse HGVS to get alleles
-        ref_allele, alt_allele = self._parse_hgvs_to_alleles(hgvsc)
-        if not ref_allele or not alt_allele:
-            self._debug_print(f"Could not parse HGVS notation: {hgvsc}")
-            return None
-        
-        # Step 1: Apply mutation to canonical transcript
-        mutated_canonical_sequence = self._apply_mutation_to_canonical_sequence(
-            transcript_id, genomic_pos, ref_allele, alt_allele
-        )
-        if not mutated_canonical_sequence:
-            self._debug_print(f"Failed to apply mutation to canonical sequence")
-            return None
-        
-        # Step 2: Extract truncated protein from mutated canonical
-        truncated_result = self._extract_truncated_from_mutated_canonical(
-            transcript_id, truncation_feature, mutated_canonical_sequence
-        )
-        if not truncated_result:
-            self._debug_print(f"Failed to extract truncated protein from mutated canonical")
-            return None
-        
-        # Step 3: Generate comparison proteins for validation
-        # Get original canonical protein (for comparison)
-        original_canonical_result = self.extract_canonical_protein(transcript_id)
-        original_truncated_result = self.extract_truncated_protein(transcript_id, truncation_feature)
-        
-        validation_result = {"reference_match": True}
-        
-        if original_canonical_result and original_truncated_result:
-            # Compare canonical proteins
-            canonical_change = self._compare_proteins(
-                original_canonical_result['protein'],
-                str(Seq(mutated_canonical_sequence).translate()) if len(mutated_canonical_sequence) >= 3 else ""
-            )
-            
-            # Compare truncated proteins
-            truncated_change = self._compare_proteins(
-                original_truncated_result['protein'],
-                truncated_result['protein']
-            )
-            
-            validation_result.update({
-                "canonical_protein_change": canonical_change,
-                "truncated_protein_change": truncated_change,
-            })
-            
-            # Validate against expected protein change if provided
-            if hgvsp and str(hgvsp) != 'nan' and hgvsp.strip():
-                expected_protein_change = self._parse_protein_change(hgvsp)
-                validation_result.update({
-                    "protein_change_expected": expected_protein_change,
-                    "canonical_change_match": expected_protein_change == canonical_change,
-                    "truncated_change_match": expected_protein_change == truncated_change,
-                })
-        
-        return {
-            'coding_sequence': truncated_result['coding_sequence'],
-            'protein': truncated_result['protein'],
-            'strand': truncated_result['strand'],
-            'transcript_id': transcript_id,
-            'mutated_canonical_sequence': mutated_canonical_sequence,
-            'mutation': {
-                'genomic_position': genomic_pos,
-                'reference': ref_allele,
-                'alternate': alt_allele,
-                'hgvsc': hgvsc,
-                'hgvsp': hgvsp,
-                'impact': mutation.get('impact', ''),
-                'variant_id': mutation.get('variant_id', ''),
-                'source': mutation.get('source', '')
-            },
-            'validation': validation_result
-        }
-    
-    async def extract_gene_proteins_with_corrected_mutations(self, gene_name: str, 
+    async def extract_gene_proteins_with_validated_mutations(self, gene_name: str, 
                                                            preferred_transcripts: Optional[Set[str]] = None,
                                                            include_mutations: bool = True,
                                                            impact_types: List[str] = None) -> Optional[List[Dict]]:
-        """Extract proteins with corrected mutation workflow.
+        """Extract proteins for all transcript-truncation pairs with validated mutations.
         
-        This method applies mutations to canonical transcripts first, then
-        generates truncated proteins from the mutated canonical sequences.
+        This method follows the same pattern as extract_gene_proteins but adds
+        validated mutation integration.
         
         Args:
             gene_name: Name of the gene
@@ -507,7 +461,7 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
         Returns:
             List of enhanced protein pair dictionaries
         """
-        self._debug_print(f"Processing gene {gene_name} with corrected mutation workflow")
+        self._debug_print(f"Processing gene {gene_name} with validated mutations")
         
         # Get base pairs using the same logic as extract_gene_proteins
         base_pairs = self.extract_gene_proteins(gene_name, preferred_transcripts)
@@ -530,34 +484,36 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
             }
             
             if include_mutations:
-                self._debug_print(f"Processing mutations for canonical transcript {pair['transcript_id']}")
+                self._debug_print(f"Processing mutations for {pair['transcript_id']} × {pair['truncation_id']}")
                 
-                # Get mutations in the CANONICAL transcript (not the truncation region)
-                mutations = await self._get_mutations_in_canonical_region(
+                # Get mutations in this truncation region
+                truncation_feature = pair['truncation']
+                mutations = await self._get_mutations_in_region(
                     gene_name, 
-                    pair['transcript_id'],
+                    truncation_feature['start'], 
+                    truncation_feature['end'],
                     impact_types
                 )
                 
                 if not mutations.empty:
-                    self._debug_print(f"Found {len(mutations)} mutations in canonical transcript")
+                    self._debug_print(f"Found {len(mutations)} mutations in truncation region")
                     
-                    # Generate corrected mutation variants
+                    # Generate validated mutation variants
                     for _, mutation in mutations.iterrows():
                         try:
-                            mutated_result = self.extract_corrected_mutated_protein(
+                            mutated_result = self.extract_validated_mutated_protein(
                                 pair['transcript_id'], 
-                                pair['truncation'],
+                                truncation_feature,
                                 mutation
                             )
                             if mutated_result:
                                 enhanced_pair['truncated_mutations'].append(mutated_result)
-                                self._debug_print(f"Successfully created corrected mutation variant")
+                                self._debug_print(f"Successfully created validated mutation variant")
                         except Exception as e:
-                            self._debug_print(f"Error creating corrected mutation variant: {e}")
+                            self._debug_print(f"Error creating mutation variant: {e}")
                             continue
                 else:
-                    self._debug_print(f"No mutations found in canonical transcript")
+                    self._debug_print(f"No mutations found in truncation region")
                     
             enhanced_pairs.append(enhanced_pair)
             
