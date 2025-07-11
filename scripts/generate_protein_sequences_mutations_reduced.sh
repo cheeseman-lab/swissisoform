@@ -16,7 +16,7 @@ conda activate swissisoform
 mkdir -p results_mutations_reduced
 
 # Define paths for command-line arguments
-GENE_LIST="../data/ribosome_profiling/gene_list_reduced.txt"
+GENE_LIST="../data/ribosome_profiling/gene_list_reduced_test.txt"
 OUTPUT_DIR="results_mutations_reduced"
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
 ANNOTATION_PATH="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
@@ -36,7 +36,7 @@ python3 generate_protein_sequences_mutations.py "$GENE_LIST" "$OUTPUT_DIR" \
   --max-length "$MAX_LENGTH" \
   --format "$FORMAT" \
   --include-mutations \
-  --impact-types "missense variants" 
+  --impact-types "missense variant" 
 
 # Print completion message
 echo "Protein sequence generation completed at $(date)"
