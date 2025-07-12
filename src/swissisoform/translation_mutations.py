@@ -1,9 +1,7 @@
 """Enhanced TruncatedProteinGenerator with validated mutation integration.
-
 This extends the existing TruncatedProteinGenerator to incorporate mutations
 found in truncation regions using a validated genomic position approach.
 """
-
 import asyncio
 import re
 from typing import Dict, List, Tuple, Optional, Set
@@ -11,7 +9,6 @@ import pandas as pd
 from Bio.Seq import Seq
 from swissisoform.translation import TruncatedProteinGenerator
 from swissisoform.mutations import MutationHandler
-
 
 class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
     """Enhanced protein generator with validated mutation integration.
@@ -228,13 +225,6 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
             self._debug_print(f"Reference mismatch - skipping mutation")
             return None
         
-        # For negative strand genes, convert alternate allele too
-        if strand == "-":
-            complement_map = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
-            genomic_alt_allele = complement_map.get(alt_allele, alt_allele)
-        else:
-            genomic_alt_allele = alt_allele
-        
         # Step 3: Generate original canonical protein (for comparison)
         original_result = self.extract_canonical_protein(transcript_id)
         if not original_result:
@@ -243,16 +233,19 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
             
         original_protein = original_result['protein']
         
-        # Step 4: Generate mutated canonical protein
-        mutated_result = self._apply_validated_genomic_mutation_to_canonical(
-            transcript_id, genomic_pos, 
-            expected_genomic_base, alt_allele, strand
+        # Step 4: Generate mutated canonical protein using SIMPLE APPROACH
+        mutated_coding_sequence = self._apply_simple_mutation_to_canonical_coding_sequence(
+            transcript_id, genomic_pos, ref_allele, alt_allele
         )
-        if not mutated_result:
+        if not mutated_coding_sequence:
             self._debug_print(f"Could not apply mutation to canonical sequence")
             return None
-            
-        mutated_protein = mutated_result['protein']
+        
+        # Translate the mutated coding sequence
+        if len(mutated_coding_sequence) >= 3:
+            mutated_protein = str(Seq(mutated_coding_sequence).translate())
+        else:
+            mutated_protein = ""
         
         # Step 5: Validate protein change (if HGVSP provided)
         validation_result = {"reference_match": True}
@@ -270,7 +263,7 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
             })
         
         return {
-            'coding_sequence': mutated_result['coding_sequence'],
+            'coding_sequence': mutated_coding_sequence,
             'protein': mutated_protein,
             'strand': strand,
             'transcript_id': transcript_id,
@@ -279,7 +272,7 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
                 'reference': ref_allele,  # Keep original HGVS reference
                 'alternate': alt_allele,  # Keep original HGVS alternate
                 'genomic_reference': expected_genomic_base,  # Add genomic reference
-                'genomic_alternate': genomic_alt_allele if strand == "-" else alt_allele,  # Add genomic alternate
+                'genomic_alternate': alt_allele,  # Keep simple for now
                 'hgvsc': hgvsc,
                 'hgvsp': hgvsp,
                 'impact': mutation.get('impact', ''),
@@ -290,149 +283,139 @@ class ValidatedMutationIntegratedProteinGenerator(TruncatedProteinGenerator):
             'validation': validation_result
         }
     
-    def _apply_validated_genomic_mutation_to_canonical(self, transcript_id: str, 
-                                                     genomic_pos: int, genomic_ref_allele: str, 
-                                                     coding_alt_allele: str, strand: str) -> Optional[Dict]:
-        """Apply mutation at specific genomic position to canonical protein sequence.
+    def _apply_simple_mutation_to_canonical_coding_sequence(self, transcript_id: str, 
+                                                          genomic_pos: int, 
+                                                          ref_allele: str, 
+                                                          alt_allele: str) -> Optional[str]:
+        """Apply mutation using a simple approach: modify the coding sequence directly.
         
-        This method applies the same canonical protein logic as extract_canonical_protein
-        but with the mutation applied at the exact genomic position.
-        
-        Args:
-            transcript_id: Transcript ID
-            genomic_pos: Genomic position of mutation
-            genomic_ref_allele: Reference allele in genomic coordinates (+ strand)
-            coding_alt_allele: Alternate allele from HGVS (coding strand)
-            strand: Gene strand
-            
-        Returns:
-            Dict with mutated canonical protein data or None if failed
+        This avoids complex coordinate mapping by working with the extracted coding sequence.
         """
-        # Convert coding strand alternate allele to genomic coordinates
-        if strand == "-":
-            complement_map = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
-            genomic_alt_allele = complement_map.get(coding_alt_allele, coding_alt_allele)
-            self._debug_print(f"Negative strand: coding alt={coding_alt_allele} -> genomic alt={genomic_alt_allele}")
-        else:
-            genomic_alt_allele = coding_alt_allele
-            
-        # Get features and transcript data (same as extract_canonical_protein)
+        self._debug_print(f"Applying simple mutation {ref_allele}>{alt_allele} at position {genomic_pos}")
+        
+        # Get the original canonical protein result
+        canonical_result = self.extract_canonical_protein(transcript_id)
+        if not canonical_result:
+            self._debug_print(f"Could not extract canonical protein")
+            return None
+        
+        original_coding_sequence = canonical_result['coding_sequence']
+        strand = canonical_result['strand']
+        
+        # Get transcript features to map genomic position to coding sequence position
         features = self.genome.get_transcript_features(transcript_id)
         transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
-
-        if not transcript_data or "sequence" not in transcript_data:
+        
+        if not transcript_data:
             return None
-
-        transcript_start = transcript_data["sequence"]["start"]
-        transcript_end = transcript_data["sequence"]["end"]
-        strand = transcript_data["sequence"]["strand"]
+        
         chromosome = transcript_data["sequence"]["chromosome"]
-
-        # Find start_codon and stop_codon annotations (same as extract_canonical_protein)
+        
+        # Validate reference allele at genomic position
+        actual_base = self.genome.get_sequence(chromosome, genomic_pos, genomic_pos, "+")
+        actual_base = str(actual_base).upper()
+        
+        # Convert HGVS alleles to genomic coordinates for validation
+        if strand == "-":
+            complement_map = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
+            genomic_ref_allele = complement_map.get(ref_allele, ref_allele)
+            genomic_alt_allele = complement_map.get(alt_allele, alt_allele)
+        else:
+            genomic_ref_allele = ref_allele
+            genomic_alt_allele = alt_allele
+        
+        if actual_base != genomic_ref_allele.upper():
+            self._debug_print(f"Reference mismatch at {genomic_pos}: expected {genomic_ref_allele}, found {actual_base}")
+            return None
+        
+        # SIMPLE APPROACH: Find the position in the coding sequence by mapping through CDS regions
         start_codons = features[features["feature_type"] == "start_codon"]
-        stop_codons = features[features["feature_type"] == "stop_codon"]
-
         if start_codons.empty:
             return None
-
-        start_codon_start = start_codons.iloc[0]["start"]
-        start_codon_end = start_codons.iloc[0]["end"]
-
-        stop_codon_start = None
-        stop_codon_end = None
-        if not stop_codons.empty:
-            stop_codon_start = stop_codons.iloc[0]["start"]
-            stop_codon_end = stop_codons.iloc[0]["end"]
-
-        # Extract the genomic range (same as extract_canonical_protein)
-        if strand == "+":
-            extract_start = start_codon_start
-            extract_end = stop_codon_end if stop_codon_end else None
-        else:
-            extract_start = stop_codon_start if stop_codon_start else None
-            extract_end = start_codon_end
-
-        # Get CDS regions and find overlapping ones (same as extract_canonical_protein)
-        cds_regions = features[features["feature_type"] == "CDS"].copy()
-        overlapping_cds = []
-
-        for _, cds in cds_regions.iterrows():
-            cds_start = cds["start"]
-            cds_end = cds["end"]
-
-            # Check if this CDS overlaps with our extraction range
-            if extract_end and (cds_start > extract_end or cds_end < extract_start):
-                continue
-            if extract_start and cds_end < extract_start:
-                continue
-            if extract_end and cds_start > extract_end:
-                continue
-
-            # Calculate effective boundaries within this CDS
-            effective_start = (
-                max(cds_start, extract_start) if extract_start else cds_start
-            )
-            effective_end = min(cds_end, extract_end) if extract_end else cds_end
-
-            overlapping_cds.append(
-                {
-                    "start": effective_start,
-                    "end": effective_end,
-                    "length": effective_end - effective_start + 1,
-                }
-            )
-
-        # Sort CDS regions properly for extraction (same as extract_canonical_protein)
-        if strand == "+":
-            overlapping_cds.sort(key=lambda x: x["start"])
-        else:
-            overlapping_cds.sort(key=lambda x: x["start"], reverse=True)
-
-        # Extract sequence from each CDS region WITH MUTATION APPLIED
-        coding_sequence = ""
-        mutation_applied = False
         
-        for cds in overlapping_cds:
-            # Get sequence for this CDS region
-            cds_seq = self.genome.get_sequence(
-                chromosome, cds["start"], cds["end"], strand
-            )
-            cds_seq = str(cds_seq)
-            
-            # Check if mutation falls within this CDS region
-            if cds["start"] <= genomic_pos <= cds["end"]:
-                # Apply mutation at exact genomic position
-                seq_pos = genomic_pos - cds["start"]
-                if seq_pos < len(cds_seq) and cds_seq[seq_pos].upper() == genomic_ref_allele.upper():
-                    cds_seq = cds_seq[:seq_pos] + genomic_alt_allele.upper() + cds_seq[seq_pos + 1:]
-                    mutation_applied = True
-                    self._debug_print(f"Applied {genomic_ref_allele}>{genomic_alt_allele} at genomic pos {genomic_pos} (CDS pos {seq_pos})")
-                else:
-                    current_base = cds_seq[seq_pos] if seq_pos < len(cds_seq) else 'OOB'
-                    self._debug_print(f"Reference mismatch in CDS at pos {seq_pos}: expected {genomic_ref_allele}, found {current_base}")
-                    # Continue anyway since we already validated at the genomic level
-            
-            coding_sequence += cds_seq
-
-        if not mutation_applied:
-            self._debug_print(f"Warning: mutation not applied to any CDS region")
-            # Continue anyway to see if we can still generate a valid protein
-
-        # Translate (same as extract_canonical_protein)
-        if len(coding_sequence) >= 3:
-            protein = str(Seq(coding_sequence).translate())
+        start_codon_start = start_codons.iloc[0]["start"]
+        cds_regions = features[features["feature_type"] == "CDS"].copy()
+        
+        if cds_regions.empty:
+            return None
+        
+        # Sort CDS regions
+        if strand == "+":
+            cds_regions = cds_regions.sort_values('start')
         else:
-            protein = ""
-
-        self._debug_print(f"Generated mutated protein length: {len(protein)}")
-
-        return {
-            "coding_sequence": coding_sequence,
-            "protein": protein,
-            "strand": strand,
-            "transcript_id": transcript_id,
-            "mutation_applied": mutation_applied
-        }
+            cds_regions = cds_regions.sort_values('start', ascending=False)
+        
+        # Find which CDS contains our mutation and the position within the coding sequence
+        coding_pos = 0
+        found_position = False
+        
+        for _, cds in cds_regions.iterrows():
+            if cds["start"] <= genomic_pos <= cds["end"]:
+                # Found the CDS containing our mutation
+                if strand == "+":
+                    # For positive strand
+                    if cds["start"] >= start_codon_start:  # Only count CDS after start codon
+                        offset_in_cds = genomic_pos - cds["start"]
+                        final_coding_pos = coding_pos + offset_in_cds
+                        found_position = True
+                        break
+                else:
+                    # For negative strand - this is where it gets tricky
+                    # The coding sequence is already in 5'->3' orientation
+                    # We need to find where this genomic position maps to in the coding sequence
+                    
+                    # Calculate offset from the end of this CDS (since strand is -)
+                    offset_from_end = cds["end"] - genomic_pos
+                    final_coding_pos = coding_pos + offset_from_end
+                    found_position = True
+                    break
+            
+            # Add length of this CDS to coding position counter
+            # Only count CDS regions that are part of the canonical protein
+            if strand == "+":
+                if cds["end"] >= start_codon_start:
+                    if cds["start"] < start_codon_start:
+                        # Partial CDS - only count part after start codon
+                        coding_pos += cds["end"] - start_codon_start + 1
+                    else:
+                        # Full CDS
+                        coding_pos += cds["end"] - cds["start"] + 1
+            else:
+                # For negative strand, we're iterating from highest to lowest genomic position
+                # Add the length of each CDS
+                coding_pos += cds["end"] - cds["start"] + 1
+        
+        if not found_position:
+            self._debug_print(f"Could not map genomic position {genomic_pos} to coding sequence position")
+            return None
+        
+        self._debug_print(f"Mapped genomic position {genomic_pos} to coding position {final_coding_pos}")
+        
+        # Apply the mutation to the coding sequence
+        if final_coding_pos >= len(original_coding_sequence):
+            self._debug_print(f"Coding position {final_coding_pos} is beyond sequence length {len(original_coding_sequence)}")
+            return None
+        
+        # For the actual mutation in the coding sequence, use the HGVS alleles directly
+        # (since the coding sequence is already in the correct orientation)
+        current_base = original_coding_sequence[final_coding_pos]
+        
+        # Verify the reference matches what we expect in the coding sequence
+        if current_base.upper() != ref_allele.upper():
+            self._debug_print(f"Reference mismatch in coding sequence at pos {final_coding_pos}: expected {ref_allele}, found {current_base}")
+            return None
+        
+        # Apply the mutation
+        mutated_coding_sequence = (
+            original_coding_sequence[:final_coding_pos] + 
+            alt_allele.upper() + 
+            original_coding_sequence[final_coding_pos + 1:]
+        )
+        
+        self._debug_print(f"Applied mutation {ref_allele}>{alt_allele} at coding position {final_coding_pos}")
+        self._debug_print(f"Generated mutated coding sequence length: {len(mutated_coding_sequence)}")
+        
+        return mutated_coding_sequence
     
     async def extract_gene_proteins_with_validated_mutations(self, gene_name: str, 
                                                            preferred_transcripts: Optional[Set[str]] = None,
