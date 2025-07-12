@@ -16,7 +16,7 @@ conda activate swissisoform
 mkdir -p results_mutations_reduced
 
 # Define paths for command-line arguments
-GENE_LIST="../data/ribosome_profiling/gene_list_reduced_test.txt"
+GENE_LIST="../data/ribosome_profiling/gene_list_reduced.txt"
 OUTPUT_DIR="results_mutations_reduced"
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
 ANNOTATION_PATH="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
