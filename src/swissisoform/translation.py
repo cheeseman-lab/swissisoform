@@ -248,7 +248,7 @@ class TruncatedProteinGenerator:
                 )
                 effective_end = min(cds_end, alt_start_pos)
 
-            if effective_end >= effective_start:
+            if effective_end > effective_start:
                 overlapping_cds.append(
                     {
                         "start": effective_start,
@@ -276,7 +276,7 @@ class TruncatedProteinGenerator:
             # Ensure length is divisible by 3
             remainder = len(coding_sequence) % 3
             if remainder > 0:
-                coding_sequence = coding_sequence[:-remainder]
+                coding_sequence = coding_sequence[remainder:]  # Remove from beginning due to BED intersect issues            
 
             protein = str(Seq(coding_sequence).translate())
         else:
