@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 from swissisoform.genome import GenomeHandler
 from swissisoform.alternative_isoforms import AlternativeIsoform
 from swissisoform.mutations import MutationHandler
-from swissisoform.translation_new import TruncatedProteinGenerator
+from swissisoform.translation import TruncatedProteinGenerator
 from swissisoform.utils import (
     parse_gene_list,
     load_preferred_transcripts,
