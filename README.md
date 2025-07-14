@@ -1,268 +1,79 @@
 # SwissIsoform
 
-SwissIsoform is a Python package for analyzing alternative protein isoforms discovered through ribosome profiling data. It integrates genomic annotations, truncation sites, and mutation data to generate comprehensive protein sequence datasets for downstream analysis and machine learning applications.
+SwissIsoform is a Python package for analyzing alternative protein isoforms discovered through ribosome profiling data. It integrates genomic annotations, truncation sites, and mutation data to generate comprehensive protein sequence datasets for downstream analysis.
 
 ## Features
 
 - **Genome sequence and annotation handling** with GENCODE support
 - **Alternative truncation site processing** from ribosome profiling BED files
-- **Comprehensive mutation analysis** in truncation regions from ClinVar and gnomAD
+- **Mutation analysis** in truncation regions from ClinVar
 - **Protein sequence generation** from canonical and truncated transcripts
-- **Mutation integration** into protein sequences with impact filtering
+- **Mutation integration** into protein sequences
 - **Interactive visualizations** of transcript features and mutations
 - **Subcellular localization prediction** using DeepLoc
-- **Batch processing** for large-scale dataset generation
-- **Automated pipeline** with numbered workflow steps
 
-## Quick Start
+## Installation
 
-### Prerequisites
-- Linux/Unix system with SLURM workload manager
-- Conda package manager
-- Access to GPU partition (for localization prediction)
-
-### Installation
-
-1. **Clone the repository:**
 ```bash
 git clone https://github.com/cheeseman-lab/swissisoform.git
 cd swissisoform
-```
 
-2. **Create and activate the conda environment:**
-```bash
+# Create conda environment
 conda env create --file=environment.yml
 conda activate swissisoform
-```
 
-3. **Install DeepLoc (for localization prediction):**
-```bash
+# For localization prediction (optional)
+# 1. Download DeepLoc 2.1 from: https://services.healthtech.dtu.dk/services/DeepLoc-2.0/
+# 2. Place DeepLoc-2.1.0.tar.gz in the main swissisoform/ directory
+# 3. Install DeepLoc environment
 conda create -n deeploc python=3.8
 conda activate deeploc
 pip install DeepLoc-2.1.0.tar.gz
 ```
 
-### Complete Pipeline
+## Required Input Files
+
+SwissIsoform requires only **two input files** to run the analysis:
+
+1. **Ribosome profiling BED file**: `data/ribosome_profiling/truncations.bed`
+   - Format: Standard BED with truncation sites
+   - Example file provided: Contains ribosome profiling truncation sites
+   
+2. **Preferred transcripts file**: `data/genome_data/hela_top_transcript.txt`
+   - Format: One transcript ID per line (e.g., `ENST00000000000.1`)
+   - Example file provided: Contains HeLa cell preferred transcripts
+
+**Note**: Example files for both requirements are included in the repository and can be used as-is or replaced with your own experimental data.
+
+## Quick Start
+
+### Full Pipeline (SLURM)
 
 ```bash
-# Step 0: Download reference data
-bash 0_download_genome.sh
+# Download reference data
+bash scripts/0_download_genome.sh
 
-# Step 1: Clean ribosome profiling data  
-bash 1_cleanup_files.sh
+# Clean ribosome profiling data  
+bash scripts/1_cleanup_files.sh
 
-# Step 2: Analyze mutations in truncation regions (SLURM job)
-sbatch 2_analyze_mutations.sh
+# Analyze mutations (SLURM)
+sbatch scripts/2_analyze_mutations.sh
 
-# Step 3: Generate protein sequences (SLURM job)
-sbatch 3_generate_proteins.sh
+# Generate protein sequences (SLURM)
+sbatch scripts/3_generate_proteins.sh
 
-# Step 4: Predict subcellular localization (SLURM job)
-sbatch 4_predict_localization.sh
+# Predict localization (SLURM, GPU)
+sbatch scripts/4_predict_localization.sh
 ```
 
-## Pipeline Overview
+### Interactive Analysis (Jupyter)
 
-### Step 0: Download Reference Data
-**Script:** `0_download_genome.sh`  
-**Runtime:** ~10 minutes  
-**Downloads:**
-- Human reference genome (GRCh38.p7)
-- GENCODE v25 annotations (primary)
-- GENCODE v47 annotations (for gene name updates)
-
-### Step 1: Data Cleanup
-**Script:** `1_cleanup_files.sh`
-**Runtime:** ~1 minute
-**Requirements:**
-* Ribosome profiling BED files are already provided:
-  * `data/ribosome_profiling/truncations.bed`
-* Preferred transcript list is already provided:
-  * `data/genome_data/hela_top_transcript.txt`
-
-You can optionally replace these files with your own data following the same format.
-
-**Outputs:**
-- Cleaned GTF annotations with updated gene names
-- Cleaned BED files with validated coordinates
-- Gene lists for analysis (`gene_list.txt`, `gene_list_reduced.txt`)
-
-### Step 2: Mutation Analysis
-**Script:** `2_analyze_mutations.sh` (SLURM)  
-**Runtime:** 1-8 hours  
-**Resources:** 2 parallel tasks, 16 CPUs, 24GB RAM
-
-Analyzes mutations in alternative isoform truncation regions:
-1. **Reduced dataset** - Curated truncation sites with selected genes
-2. **Full dataset** - All truncation sites with complete gene list
-
-**Features:**
-- Fetches mutation data from ClinVar
-- Filters for missense, nonsense, and frameshift variants
-- Creates transcript-truncation pair analysis
-- Generates visualizations for each gene
-- Produces detailed mutation statistics
-
-**Outputs:**
-- Gene-level mutation summary (`gene_level_results.csv`)
-- Transcript-truncation pair details (`truncation_level_results.csv`)
-- Interactive visualizations (PDF files organized by gene/transcript)
-
-### Step 3: Protein Sequence Generation
-**Script:** `3_generate_proteins.sh` (SLURM)  
-**Runtime:** 2-24 hours  
-**Resources:** 4 parallel tasks, 24 CPUs, 32GB RAM
-
-Generates 4 datasets simultaneously:
-1. **Reduced pairs** - Canonical + truncated from curated sites
-2. **Reduced mutations** - With missense/nonsense/frameshift variants
-3. **Full pairs** - Canonical + truncated from all sites  
-4. **Full mutations** - With mutation variants
-
-### Step 4: Subcellular Localization Prediction
-**Script:** `4_predict_localization.sh` (SLURM)  
-**Runtime:** 1-6 hours  
-**Resources:** 1 GPU, 8 CPUs, 48GB RAM
-
-Runs DeepLoc predictions in both Fast and Accurate modes for all protein sequences.
-
-## Data Structure
-
-After running the pipeline, your data will be organized as:
-
-```
-swissisoform/
-├── data/
-│   ├── genome_data/
-│   │   ├── GRCh38.p7.genome.fa
-│   │   ├── gencode.v25.annotation.ensembl_cleaned.gtf
-│   │   └── hela_top_transcript.txt
-│   └── ribosome_profiling/
-│       ├── truncations.bed
-│       ├── truncations_cleaned.bed
-│       ├── gene_list.txt (all genes)
-│       └── gene_list_reduced.txt (curated genes)
-├── results/
-│   ├── mutations/                  # Step 2 outputs
-│   │   ├── reduced/
-│   │   │   ├── gene_level_results.csv
-│   │   │   ├── truncation_level_results.csv
-│   │   │   └── [gene_name]/       # Visualizations by gene
-│   │   └── full/
-│   │       ├── gene_level_results.csv
-│   │       ├── truncation_level_results.csv
-│   │       └── [gene_name]/       # Visualizations by gene
-│   ├── reduced/                    # Step 3 & 4 outputs (curated)
-│   │   ├── protein_sequences.fasta/csv
-│   │   ├── protein_sequences_with_mutations.fasta/csv
-│   │   └── *_results.csv          # DeepLoc predictions
-│   └── full/                       # Step 3 & 4 outputs (all sites)
-│       ├── protein_sequences.fasta/csv
-│       ├── protein_sequences_with_mutations.fasta/csv
-│       └── *_results.csv          # DeepLoc predictions
-└── scripts/
-    ├── 0_download_genome.sh
-    ├── 1_cleanup_files.sh
-    ├── 2_analyze_mutations.sh
-    ├── 3_generate_proteins.sh
-    ├── 4_predict_localization.sh
-    ├── analyze_mutations.py
-    ├── analyze_truncations.py
-    ├── translate.py
-    └── run_pipeline.sh
-```
-
-## Output Files
-
-### Mutation Analysis Results
-
-**Gene-level summary** (`gene_level_results.csv`):
-- Overall statistics per gene
-- Total transcripts, truncation features, and transcript-truncation pairs
-- Summary mutation counts
-
-**Transcript-truncation details** (`truncation_level_results.csv`):
-- Detailed analysis for each transcript-truncation pair
-- Mutation counts by impact type (missense, nonsense, frameshift)
-- ClinVar variant IDs for each mutation category
-- Genomic coordinates of truncation regions
-
-**Visualizations** (PDF files):
-- Transcript structure with CDS, UTRs, start/stop codons
-- Alternative truncation sites marked as brackets
-- Mutation positions colored by impact type
-- Separate files for full view and zoomed view of truncation regions
-
-### Protein Sequence Datasets
-
-Each dataset contains:
-
-**Standard pairs** (`protein_sequences.*`):
-- Canonical proteins (full-length)
-- Truncated proteins (alternative start sites)
-
-**Mutation variants** (`protein_sequences_with_mutations.*`):
-- Canonical proteins
-- Truncated proteins  
-- Mutated variants (missense, nonsense, frameshift)
-
-### Localization Predictions
-
-**DeepLoc outputs** (`*_results.csv`):
-- Fast mode: Quick predictions for all sequences
-- Accurate mode: High-accuracy predictions for all sequences
-- Includes confidence scores and subcellular compartment assignments
-
-### File Formats
-
-**FASTA**: Ready for sequence analysis tools
-```
->GENE_TRANSCRIPT_VARIANT description
-PROTEIN_SEQUENCE
-```
-
-**CSV**: Structured data with metadata
-```csv
-gene,transcript_id,variant_id,sequence,length,variant_type
-NAXE,ENST00000123456,canonical,MAKTG...,245,canonical
-NAXE,ENST00000123456,trunc_AUG_100_200,KTGFL...,180,truncated
-```
-
-## Advanced Usage
-
-### Individual Step Analysis
-
-You can run individual pipeline steps for custom analysis:
-
-#### Mutation Analysis Only
-```bash
-# Analyze mutations for specific genes
-python3 analyze_mutations.py gene_list.txt output_dir/ \
-  --genome data/genome_data/GRCh38.p7.genome.fa \
-  --annotation data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf \
-  --bed data/ribosome_profiling/truncations_cleaned.bed \
-  --visualize \
-  --sources "clinvar" \
-  --impact-types "missense variant" "nonsense variant" "frameshift variant"
-```
-
-#### Transcript-Mutation Visualization
-```bash
-# Generate visualizations for transcript features and mutations
-python3 analyze_truncations.py gene_list.txt output_dir/ \
-  --visualize \
-  --preferred-transcripts data/genome_data/hela_top_transcript.txt
-```
-
-### Single Gene Analysis
-
-For analyzing individual genes or small sets:
+#### Mutation Analysis
 
 ```python
 import asyncio
 from swissisoform.genome import GenomeHandler
 from swissisoform.alternative_isoforms import AlternativeIsoform
-from swissisoform.translation import TruncatedProteinGenerator
 from swissisoform.mutations import MutationHandler
 from swissisoform.utils import load_preferred_transcripts
 
@@ -276,11 +87,9 @@ alt_isoforms = AlternativeIsoform()
 alt_isoforms.load_bed('data/ribosome_profiling/truncations_cleaned.bed')
 
 mutation_handler = MutationHandler()
-preferred_transcripts = load_preferred_transcripts(
-    'data/genome_data/hela_top_transcript.txt'
-)
+preferred_transcripts = load_preferred_transcripts('data/genome_data/hela_top_transcript.txt')
 
-# Comprehensive mutation analysis for a gene
+# Analyze mutations for a gene
 async def analyze_gene_mutations(gene_name):
     result = await mutation_handler.analyze_gene_mutations_comprehensive(
         gene_name=gene_name,
@@ -288,21 +97,23 @@ async def analyze_gene_mutations(gene_name):
         alt_isoform_handler=alt_isoforms,
         output_dir='output/',
         visualize=True,
-        impact_types={"clinvar": ["missense variant", "nonsense variant"]},
+        impact_types={"clinvar": ["missense variant"]},
         preferred_transcripts=preferred_transcripts
     )
     return result
 
 # Run analysis
-result = asyncio.run(analyze_gene_mutations("NAXE"))
+result = await analyze_gene_mutations("NAXE")
 print(f"Found {result['transcript_truncation_pairs']} transcript-truncation pairs")
-print(f"Total mutations in truncation regions: {result['mutations_filtered']}")
+print(f"Mutations in truncation regions: {result['mutations_filtered']}")
 ```
 
-### Custom Protein Generation
+#### Protein Generation
 
 ```python
-# Initialize protein generator with mutation support
+from swissisoform.translation import TruncatedProteinGenerator
+
+# Initialize protein generator
 protein_generator = TruncatedProteinGenerator(
     genome_handler=genome,
     alt_isoform_handler=alt_isoforms,
@@ -311,71 +122,97 @@ protein_generator = TruncatedProteinGenerator(
 )
 
 # Generate protein sequences with mutations
-async def generate_proteins_with_mutations(gene_name):
-    enhanced_pairs = await protein_generator.extract_gene_proteins_with_mutations(
-        gene_name=gene_name,
+async def generate_proteins_with_mutations(gene_list):
+    dataset = await protein_generator.create_protein_sequence_dataset_with_mutations(
+        gene_list=gene_list,
         preferred_transcripts=preferred_transcripts,
         include_mutations=True,
-        impact_types=["missense variant", "nonsense variant"]
+        impact_types=["missense variant"],
+        output_format="fasta,csv",
+        min_length=50,
+        max_length=2000
     )
-    
-    if enhanced_pairs:
-        for pair in enhanced_pairs:
-            print(f"Transcript: {pair['transcript_id']}")
-            print(f"Canonical protein length: {len(pair['canonical']['protein'])}")
-            print(f"Truncated protein length: {len(pair['truncated_base']['protein'])}")
-            print(f"Mutation variants: {len(pair['truncated_mutations'])}")
-            print()
+    return dataset
 
-# Run generation
-asyncio.run(generate_proteins_with_mutations("NAXE"))
+# Generate dataset
+gene_list = ["NAXE", "ERGIC3", "GARS1"]
+dataset = await generate_proteins_with_mutations(gene_list)
+print(f"Generated {len(dataset)} protein sequences")
+
+# For pairs-only (no mutations)
+pairs_dataset = protein_generator.create_protein_sequence_dataset_pairs(
+    gene_list=gene_list,
+    preferred_transcripts=preferred_transcripts,
+    output_format="fasta,csv",
+    min_length=50,
+    max_length=2000
+)
 ```
 
-### Custom Dataset Generation
+## Data Structure
 
-```bash
-# Generate only specific datasets
-python3 translate.py gene_list.txt output_dir/ \
-  --genome data/genome_data/GRCh38.p7.genome.fa \
-  --annotation data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf \
-  --bed data/ribosome_profiling/truncations_cleaned.bed \
-  --include-canonical \
-  --include-mutations \
-  --impact-types "missense variant" "frameshift variant" \
-  --min-length 50 \
-  --max-length 2000
+```
+swissisoform/
+├── data/
+│   ├── genome_data/
+│   │   ├── GRCh38.p7.genome.fa
+│   │   ├── gencode.v25.annotation.ensembl_cleaned.gtf
+│   │   └── hela_top_transcript.txt
+│   └── ribosome_profiling/
+│       ├── truncations_cleaned.bed
+│       ├── gene_list.txt
+│       └── gene_list_reduced.txt
+└── results/
+    ├── reduced/                     # Curated gene set (22 genes)
+    │   ├── mutations/
+    │   │   ├── gene_level_results.csv
+    │   │   ├── truncation_level_results.csv
+    │   │   └── [gene_name]/         # Visualizations
+    │   └── proteins/
+    │       ├── protein_sequences_pairs.fasta/csv
+    │       ├── protein_sequences_with_mutations.fasta/csv
+    │       └── *_results.csv        # DeepLoc predictions
+    └── full/                        # All genes (~1,100 genes)
+        ├── mutations/
+        └── proteins/
 ```
 
-## Troubleshooting
+## Output Files
 
-### Common Issues
+### Mutation Analysis
+- **`gene_level_results.csv`**: Gene-level mutation summary
+- **`truncation_level_results.csv`**: Detailed transcript-truncation pair analysis with mutation counts by impact type
+- **Visualizations**: PDF files showing transcript structure, truncation sites, and mutations
 
-**Missing mutation data:**
-- Check internet connection for ClinVar API access
-- Verify gene names match HGNC symbols
-- Consider rate limiting (pipeline includes automatic delays)
+### Protein Sequences
+- **`protein_sequences_pairs.fasta/csv`**: Canonical + truncated protein pairs
+- **`protein_sequences_with_mutations.fasta/csv`**: Sequences with integrated mutations
 
-**Visualization errors:**
-- Ensure matplotlib and required dependencies are installed
-- Check that output directories have write permissions
-- Verify transcript IDs exist in annotation file
+### Localization Predictions
+- **`*_results.csv`**: DeepLoc predictions (Fast and Accurate modes)
 
-**Memory issues:**
-- Reduce number of parallel tasks in SLURM scripts
-- Process smaller gene lists
-- Increase memory allocation in SLURM headers
+## File Formats
 
-### Performance Tips
+**FASTA sequences:**
+```
+>GENE_TRANSCRIPT_VARIANT description
+PROTEIN_SEQUENCE
+```
 
-- Use preferred transcript lists to focus analysis
-- Filter by specific mutation impact types to reduce processing time
-- Run pipeline steps incrementally for large datasets
-- Monitor SLURM job logs for progress and errors
+**CSV data:**
+```csv
+gene,transcript_id,variant_id,sequence,length,variant_type
+NAXE,ENST00000123456,canonical,MAKTG...,245,canonical
+NAXE,ENST00000123456,trunc_AUG_100_200,KTGFL...,180,truncated
+```
+
+## Requirements
+
+- Linux/Unix system with SLURM (for full pipeline)
+- Conda package manager
+- GPU access (for fast localization prediction)
+- Internet connection (for ClinVar API access)
 
 ## License
 
 MIT License - see LICENSE file for details.
-
-## Support
-
-For questions, issues, or contributions please open an issue on GitHub.
