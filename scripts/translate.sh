@@ -2,9 +2,9 @@
 
 #SBATCH --job-name=translate              # Job name
 #SBATCH --partition=20                    # Partition name
-#SBATCH --ntasks=1                        # Run a single task
-#SBATCH --cpus-per-task=12                # Single CPU for the controller job
-#SBATCH --mem=24G                         # Memory for the controller job
+#SBATCH --ntasks=4                        # Run 4 parallel tasks
+#SBATCH --cpus-per-task=6                 # CPUs per task (4*6=24 total)
+#SBATCH --mem=32G                         # Total memory for all tasks
 #SBATCH --time=24:00:00                   # Time limit (hrs:min:sec)
 #SBATCH --output=out/translate-%j.out     # Standard output log
 
@@ -15,89 +15,68 @@ conda activate swissisoform
 # Define common paths
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
 ANNOTATION_PATH="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
+TRUNCATIONS_PATH="../data/ribosome_profiling/full_truncations_JL_cleaned.bed"
 PREFERRED_TRANSCRIPTS="../data/genome_data/hela_top_transcript.txt"
 MIN_LENGTH=10
 MAX_LENGTH=100000
 FORMAT="fasta,csv"
 
 # Create results directory outside of scripts
-mkdir -p ../results
+mkdir -p ../results/reduced
+mkdir -p ../results/full
 
-echo "Starting protein sequence translation at $(date)"
+echo "Starting protein sequence translation with 4 parallel tasks at $(date)"
 
-# Run reduced dataset (selected truncations)
-echo "=== Processing reduced dataset ==="
-GENE_LIST="../data/ribosome_profiling/gene_list_reduced.txt"
-BED_PATH="../data/ribosome_profiling/selected_truncations_JL_cleaned.bed"
-OUTPUT_DIR="../results/reduced"
+# Function to run each task
+run_task() {
+    local task_id=$1
+    local gene_list=$2
+    local output_dir=$3
+    local task_name=$4
+    local extra_args=$5
+    
+    echo "Task $task_id: Starting $task_name at $(date)"
+    
+    python3 translate.py "$gene_list" "$output_dir" \
+      --genome "$GENOME_PATH" \
+      --annotation "$ANNOTATION_PATH" \
+      --bed "$TRUNCATIONS_PATH" \
+      --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
+      --min-length "$MIN_LENGTH" \
+      --max-length "$MAX_LENGTH" \
+      --format "$FORMAT" \
+      --include-canonical \
+      $extra_args
+    
+    echo "Task $task_id: Completed $task_name at $(date)"
+}
 
-python3 translate.py "$GENE_LIST" "$OUTPUT_DIR" \
-  --genome "$GENOME_PATH" \
-  --annotation "$ANNOTATION_PATH" \
-  --bed "$BED_PATH" \
-  --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
-  --min-length "$MIN_LENGTH" \
-  --max-length "$MAX_LENGTH" \
-  --format "$FORMAT" \
-  --include-canonical \
-  --pairs-only
+# Launch 4 tasks in parallel using background processes
+run_task 1 "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced" "reduced pairs" "--pairs-only" &
+TASK1_PID=$!
 
-echo "Reduced dataset completed at $(date)"
+run_task 2 "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced" "reduced mutations" '--include-mutations --impact-types "missense variant" "nonsense variant" "frameshift variant"' &
+TASK2_PID=$!
 
-# Run reduced dataset with mutations
-echo "=== Processing reduced dataset with mutations ==="
-OUTPUT_DIR="../results/reduced_mutations"
+run_task 3 "../data/ribosome_profiling/gene_list.txt" "../results/full" "full pairs" "--pairs-only" &
+TASK3_PID=$!
 
-python3 translate.py "$GENE_LIST" "$OUTPUT_DIR" \
-  --genome "$GENOME_PATH" \
-  --annotation "$ANNOTATION_PATH" \
-  --bed "$BED_PATH" \
-  --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
-  --min-length "$MIN_LENGTH" \
-  --max-length "$MAX_LENGTH" \
-  --format "$FORMAT" \
-  --include-canonical \
-  --include-mutations \
-  --impact-types "missense variant"
+run_task 4 "../data/ribosome_profiling/gene_list.txt" "../results/full" "full mutations" '--include-mutations --impact-types "missense variant" "nonsense variant" "frameshift variant"' &
+TASK4_PID=$!
 
-echo "Reduced dataset with mutations completed at $(date)"
+# Wait for all tasks to complete
+echo "Waiting for all tasks to complete..."
+wait $TASK1_PID
+echo "Task 1 (reduced pairs) finished"
 
-# Run full dataset (all truncations) - uncomment when ready
-echo "=== Processing full dataset ==="
-GENE_LIST="../data/ribosome_profiling/gene_list.txt"
-BED_PATH="../data/ribosome_profiling/full_truncations_JL_cleaned.bed"
-OUTPUT_DIR="../results/full"
+wait $TASK2_PID
+echo "Task 2 (reduced mutations) finished"
 
-python3 translate.py "$GENE_LIST" "$OUTPUT_DIR" \
-  --genome "$GENOME_PATH" \
-  --annotation "$ANNOTATION_PATH" \
-  --bed "$BED_PATH" \
-  --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
-  --min-length "$MIN_LENGTH" \
-  --max-length "$MAX_LENGTH" \
-  --format "$FORMAT" \
-  --include-canonical \
-  --pairs-only
+wait $TASK3_PID
+echo "Task 3 (full pairs) finished"
 
-echo "Full dataset completed at $(date)"
-
-Run full dataset with mutations - uncomment when ready
-echo "=== Processing full dataset with mutations ==="
-OUTPUT_DIR="../results/full_mutations"
-
-python3 translate.py "$GENE_LIST" "$OUTPUT_DIR" \
-  --genome "$GENOME_PATH" \
-  --annotation "$ANNOTATION_PATH" \
-  --bed "$BED_PATH" \
-  --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
-  --min-length "$MIN_LENGTH" \
-  --max-length "$MAX_LENGTH" \
-  --format "$FORMAT" \
-  --include-canonical \
-  --include-mutations \
-  --impact-types "missense variant"
-
-echo "Full dataset with mutations completed at $(date)"
+wait $TASK4_PID
+echo "Task 4 (full mutations) finished"
 
 echo "All protein sequence translation completed at $(date)"
 
@@ -105,14 +84,33 @@ echo "All protein sequence translation completed at $(date)"
 echo ""
 echo "=== Results Summary ==="
 echo "Results saved to ../results/ directory:"
-echo "  ├─ reduced/                     # Reduced dataset (pairs only)"
-echo "  ├─ reduced_mutations/           # Reduced dataset with mutations"
-echo "  ├─ full/                        # Full dataset (pairs only)"
-echo "  └─ full_mutations/              # Full dataset with mutations"
+echo "  ├─ reduced/                     # Reduced dataset (both standard and mutation variants)"
+echo "  └─ full/                        # Full dataset (both standard and mutation variants)"
 
 echo ""
 echo "Output files in each directory:"
-echo "  ├─ protein_sequence_dataset_pairs.fasta"
-echo "  ├─ protein_sequence_dataset_pairs.csv"
-echo "  ├─ protein_sequences_with_mutations.fasta (mutations only)"
-echo "  └─ protein_sequences_with_mutations.csv (mutations only)"
+echo "  Standard pairs (canonical + truncated):"
+echo "  ├─ protein_sequences.fasta"
+echo "  ├─ protein_sequences.csv"
+echo "  Mutation variants (canonical + truncated + mutated):"
+echo "  ├─ protein_sequences_with_mutations.fasta"
+echo "  └─ protein_sequences_with_mutations.csv"
+
+echo ""
+echo "Checking output files:"
+for dir in "reduced" "full"; do
+    echo "  $dir directory:"
+    if [ -f "../results/$dir/protein_sequences.fasta" ]; then
+        count=$(grep -c '^>' "../results/$dir/protein_sequences.fasta")
+        echo "    ✓ protein_sequences.fasta ($count sequences)"
+    else
+        echo "    ✗ protein_sequences.fasta missing"
+    fi
+    
+    if [ -f "../results/$dir/protein_sequences_with_mutations.fasta" ]; then
+        count=$(grep -c '^>' "../results/$dir/protein_sequences_with_mutations.fasta")
+        echo "    ✓ protein_sequences_with_mutations.fasta ($count sequences)"
+    else
+        echo "    ✗ protein_sequences_with_mutations.fasta missing"
+    fi
+done
