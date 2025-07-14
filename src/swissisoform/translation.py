@@ -1106,7 +1106,7 @@ class TruncatedProteinGenerator:
         # Save dataset
         if not dataset.empty:
             if "fasta" in output_format.lower():
-                self._save_dataset_fasta(dataset)
+                self._save_dataset_fasta(dataset, include_mutations=False, pairs_only=True)
             if "csv" in output_format.lower():
                 output_file = self.output_dir / "protein_sequences_pairs.csv"
                 dataset.to_csv(output_file, index=False)
@@ -1201,7 +1201,7 @@ class TruncatedProteinGenerator:
             pd.DataFrame(rows).to_csv(output_file, index=False)
 
     def _save_dataset_fasta(
-        self, dataset: pd.DataFrame, include_mutations: bool = False
+        self, dataset: pd.DataFrame, include_mutations: bool = False, pairs_only: bool = False
     ) -> None:
         """Save dataset as FASTA file."""
         records = []
@@ -1226,6 +1226,8 @@ class TruncatedProteinGenerator:
 
         if include_mutations:
             output_file = self.output_dir / "protein_sequences_with_mutations.fasta"
+        elif pairs_only:
+            output_file = self.output_dir / "protein_sequences_pairs.fasta"
         else:
             output_file = self.output_dir / "protein_sequences.fasta"
 

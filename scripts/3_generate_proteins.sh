@@ -72,13 +72,13 @@ mkdir -p ../results/full/proteins
 
 echo "Starting protein sequence generation with 4 parallel tasks at $(date)"
 
-# Function to run each task
+# Function to run each task with proper argument handling
 run_task() {
     local task_id=$1
     local gene_list=$2
     local output_dir=$3
     local task_name=$4
-    local extra_args=$5
+    shift 4  # Remove the first 4 arguments, leaving only the extra args
     
     echo "Task $task_id: Starting $task_name at $(date)"
     
@@ -91,22 +91,22 @@ run_task() {
       --max-length "$MAX_LENGTH" \
       --format "$FORMAT" \
       --include-canonical \
-      $extra_args
+      "$@"  # Pass remaining arguments properly
     
     echo "Task $task_id: Completed $task_name at $(date)"
 }
 
-# Launch 4 tasks in parallel using background processes
-run_task 1 "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" "reduced pairs" "--pairs-only" &
+# Launch 4 tasks with proper argument handling
+run_task 1 "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" "reduced pairs" --pairs-only &
 TASK1_PID=$!
 
-run_task 2 "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" "reduced mutations" '--include-mutations --impact-types "missense variant" "nonsense variant" "frameshift variant"' &
+run_task 2 "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" "reduced mutations" --include-mutations --impact-types "missense variant" &
 TASK2_PID=$!
 
-run_task 3 "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" "full pairs" "--pairs-only" &
+run_task 3 "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" "full pairs" --pairs-only &
 TASK3_PID=$!
 
-run_task 4 "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" "full mutations" '--include-mutations --impact-types "missense variant" "nonsense variant" "frameshift variant"' &
+run_task 4 "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" "full mutations" --include-mutations --impact-types "missense variant" &
 TASK4_PID=$!
 
 # Wait for all tasks to complete
