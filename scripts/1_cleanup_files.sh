@@ -21,8 +21,7 @@ required_genome_files=(
 )
 
 required_riboprof_files=(
-    "$RIBOPROF_DIR/full_truncations_JL.bed"
-    "$RIBOPROF_DIR/selected_truncations_JL.bed"
+    "$RIBOPROF_DIR/truncations.bed"
 )
 
 echo ""

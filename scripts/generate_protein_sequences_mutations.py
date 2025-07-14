@@ -20,7 +20,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 from swissisoform.genome import GenomeHandler
 from swissisoform.alternative_isoforms import AlternativeIsoform
 from swissisoform.mutations import MutationHandler
-from swissisoform.translation_mutations import ValidatedMutationIntegratedProteinGenerator
+from swissisoform.translation_mutations import (
+    ValidatedMutationIntegratedProteinGenerator,
+)
 from swissisoform.utils import (
     parse_gene_list,
     load_preferred_transcripts,
@@ -64,11 +66,10 @@ async def process_gene_with_mutations(
         protein_generator.debug = debug
 
         # Extract enhanced protein pairs with validated mutations
-        enhanced_pairs = await protein_generator.extract_gene_proteins_with_validated_mutations(
-            gene_name, 
-            preferred_transcripts, 
-            include_mutations, 
-            impact_types
+        enhanced_pairs = (
+            await protein_generator.extract_gene_proteins_with_validated_mutations(
+                gene_name, preferred_transcripts, include_mutations, impact_types
+            )
         )
 
         if not enhanced_pairs:
@@ -85,10 +86,10 @@ async def process_gene_with_mutations(
         all_sequences = []
 
         for pair in enhanced_pairs:
-            canonical_protein = pair['canonical']['protein']
-            truncated_protein = pair['truncated_base']['protein']
-            transcript_id = pair['transcript_id']
-            truncation_id = pair['truncation_id']
+            canonical_protein = pair["canonical"]["protein"]
+            truncated_protein = pair["truncated_base"]["protein"]
+            transcript_id = pair["transcript_id"]
+            truncation_id = pair["truncation_id"]
 
             # Check length constraints for base sequences
             if not (min_length <= len(canonical_protein) <= max_length):
@@ -105,46 +106,58 @@ async def process_gene_with_mutations(
                 continue
 
             # Add canonical sequence
-            all_sequences.append({
-                'variant_type': 'canonical',
-                'sequence': canonical_protein,
-                'length': len(canonical_protein)
-            })
+            all_sequences.append(
+                {
+                    "variant_type": "canonical",
+                    "sequence": canonical_protein,
+                    "length": len(canonical_protein),
+                }
+            )
 
             # Add base truncated sequence
-            all_sequences.append({
-                'variant_type': 'truncated',
-                'sequence': truncated_protein,
-                'length': len(truncated_protein)
-            })
+            all_sequences.append(
+                {
+                    "variant_type": "truncated",
+                    "sequence": truncated_protein,
+                    "length": len(truncated_protein),
+                }
+            )
 
             # Process mutation variants
-            mutation_variants = pair.get('truncated_mutations', [])
+            mutation_variants = pair.get("truncated_mutations", [])
             pair_mutations = 0
-            
-            print(f"  │  │  └─ DEBUG: Found {len(mutation_variants)} mutation variants from enhanced_pairs")
-            
+
+            print(
+                f"  │  │  └─ DEBUG: Found {len(mutation_variants)} mutation variants from enhanced_pairs"
+            )
+
             for mut_variant in mutation_variants:
-                mutated_protein = mut_variant['protein']
-                
+                mutated_protein = mut_variant["protein"]
+
                 # Check length constraints
                 if min_length <= len(mutated_protein) <= max_length:
                     # Check if mutation actually changed the protein
                     if mutated_protein != truncated_protein:
-                        all_sequences.append({
-                            'variant_type': 'truncated_mutated',
-                            'sequence': mutated_protein,
-                            'length': len(mutated_protein),
-                            'mutation': mut_variant['mutation']
-                        })
+                        all_sequences.append(
+                            {
+                                "variant_type": "truncated_mutated",
+                                "sequence": mutated_protein,
+                                "length": len(mutated_protein),
+                                "mutation": mut_variant["mutation"],
+                            }
+                        )
                         pair_mutations += 1
-                        print(f"  │  │  └─ DEBUG: Added mutation variant {pair_mutations}")
+                        print(
+                            f"  │  │  └─ DEBUG: Added mutation variant {pair_mutations}"
+                        )
 
             total_mutations += pair_mutations
             valid_pairs += 1
 
-            print(f"  │  ├─ {transcript_id} × {truncation_id}: "
-                  f"{pair_mutations} mutation variants generated")
+            print(
+                f"  │  ├─ {transcript_id} × {truncation_id}: "
+                f"{pair_mutations} mutation variants generated"
+            )
 
         if not all_sequences:
             return {
@@ -154,21 +167,38 @@ async def process_gene_with_mutations(
             }
 
         # Calculate summary statistics
-        canonical_count = len([s for s in all_sequences if s['variant_type'] == 'canonical'])
-        truncated_count = len([s for s in all_sequences if s['variant_type'] == 'truncated'])
-        mutated_count = len([s for s in all_sequences if s['variant_type'] == 'truncated_mutated'])
+        canonical_count = len(
+            [s for s in all_sequences if s["variant_type"] == "canonical"]
+        )
+        truncated_count = len(
+            [s for s in all_sequences if s["variant_type"] == "truncated"]
+        )
+        mutated_count = len(
+            [s for s in all_sequences if s["variant_type"] == "truncated_mutated"]
+        )
 
-        avg_canonical_length = sum(s['length'] for s in all_sequences 
-                                 if s['variant_type'] == 'canonical') / max(canonical_count, 1)
-        avg_truncated_length = sum(s['length'] for s in all_sequences 
-                                 if s['variant_type'] == 'truncated') / max(truncated_count, 1)
-        avg_mutated_length = sum(s['length'] for s in all_sequences 
-                               if s['variant_type'] == 'truncated_mutated') / max(mutated_count, 1)
+        avg_canonical_length = sum(
+            s["length"] for s in all_sequences if s["variant_type"] == "canonical"
+        ) / max(canonical_count, 1)
+        avg_truncated_length = sum(
+            s["length"] for s in all_sequences if s["variant_type"] == "truncated"
+        ) / max(truncated_count, 1)
+        avg_mutated_length = sum(
+            s["length"]
+            for s in all_sequences
+            if s["variant_type"] == "truncated_mutated"
+        ) / max(mutated_count, 1)
 
         print(f"  │  ├─ Generated {valid_pairs} valid transcript-truncation pairs")
-        print(f"  │  ├─ Canonical: {canonical_count} sequences (avg length: {avg_canonical_length:.0f} aa)")
-        print(f"  │  ├─ Truncated: {truncated_count} sequences (avg length: {avg_truncated_length:.0f} aa)")
-        print(f"  │  ├─ Mutated: {mutated_count} sequences (avg length: {avg_mutated_length:.0f} aa)")
+        print(
+            f"  │  ├─ Canonical: {canonical_count} sequences (avg length: {avg_canonical_length:.0f} aa)"
+        )
+        print(
+            f"  │  ├─ Truncated: {truncated_count} sequences (avg length: {avg_truncated_length:.0f} aa)"
+        )
+        print(
+            f"  │  ├─ Mutated: {mutated_count} sequences (avg length: {avg_mutated_length:.0f} aa)"
+        )
         if skipped_pairs > 0:
             print(f"  │  └─ Skipped {skipped_pairs} pairs due to filters")
 
@@ -224,7 +254,9 @@ async def main(
         output_format: Format to save sequences ('fasta', 'csv', or 'fasta,csv')
     """
     start_time = datetime.now()
-    print(f"Starting mutation-integrated protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(
+        f"Starting mutation-integrated protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
     # Create output directory
     output_dir_path = Path(output_dir)
@@ -241,11 +273,11 @@ async def main(
     mutation_handler = MutationHandler()
     print("  └─ Initializing validated mutation-integrated protein generator...")
     protein_generator = ValidatedMutationIntegratedProteinGenerator(
-        genome_handler=genome, 
-        alt_isoform_handler=alt_isoforms, 
+        genome_handler=genome,
+        alt_isoform_handler=alt_isoforms,
         output_dir=output_dir,
         mutation_handler=mutation_handler,
-        debug=False  # Can be enabled for detailed debugging
+        debug=False,  # Can be enabled for detailed debugging
     )
 
     # Load preferred transcripts if provided
@@ -258,24 +290,36 @@ async def main(
     # Set default impact types if not provided
     if impact_types is None:
         impact_types = ["missense variant", "nonsense variant", "frameshift variant"]
-    
+
     # Debug: Print what impact types we actually received
     print(f"Received impact types: {impact_types}")
-    
+
     # Fix common issues with impact type parsing
-    if len(impact_types) > 3 and any(' ' not in item for item in impact_types):
+    if len(impact_types) > 3 and any(" " not in item for item in impact_types):
         # Likely the arguments got split incorrectly
         # Try to reconstruct proper impact types
         reconstructed = []
         i = 0
         while i < len(impact_types):
-            if impact_types[i] == "missense" and i + 1 < len(impact_types) and impact_types[i + 1] == "variant":
+            if (
+                impact_types[i] == "missense"
+                and i + 1 < len(impact_types)
+                and impact_types[i + 1] == "variant"
+            ):
                 reconstructed.append("missense variant")
                 i += 2
-            elif impact_types[i] == "nonsense" and i + 1 < len(impact_types) and impact_types[i + 1] == "variant":
+            elif (
+                impact_types[i] == "nonsense"
+                and i + 1 < len(impact_types)
+                and impact_types[i + 1] == "variant"
+            ):
                 reconstructed.append("nonsense variant")
                 i += 2
-            elif impact_types[i] == "frameshift" and i + 1 < len(impact_types) and impact_types[i + 1] == "variant":
+            elif (
+                impact_types[i] == "frameshift"
+                and i + 1 < len(impact_types)
+                and impact_types[i + 1] == "variant"
+            ):
                 reconstructed.append("frameshift variant")
                 i += 2
             else:
@@ -288,14 +332,18 @@ async def main(
     print(f"\nReading gene list from {gene_list_path}")
     gene_names = parse_gene_list(gene_list_path)
     total_genes = len(gene_names)
-    
-    print(f"\nStarting mutation-integrated protein sequence generation for {total_genes} genes")
+
+    print(
+        f"\nStarting mutation-integrated protein sequence generation for {total_genes} genes"
+    )
     print(f"Parameters: min_length={min_length}, max_length={max_length}")
     print(f"Include mutations: {include_mutations}")
     if include_mutations:
         print(f"Impact types: {impact_types}")
     if preferred_transcripts:
-        print(f"Using {len(preferred_transcripts)} preferred transcripts when available")
+        print(
+            f"Using {len(preferred_transcripts)} preferred transcripts when available"
+        )
 
     # Process all genes
     results = []
@@ -311,7 +359,7 @@ async def main(
             impact_types=impact_types,
             min_length=min_length,
             max_length=max_length,
-            debug=True  # Set to True for detailed debugging
+            debug=True,  # Set to True for detailed debugging
         )
         results.append(result)
 
@@ -319,17 +367,19 @@ async def main(
         if result["status"] == "success" and "sequences" in result:
             # Add gene and metadata to each sequence
             for seq in result["sequences"]:
-                seq.update({
-                    'gene': gene_name,
-                    'transcript_id': f"{gene_name}_transcript",  # Simplified
-                    'truncation_id': f"{gene_name}_truncation"   # Simplified
-                })
+                seq.update(
+                    {
+                        "gene": gene_name,
+                        "transcript_id": f"{gene_name}_transcript",  # Simplified
+                        "truncation_id": f"{gene_name}_truncation",  # Simplified
+                    }
+                )
             all_sequences.extend(result["sequences"])
 
     # Create final dataset
     if all_sequences:
         dataset = pd.DataFrame(all_sequences)
-        
+
         # Save results in the requested formats
         if "fasta" in output_format.lower():
             # Save as FASTA
@@ -341,16 +391,14 @@ async def main(
             for idx, row in dataset.iterrows():
                 record_id = f"{row['gene']}_{row['variant_type']}_{idx}"
                 description = f"{row['variant_type']} protein"
-                
-                if row['variant_type'] == 'truncated_mutated' and 'mutation' in row:
-                    mut_info = row['mutation']
+
+                if row["variant_type"] == "truncated_mutated" and "mutation" in row:
+                    mut_info = row["mutation"]
                     description += f" with mutation {mut_info['position']}_{mut_info['reference']}>{mut_info['alternate']}"
 
                 records.append(
                     SeqRecord(
-                        Seq(row["sequence"]), 
-                        id=record_id, 
-                        description=description
+                        Seq(row["sequence"]), id=record_id, description=description
                     )
                 )
 
@@ -376,9 +424,15 @@ async def main(
         print(f"  │  ├─ {status}: {count}")
 
     if all_sequences:
-        canonical_count = len([s for s in all_sequences if s['variant_type'] == 'canonical'])
-        truncated_count = len([s for s in all_sequences if s['variant_type'] == 'truncated'])
-        mutated_count = len([s for s in all_sequences if s['variant_type'] == 'truncated_mutated'])
+        canonical_count = len(
+            [s for s in all_sequences if s["variant_type"] == "canonical"]
+        )
+        truncated_count = len(
+            [s for s in all_sequences if s["variant_type"] == "truncated"]
+        )
+        mutated_count = len(
+            [s for s in all_sequences if s["variant_type"] == "truncated_mutated"]
+        )
 
         print(f"\n  ├─ Dataset summary:")
         print(f"  │  ├─ Total sequences: {len(all_sequences)}")
@@ -394,7 +448,9 @@ async def main(
     else:
         print("\n  └─ No valid sequences generated")
 
-    print(f"\n  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(
+        f"\n  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
 
 if __name__ == "__main__":
@@ -419,16 +475,16 @@ if __name__ == "__main__":
         help="Path to alternative isoform BED file",
     )
     parser.add_argument(
-        "--include-mutations", 
-        action="store_true", 
+        "--include-mutations",
+        action="store_true",
         default=True,
-        help="Include mutation variants in output"
+        help="Include mutation variants in output",
     )
     parser.add_argument(
         "--impact-types",
         nargs="+",
         default=None,  # Will be set in main function
-        help="Mutation impact types to include (space-separated, use quotes for multi-word types)"
+        help="Mutation impact types to include (space-separated, use quotes for multi-word types)",
     )
     parser.add_argument(
         "--min-length", type=int, default=10, help="Minimum protein length"
@@ -445,9 +501,9 @@ if __name__ == "__main__":
         help="Path to file containing preferred transcript IDs",
     )
     parser.add_argument(
-        "--debug", 
-        action="store_true", 
-        help="Enable detailed debug output for mutation processing"
+        "--debug",
+        action="store_true",
+        help="Enable detailed debug output for mutation processing",
     )
 
     args = parser.parse_args()

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Analyze mutations in alternative isoform truncation regions.
 
-This script batch processes a list of genes to identify mutations that occur 
-within alternative isoform truncation sites. It generates detailed statistical 
+This script batch processes a list of genes to identify mutations that occur
+within alternative isoform truncation sites. It generates detailed statistical
 analysis and visualizations of transcript-truncation pairs.
 """
 
@@ -91,7 +91,7 @@ async def main(
         sources = ["clinvar"]
     if impact_types is None:
         impact_types = ["missense variant", "nonsense variant", "frameshift variant"]
-    
+
     # Convert to the dict format expected by the mutation handler
     impact_types_dict = {sources[0]: impact_types}
 
@@ -170,9 +170,7 @@ if __name__ == "__main__":
         help="Path to file containing preferred transcript IDs",
     )
     parser.add_argument(
-        "--visualize", 
-        action="store_true", 
-        help="Generate visualizations for each gene"
+        "--visualize", action="store_true", help="Generate visualizations for each gene"
     )
     parser.add_argument(
         "--include-unfiltered",

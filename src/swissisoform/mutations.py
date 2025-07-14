@@ -856,7 +856,7 @@ class MutationHandler:
     ) -> Dict:
         """Comprehensive mutation analysis for a gene with transcript-truncation pairs.
 
-        This method performs the same analysis as the process_gene function in 
+        This method performs the same analysis as the process_gene function in
         analyze_truncations.py but within the MutationHandler class.
 
         Args:
@@ -886,7 +886,11 @@ class MutationHandler:
             transcript_info = genome_handler.get_transcript_ids(gene_name)
             if transcript_info.empty:
                 print(f"\r  ├─ No transcript info found")
-                return {"gene_name": gene_name, "status": "no_transcripts", "error": None}
+                return {
+                    "gene_name": gene_name,
+                    "status": "no_transcripts",
+                    "error": None,
+                }
 
             # Filter by preferred transcripts if provided
             original_transcript_count = len(transcript_info)
@@ -938,7 +942,9 @@ class MutationHandler:
                         continue
 
                     # Check for overlap
-                    if not (transcript_end < trunc_start or transcript_start > trunc_end):
+                    if not (
+                        transcript_end < trunc_start or transcript_start > trunc_end
+                    ):
                         # Create an entry for this transcript-truncation pair
                         truncation_id = f"trunc_{idx}"
 
@@ -994,7 +1000,9 @@ class MutationHandler:
                 print(f"\r  ├─ No mutations found for this gene")
                 all_mutations = pd.DataFrame()
             else:
-                print(f"\r  ├─ Found {len(all_mutations)} total mutations for this gene")
+                print(
+                    f"\r  ├─ Found {len(all_mutations)} total mutations for this gene"
+                )
 
                 # Apply impact type filtering if specified
                 if impact_types:
@@ -1012,7 +1020,9 @@ class MutationHandler:
                             all_mutations = all_mutations[
                                 all_mutations["source"].str.lower() != source.lower()
                             ]
-                            all_mutations = pd.concat([all_mutations, filtered_mutations])
+                            all_mutations = pd.concat(
+                                [all_mutations, filtered_mutations]
+                            )
 
             # Container for all transcript-truncation analysis results
             pair_results = []
@@ -1070,7 +1080,9 @@ class MutationHandler:
                             category_count = len(impact_mutations)
 
                             # Store count for this impact type
-                            category_key = f"mutations_{impact.replace(' ', '_').lower()}"
+                            category_key = (
+                                f"mutations_{impact.replace(' ', '_').lower()}"
+                            )
                             mutation_categories[category_key] = category_count
 
                             # Store ClinVar IDs for this impact type
@@ -1083,15 +1095,17 @@ class MutationHandler:
                                 )
                                 # Convert to strings (to handle numeric IDs), filter empty strings
                                 impact_ids = [
-                                    str(id).strip() for id in impact_ids if str(id).strip()
+                                    str(id).strip()
+                                    for id in impact_ids
+                                    if str(id).strip()
                                 ]
 
                                 # Add to the category-specific IDs
                                 if impact_ids:
-                                    impact_key = (
-                                        f"clinvar_ids_{impact.replace(' ', '_').lower()}"
+                                    impact_key = f"clinvar_ids_{impact.replace(' ', '_').lower()}"
+                                    mutation_categories[impact_key] = ",".join(
+                                        impact_ids
                                     )
-                                    mutation_categories[impact_key] = ",".join(impact_ids)
 
                         # Collect all ClinVar IDs for this truncation region
                         if "variant_id" in pair_mutations.columns:
@@ -1146,7 +1160,7 @@ class MutationHandler:
             # Generate visualizations if requested
             if visualize:
                 from swissisoform.visualize import GenomeVisualizer
-                
+
                 visualizer = GenomeVisualizer(genome_handler)
                 gene_dir = Path(output_dir) / gene_name
                 gene_dir.mkdir(parents=True, exist_ok=True)
@@ -1211,7 +1225,8 @@ class MutationHandler:
                             alt_features=truncation_feature,
                             mutations_df=pair_mutations,
                             output_file=str(
-                                transcript_dir / f"{pair_base_filename}_filtered_zoom.pdf"
+                                transcript_dir
+                                / f"{pair_base_filename}_filtered_zoom.pdf"
                             ),
                             padding=100,
                         )

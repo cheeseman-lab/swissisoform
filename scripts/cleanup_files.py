@@ -8,7 +8,7 @@ It also cleans up the BED files to update gene names and remove duplicates.
 """
 
 from swissisoform.alternative_isoforms import AlternativeIsoform
-from swissisoform.utils import cleanup_bed, update_gencode_gene_names
+from swissisoform.utils import cleanup_bed, update_gencode_gene_names, subset_gene_list
 
 # GTF: update gene names
 input_gtf = "../data/genome_data/gencode.v25.annotation.gtf"
@@ -23,29 +23,24 @@ update_gencode_gene_names(
 )
 
 # All truncations: bed cleanup
-input_bed = "../data/ribosome_profiling/full_truncations_JL.bed"
-output_bed = "../data/ribosome_profiling/full_truncations_JL_cleaned.bed"
+input_bed = "../data/ribosome_profiling/truncations.bed"
+output_bed = "../data/ribosome_profiling/truncations_cleaned.bed"
 
 cleanup_bed(input_bed, output_bed, gtf_path=output_gtf, verbose=True)
 
 alt_isoforms = AlternativeIsoform()
-alt_isoforms.load_bed("../data/ribosome_profiling/full_truncations_JL_cleaned.bed")
+alt_isoforms.load_bed("../data/ribosome_profiling/truncations_cleaned.bed")
 gene_list = alt_isoforms.get_gene_list()
 
 with open("../data/ribosome_profiling/gene_list.txt", "w") as f:
     for gene in gene_list:
         f.write(gene + "\n")
 
-# Selected truncations: bed cleanup
-input_bed = "../data/ribosome_profiling/selected_truncations_JL.bed"
-output_bed = "../data/ribosome_profiling/selected_truncations_JL_cleaned.bed"
 
-cleanup_bed(input_bed, output_bed, gtf_path=output_gtf, verbose=True)
-
-alt_isoforms = AlternativeIsoform()
-alt_isoforms.load_bed("../data/ribosome_profiling/selected_truncations_JL_cleaned.bed")
-gene_list = alt_isoforms.get_gene_list()
+reduced_gene_list = subset_gene_list(
+    gene_list_path="../data/ribosome_profiling/gene_list.txt"
+)
 
 with open("../data/ribosome_profiling/gene_list_reduced.txt", "w") as f:
-    for gene in gene_list:
+    for gene in reduced_gene_list:
         f.write(gene + "\n")

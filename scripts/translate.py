@@ -69,7 +69,9 @@ async def main(
         debug: Enable debug mode for detailed output
     """
     start_time = datetime.now()
-    print(f"Starting protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(
+        f"Starting protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
     # Create output directory
     output_dir_path = Path(output_dir)
@@ -79,24 +81,24 @@ async def main(
     print("\nInitializing components:")
     print("  ├─ Loading genome data...")
     genome = GenomeHandler(genome_path, annotation_path)
-    
+
     print("  ├─ Loading alternative isoform data...")
     alt_isoforms = AlternativeIsoform()
     alt_isoforms.load_bed(bed_path)
-    
+
     # Initialize mutation handler only if needed
     mutation_handler = None
     if include_mutations:
         print("  ├─ Initializing mutation handler...")
         mutation_handler = MutationHandler()
-    
+
     print("  └─ Initializing protein generator...")
     protein_generator = TruncatedProteinGenerator(
         genome_handler=genome,
         alt_isoform_handler=alt_isoforms,
         output_dir=output_dir,
         mutation_handler=mutation_handler,
-        debug=debug
+        debug=debug,
     )
 
     # Load preferred transcripts if provided
@@ -125,9 +127,11 @@ async def main(
         print(f"  ├─ Impact types: {impact_types}")
     print(f"  ├─ Pairs only: {pairs_only}")
     print(f"  └─ Output format: {output_format}")
-    
+
     if preferred_transcripts:
-        print(f"Using {len(preferred_transcripts)} preferred transcripts when available")
+        print(
+            f"Using {len(preferred_transcripts)} preferred transcripts when available"
+        )
 
     # Generate sequences based on the mode
     if pairs_only and not include_mutations:
@@ -141,14 +145,16 @@ async def main(
         )
     elif include_mutations:
         # New unified mode with mutation integration
-        dataset = await protein_generator.create_protein_sequence_dataset_with_mutations(
-            gene_list=gene_names,
-            preferred_transcripts=preferred_transcripts,
-            include_mutations=include_mutations,
-            impact_types=impact_types,
-            output_format=output_format,
-            min_length=min_length,
-            max_length=max_length,
+        dataset = (
+            await protein_generator.create_protein_sequence_dataset_with_mutations(
+                gene_list=gene_names,
+                preferred_transcripts=preferred_transcripts,
+                include_mutations=include_mutations,
+                impact_types=impact_types,
+                output_format=output_format,
+                min_length=min_length,
+                max_length=max_length,
+            )
         )
     else:
         # Standard mode without mutations
@@ -165,7 +171,9 @@ async def main(
     end_time = datetime.now()
     duration = end_time - start_time
 
-    print(f"\n  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(
+        f"\n  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
 
 if __name__ == "__main__":
@@ -195,26 +203,26 @@ if __name__ == "__main__":
         help="Path to file containing preferred transcript IDs",
     )
     parser.add_argument(
-        "--include-canonical", 
-        action="store_true", 
+        "--include-canonical",
+        action="store_true",
         default=True,
-        help="Include canonical sequences in output"
+        help="Include canonical sequences in output",
     )
     parser.add_argument(
-        "--include-mutations", 
-        action="store_true", 
-        help="Include mutation variants in output"
+        "--include-mutations",
+        action="store_true",
+        help="Include mutation variants in output",
     )
     parser.add_argument(
         "--impact-types",
         nargs="+",
         default=None,
-        help="Mutation impact types to include (space-separated)"
+        help="Mutation impact types to include (space-separated)",
     )
     parser.add_argument(
         "--pairs-only",
         action="store_true",
-        help="Only include canonical/truncated pairs where truncation affects the transcript"
+        help="Only include canonical/truncated pairs where truncation affects the transcript",
     )
     parser.add_argument(
         "--min-length", type=int, default=10, help="Minimum protein length"
@@ -226,9 +234,7 @@ if __name__ == "__main__":
         "--format", default="fasta,csv", help="Output format: fasta, csv, or fasta,csv"
     )
     parser.add_argument(
-        "--debug", 
-        action="store_true", 
-        help="Enable detailed debug output"
+        "--debug", action="store_true", help="Enable detailed debug output"
     )
 
     args = parser.parse_args()

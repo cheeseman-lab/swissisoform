@@ -611,3 +611,46 @@ def load_preferred_transcripts(file_path: str) -> set:
         # Strip whitespace and ignore empty lines
         transcripts = {line.strip() for line in f if line.strip()}
     return transcripts
+
+
+def subset_gene_list(
+    gene_list_path: Union[str, Path],
+    subset_genes: List[str] = [
+        "AKR7A2",
+        "ALDH9A1",
+        "C15orf40",
+        "CHCHD1",
+        "CMPK1",
+        "ERGIC3",
+        "FAAH2",
+        "FH",
+        "GADD45GIP1",
+        "GARS1",
+        "GLRX2",
+        "GSR",
+        "LAGE3",
+        "MYG1",
+        "NAXE",
+        "NTHL1",
+        "PCBD2",
+        "PNPO",
+        "PPA2",
+        "REXO2",
+        "TRNT1",
+        "UXS1",
+    ],
+) -> List[str]:
+    """Subset a gene list to only include specified genes.
+
+    Args:
+        gene_list_path: Path to the file containing the full gene list
+        subset_genes: List of gene names to include in the subset (defaults to a predefined list)
+
+    Returns:
+        List of genes from the full list that are in the subset
+    """
+    full_gene_list = parse_gene_list(gene_list_path)
+    subset_set = set(subset_genes)
+    subsetted_genes = [gene for gene in full_gene_list if gene in subset_set]
+    print(f"Subsetted to {len(subsetted_genes)} genes from {len(full_gene_list)} total")
+    return subsetted_genes

@@ -302,7 +302,9 @@ class TruncatedProteinGenerator:
             # Ensure length is divisible by 3
             remainder = len(coding_sequence) % 3
             if remainder > 0:
-                coding_sequence = coding_sequence[remainder:]  # Remove from beginning due to BED intersect issues            
+                coding_sequence = coding_sequence[
+                    remainder:
+                ]  # Remove from beginning due to BED intersect issues
 
             protein = str(Seq(coding_sequence).translate())
         else:
@@ -408,21 +410,21 @@ class TruncatedProteinGenerator:
 
     def _parse_hgvs_to_alleles(self, hgvsc: str) -> Tuple[Optional[str], Optional[str]]:
         """Parse HGVS coding notation to extract reference and alternate alleles."""
-        if not hgvsc or pd.isna(hgvsc) or str(hgvsc) == 'nan':
+        if not hgvsc or pd.isna(hgvsc) or str(hgvsc) == "nan":
             return None, None
-            
+
         hgvsc = str(hgvsc).strip()
-        
+
         # Handle simple substitutions: c.76C>T, c.52C>T, etc.
-        if '>' in hgvsc:
+        if ">" in hgvsc:
             try:
-                parts = hgvsc.split('>')
+                parts = hgvsc.split(">")
                 if len(parts) == 2:
                     left_part = parts[0].strip()
                     alt_allele = parts[1].strip()
-                    
+
                     # Extract reference allele: c.76C -> C
-                    match = re.search(r'[ATCG]$', left_part, re.IGNORECASE)
+                    match = re.search(r"[ATCG]$", left_part, re.IGNORECASE)
                     if match:
                         ref_allele = match.group(0).upper()
                         alt_allele = alt_allele.upper()
@@ -430,87 +432,96 @@ class TruncatedProteinGenerator:
             except Exception as e:
                 self._debug_print(f"Error parsing substitution HGVS '{hgvsc}': {e}")
                 return None, None
-                    
+
         # Handle deletions, insertions, etc. (for future expansion)
-        elif 'del' in hgvsc.lower():
+        elif "del" in hgvsc.lower():
             self._debug_print(f"Deletion mutations not yet supported: {hgvsc}")
             return None, None
-        elif 'ins' in hgvsc.lower():
+        elif "ins" in hgvsc.lower():
             self._debug_print(f"Insertion mutations not yet supported: {hgvsc}")
             return None, None
-            
+
         self._debug_print(f"Could not parse HGVS notation: {hgvsc}")
         return None, None
 
-    def _apply_mutation_to_canonical_sequence(self, transcript_id: str, 
-                                            genomic_pos: int, 
-                                            ref_allele: str, 
-                                            alt_allele: str) -> Optional[str]:
+    def _apply_mutation_to_canonical_sequence(
+        self, transcript_id: str, genomic_pos: int, ref_allele: str, alt_allele: str
+    ) -> Optional[str]:
         """Apply mutation to canonical coding sequence using validated genomic position."""
-        self._debug_print(f"Applying mutation {ref_allele}>{alt_allele} at position {genomic_pos}")
-        
+        self._debug_print(
+            f"Applying mutation {ref_allele}>{alt_allele} at position {genomic_pos}"
+        )
+
         # Get the original canonical protein result
         canonical_result = self.extract_canonical_protein(transcript_id)
         if not canonical_result:
             self._debug_print(f"Could not extract canonical protein")
             return None
-        
-        original_coding_sequence = canonical_result['coding_sequence']
-        strand = canonical_result['strand']
-        
+
+        original_coding_sequence = canonical_result["coding_sequence"]
+        strand = canonical_result["strand"]
+
         # Get transcript features to map genomic position to coding sequence position
         features = self.genome.get_transcript_features(transcript_id)
-        transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
-        
+        transcript_data = self.genome.get_transcript_features_with_sequence(
+            transcript_id
+        )
+
         if not transcript_data:
             return None
-        
+
         chromosome = transcript_data["sequence"]["chromosome"]
-        
+
         # Validate reference allele at genomic position
-        actual_base = self.genome.get_sequence(chromosome, genomic_pos, genomic_pos, "+")
+        actual_base = self.genome.get_sequence(
+            chromosome, genomic_pos, genomic_pos, "+"
+        )
         actual_base = str(actual_base).upper()
-        
+
         # Convert HGVS alleles to genomic coordinates for validation
         if strand == "-":
-            complement_map = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
+            complement_map = {"A": "T", "T": "A", "G": "C", "C": "G"}
             genomic_ref_allele = complement_map.get(ref_allele, ref_allele)
             genomic_alt_allele = complement_map.get(alt_allele, alt_allele)
         else:
             genomic_ref_allele = ref_allele
             genomic_alt_allele = alt_allele
-        
+
         if actual_base != genomic_ref_allele.upper():
-            self._debug_print(f"Reference mismatch at {genomic_pos}: expected {genomic_ref_allele}, found {actual_base}")
+            self._debug_print(
+                f"Reference mismatch at {genomic_pos}: expected {genomic_ref_allele}, found {actual_base}"
+            )
             return None
-        
+
         # Map genomic position to coding sequence position
         start_codons = features[features["feature_type"] == "start_codon"]
         if start_codons.empty:
             return None
-        
+
         start_codon_start = start_codons.iloc[0]["start"]
         cds_regions = features[features["feature_type"] == "CDS"].copy()
-        
+
         if cds_regions.empty:
             return None
-        
+
         # Sort CDS regions
         if strand == "+":
-            cds_regions = cds_regions.sort_values('start')
+            cds_regions = cds_regions.sort_values("start")
         else:
-            cds_regions = cds_regions.sort_values('start', ascending=False)
-        
+            cds_regions = cds_regions.sort_values("start", ascending=False)
+
         # Find which CDS contains our mutation and the position within the coding sequence
         coding_pos = 0
         found_position = False
-        
+
         for _, cds in cds_regions.iterrows():
             if cds["start"] <= genomic_pos <= cds["end"]:
                 # Found the CDS containing our mutation
                 if strand == "+":
                     # For positive strand
-                    if cds["start"] >= start_codon_start:  # Only count CDS after start codon
+                    if (
+                        cds["start"] >= start_codon_start
+                    ):  # Only count CDS after start codon
                         offset_in_cds = genomic_pos - cds["start"]
                         final_coding_pos = coding_pos + offset_in_cds
                         found_position = True
@@ -521,7 +532,7 @@ class TruncatedProteinGenerator:
                     final_coding_pos = coding_pos + offset_from_end
                     found_position = True
                     break
-            
+
             # Add length of this CDS to coding position counter
             if strand == "+":
                 if cds["end"] >= start_codon_start:
@@ -531,174 +542,204 @@ class TruncatedProteinGenerator:
                         coding_pos += cds["end"] - cds["start"] + 1
             else:
                 coding_pos += cds["end"] - cds["start"] + 1
-        
+
         if not found_position:
-            self._debug_print(f"Could not map genomic position {genomic_pos} to coding sequence position")
+            self._debug_print(
+                f"Could not map genomic position {genomic_pos} to coding sequence position"
+            )
             return None
-        
-        self._debug_print(f"Mapped genomic position {genomic_pos} to coding position {final_coding_pos}")
-        
+
+        self._debug_print(
+            f"Mapped genomic position {genomic_pos} to coding position {final_coding_pos}"
+        )
+
         # Apply the mutation to the coding sequence
         if final_coding_pos >= len(original_coding_sequence):
-            self._debug_print(f"Coding position {final_coding_pos} is beyond sequence length {len(original_coding_sequence)}")
+            self._debug_print(
+                f"Coding position {final_coding_pos} is beyond sequence length {len(original_coding_sequence)}"
+            )
             return None
-        
+
         # Verify the reference matches what we expect in the coding sequence
         current_base = original_coding_sequence[final_coding_pos]
-        
+
         if current_base.upper() != ref_allele.upper():
-            self._debug_print(f"Reference mismatch in coding sequence at pos {final_coding_pos}: expected {ref_allele}, found {current_base}")
+            self._debug_print(
+                f"Reference mismatch in coding sequence at pos {final_coding_pos}: expected {ref_allele}, found {current_base}"
+            )
             return None
-        
+
         # Apply the mutation
         mutated_coding_sequence = (
-            original_coding_sequence[:final_coding_pos] + 
-            alt_allele.upper() + 
-            original_coding_sequence[final_coding_pos + 1:]
+            original_coding_sequence[:final_coding_pos]
+            + alt_allele.upper()
+            + original_coding_sequence[final_coding_pos + 1 :]
         )
-        
-        self._debug_print(f"Applied mutation {ref_allele}>{alt_allele} at coding position {final_coding_pos}")
-        
+
+        self._debug_print(
+            f"Applied mutation {ref_allele}>{alt_allele} at coding position {final_coding_pos}"
+        )
+
         return mutated_coding_sequence
 
-    async def _get_mutations_in_region(self, gene_name: str, start: int, end: int, 
-                                      impact_types: List[str] = None) -> pd.DataFrame:
+    async def _get_mutations_in_region(
+        self, gene_name: str, start: int, end: int, impact_types: List[str] = None
+    ) -> pd.DataFrame:
         """Get mutations within a specific genomic region."""
         self._debug_print(f"Fetching mutations for {gene_name} in region {start}-{end}")
-        
+
         if not self.mutation_handler:
             self._debug_print("No mutation handler available")
             return pd.DataFrame()
-        
+
         # Create region features for mutation handler
-        region_features = pd.DataFrame([{
-            'start': start,
-            'end': end,
-            'chromosome': 'chr1',  # Will be corrected by mutation handler
-            'name': f'region_{start}_{end}'
-        }])
-        
+        region_features = pd.DataFrame(
+            [
+                {
+                    "start": start,
+                    "end": end,
+                    "chromosome": "chr1",  # Will be corrected by mutation handler
+                    "name": f"region_{start}_{end}",
+                }
+            ]
+        )
+
         # Get mutations in this region
         mutations = await self.mutation_handler.get_visualization_ready_mutations(
-            gene_name=gene_name,
-            alt_features=region_features,
-            sources=['clinvar']
+            gene_name=gene_name, alt_features=region_features, sources=["clinvar"]
         )
-        
+
         if mutations is None or mutations.empty:
             self._debug_print(f"No mutations found in region")
             return pd.DataFrame()
-        
+
         # Filter to only missense variants for now
-        mutations = mutations[mutations['impact'] == 'missense variant'].copy()
+        mutations = mutations[mutations["impact"] == "missense variant"].copy()
         # Filter by impact types if specified (but only missense variants will remain)
         if impact_types:
-            mutations = mutations[mutations['impact'].isin(impact_types)]
-            
-        self._debug_print(f"Class is only equipped to handle missense variants, temporarily.")
+            mutations = mutations[mutations["impact"].isin(impact_types)]
+
+        self._debug_print(
+            f"Class is only equipped to handle missense variants, temporarily."
+        )
         return mutations
 
     async def extract_gene_proteins_with_mutations(
-        self, 
-        gene_name: str, 
+        self,
+        gene_name: str,
         preferred_transcripts: Optional[Set[str]] = None,
         include_mutations: bool = True,
-        impact_types: List[str] = None
+        impact_types: List[str] = None,
     ) -> Optional[List[Dict]]:
         """Extract proteins for all transcript-truncation pairs with optional mutation integration.
-        
+
         Args:
             gene_name: Name of the gene
             preferred_transcripts: Set of preferred transcript IDs
             include_mutations: Whether to include mutation variants
             impact_types: Mutation impact types to include
-            
+
         Returns:
             List of enhanced protein pair dictionaries
         """
-        self._debug_print(f"Processing gene {gene_name} with mutations={include_mutations}")
-        
+        self._debug_print(
+            f"Processing gene {gene_name} with mutations={include_mutations}"
+        )
+
         # Get base pairs using the same logic as extract_gene_proteins
         base_pairs = self.extract_gene_proteins(gene_name, preferred_transcripts)
         if not base_pairs:
             self._debug_print(f"No base pairs found for {gene_name}")
             return None
-            
+
         enhanced_pairs = []
-        
+
         for pair in base_pairs:
             enhanced_pair = {
-                'gene_name': gene_name,
-                'transcript_id': pair['transcript_id'],
-                'truncation_id': pair['truncation_id'],
-                'canonical': pair['canonical'],
-                'truncated_base': pair['truncated'],
-                'truncated_mutations': []
+                "gene_name": gene_name,
+                "transcript_id": pair["transcript_id"],
+                "truncation_id": pair["truncation_id"],
+                "canonical": pair["canonical"],
+                "truncated_base": pair["truncated"],
+                "truncated_mutations": [],
             }
-            
+
             if include_mutations and self.mutation_handler:
                 # Get mutations in this truncation region
-                truncation_feature = pair['truncation']
+                truncation_feature = pair["truncation"]
                 mutations = await self._get_mutations_in_region(
-                    gene_name, 
-                    truncation_feature['start'], 
-                    truncation_feature['end'],
-                    impact_types
+                    gene_name,
+                    truncation_feature["start"],
+                    truncation_feature["end"],
+                    impact_types,
                 )
-                
+
                 if not mutations.empty:
-                    self._debug_print(f"Found {len(mutations)} mutations in truncation region")
-                    
+                    self._debug_print(
+                        f"Found {len(mutations)} mutations in truncation region"
+                    )
+
                     # Generate mutation variants applied to canonical sequence
                     for _, mutation in mutations.iterrows():
                         try:
                             # Parse mutation
-                            genomic_pos = int(mutation['position'])
-                            hgvsc = str(mutation.get('hgvsc', ''))
-                            hgvsp = str(mutation.get('hgvsp', ''))
-                            
+                            genomic_pos = int(mutation["position"])
+                            hgvsc = str(mutation.get("hgvsc", ""))
+                            hgvsp = str(mutation.get("hgvsp", ""))
+
                             # Parse HGVS to get alleles
                             ref_allele, alt_allele = self._parse_hgvs_to_alleles(hgvsc)
                             if not ref_allele or not alt_allele:
                                 continue
-                            
+
                             # Apply mutation to canonical sequence
-                            mutated_coding_sequence = self._apply_mutation_to_canonical_sequence(
-                                pair['transcript_id'], genomic_pos, ref_allele, alt_allele
+                            mutated_coding_sequence = (
+                                self._apply_mutation_to_canonical_sequence(
+                                    pair["transcript_id"],
+                                    genomic_pos,
+                                    ref_allele,
+                                    alt_allele,
+                                )
                             )
-                            
+
                             if mutated_coding_sequence:
                                 # Translate mutated sequence
                                 if len(mutated_coding_sequence) >= 3:
-                                    mutated_protein = str(Seq(mutated_coding_sequence).translate())
+                                    mutated_protein = str(
+                                        Seq(mutated_coding_sequence).translate()
+                                    )
                                 else:
                                     mutated_protein = ""
-                                
+
                                 mutation_result = {
-                                    'coding_sequence': mutated_coding_sequence,
-                                    'protein': mutated_protein,
-                                    'transcript_id': pair['transcript_id'],
-                                    'mutation': {
-                                        'position': genomic_pos,
-                                        'reference': ref_allele,
-                                        'alternate': alt_allele,
-                                        'hgvsc': hgvsc,
-                                        'hgvsp': hgvsp,
-                                        'impact': mutation.get('impact', ''),
-                                        'variant_id': mutation.get('variant_id', ''),
-                                        'source': mutation.get('source', '')
-                                    }
+                                    "coding_sequence": mutated_coding_sequence,
+                                    "protein": mutated_protein,
+                                    "transcript_id": pair["transcript_id"],
+                                    "mutation": {
+                                        "position": genomic_pos,
+                                        "reference": ref_allele,
+                                        "alternate": alt_allele,
+                                        "hgvsc": hgvsc,
+                                        "hgvsp": hgvsp,
+                                        "impact": mutation.get("impact", ""),
+                                        "variant_id": mutation.get("variant_id", ""),
+                                        "source": mutation.get("source", ""),
+                                    },
                                 }
-                                
-                                enhanced_pair['truncated_mutations'].append(mutation_result)
-                                self._debug_print(f"Successfully created mutation variant")
-                                
+
+                                enhanced_pair["truncated_mutations"].append(
+                                    mutation_result
+                                )
+                                self._debug_print(
+                                    f"Successfully created mutation variant"
+                                )
+
                         except Exception as e:
                             self._debug_print(f"Error creating mutation variant: {e}")
                             continue
-                            
+
             enhanced_pairs.append(enhanced_pair)
-            
+
         return enhanced_pairs
 
     # ===== DATASET GENERATION METHODS =====
@@ -824,24 +865,29 @@ class TruncatedProteinGenerator:
         # Process each gene
         for gene_idx, gene_name in enumerate(gene_list, 1):
             try:
-                self._debug_print(f"Processing gene {gene_idx}/{len(gene_list)}: {gene_name}")
-                
+                self._debug_print(
+                    f"Processing gene {gene_idx}/{len(gene_list)}: {gene_name}"
+                )
+
                 if include_mutations and self.mutation_handler:
                     # Use mutation-enhanced extraction
                     enhanced_pairs = await self.extract_gene_proteins_with_mutations(
-                        gene_name, preferred_transcripts, include_mutations, impact_types
+                        gene_name,
+                        preferred_transcripts,
+                        include_mutations,
+                        impact_types,
                     )
-                    
+
                     if not enhanced_pairs:
                         skipped_genes.append(gene_name)
                         continue
-                    
+
                     for pair in enhanced_pairs:
-                        canonical_protein = pair['canonical']['protein']
-                        truncated_protein = pair['truncated_base']['protein']
-                        transcript_id = pair['transcript_id']
-                        truncation_id = pair['truncation_id']
-                        
+                        canonical_protein = pair["canonical"]["protein"]
+                        truncated_protein = pair["truncated_base"]["protein"]
+                        transcript_id = pair["transcript_id"]
+                        truncation_id = pair["truncation_id"]
+
                         # Check length constraints
                         if not (min_length <= len(canonical_protein) <= max_length):
                             continue
@@ -849,63 +895,74 @@ class TruncatedProteinGenerator:
                             continue
                         if truncated_protein == canonical_protein:
                             continue
-                        
+
                         # Add canonical sequence
-                        all_sequences.append({
-                            "gene": gene_name,
-                            "transcript_id": transcript_id,
-                            "variant_id": "canonical",
-                            "sequence": canonical_protein,
-                            "length": len(canonical_protein),
-                            "variant_type": "canonical",
-                        })
-                        
+                        all_sequences.append(
+                            {
+                                "gene": gene_name,
+                                "transcript_id": transcript_id,
+                                "variant_id": "canonical",
+                                "sequence": canonical_protein,
+                                "length": len(canonical_protein),
+                                "variant_type": "canonical",
+                            }
+                        )
+
                         # Add base truncated sequence
-                        all_sequences.append({
-                            "gene": gene_name,
-                            "transcript_id": transcript_id,
-                            "variant_id": truncation_id,
-                            "sequence": truncated_protein,
-                            "length": len(truncated_protein),
-                            "variant_type": "truncated",
-                        })
-                        
+                        all_sequences.append(
+                            {
+                                "gene": gene_name,
+                                "transcript_id": transcript_id,
+                                "variant_id": truncation_id,
+                                "sequence": truncated_protein,
+                                "length": len(truncated_protein),
+                                "variant_type": "truncated",
+                            }
+                        )
+
                         # Add mutation variants
-                        for mut_idx, mut_variant in enumerate(pair['truncated_mutations']):
-                            mutated_protein = mut_variant['protein']
-                            
-                            if (min_length <= len(mutated_protein) <= max_length and 
-                                mutated_protein != canonical_protein):
-                                
-                                mut_info = mut_variant['mutation']
+                        for mut_idx, mut_variant in enumerate(
+                            pair["truncated_mutations"]
+                        ):
+                            mutated_protein = mut_variant["protein"]
+
+                            if (
+                                min_length <= len(mutated_protein) <= max_length
+                                and mutated_protein != canonical_protein
+                            ):
+                                mut_info = mut_variant["mutation"]
                                 variant_id = f"{truncation_id}_mut_{mut_info['position']}_{mut_info['reference']}>{mut_info['alternate']}"
-                                
-                                all_sequences.append({
-                                    "gene": gene_name,
-                                    "transcript_id": transcript_id,
-                                    "variant_id": variant_id,
-                                    "sequence": mutated_protein,
-                                    "length": len(mutated_protein),
-                                    "variant_type": "truncated_mutated",
-                                    "mutation_position": mut_info['position'],
-                                    "mutation_change": f"{mut_info['reference']}>{mut_info['alternate']}",
-                                    "mutation_impact": mut_info['impact'],
-                                    "mutation_source": mut_info['source'],
-                                })
+
+                                all_sequences.append(
+                                    {
+                                        "gene": gene_name,
+                                        "transcript_id": transcript_id,
+                                        "variant_id": variant_id,
+                                        "sequence": mutated_protein,
+                                        "length": len(mutated_protein),
+                                        "variant_type": "truncated_mutated",
+                                        "mutation_position": mut_info["position"],
+                                        "mutation_change": f"{mut_info['reference']}>{mut_info['alternate']}",
+                                        "mutation_impact": mut_info["impact"],
+                                        "mutation_source": mut_info["source"],
+                                    }
+                                )
                 else:
                     # Use standard extraction without mutations
-                    gene_pairs = self.extract_gene_proteins(gene_name, preferred_transcripts)
-                    
+                    gene_pairs = self.extract_gene_proteins(
+                        gene_name, preferred_transcripts
+                    )
+
                     if not gene_pairs:
                         skipped_genes.append(gene_name)
                         continue
-                    
+
                     for pair in gene_pairs:
-                        canonical_protein = pair['canonical']['protein']
-                        truncated_protein = pair['truncated']['protein']
-                        transcript_id = pair['transcript_id']
-                        truncation_id = pair['truncation_id']
-                        
+                        canonical_protein = pair["canonical"]["protein"]
+                        truncated_protein = pair["truncated"]["protein"]
+                        transcript_id = pair["transcript_id"]
+                        truncation_id = pair["truncation_id"]
+
                         # Check length constraints
                         if not (min_length <= len(canonical_protein) <= max_length):
                             continue
@@ -913,29 +970,33 @@ class TruncatedProteinGenerator:
                             continue
                         if truncated_protein == canonical_protein:
                             continue
-                        
+
                         # Add canonical sequence
-                        all_sequences.append({
-                            "gene": gene_name,
-                            "transcript_id": transcript_id,
-                            "variant_id": "canonical",
-                            "sequence": canonical_protein,
-                            "length": len(canonical_protein),
-                            "variant_type": "canonical",
-                        })
-                        
+                        all_sequences.append(
+                            {
+                                "gene": gene_name,
+                                "transcript_id": transcript_id,
+                                "variant_id": "canonical",
+                                "sequence": canonical_protein,
+                                "length": len(canonical_protein),
+                                "variant_type": "canonical",
+                            }
+                        )
+
                         # Add truncated sequence
-                        all_sequences.append({
-                            "gene": gene_name,
-                            "transcript_id": transcript_id,
-                            "variant_id": truncation_id,
-                            "sequence": truncated_protein,
-                            "length": len(truncated_protein),
-                            "variant_type": "truncated",
-                        })
+                        all_sequences.append(
+                            {
+                                "gene": gene_name,
+                                "transcript_id": transcript_id,
+                                "variant_id": truncation_id,
+                                "sequence": truncated_protein,
+                                "length": len(truncated_protein),
+                                "variant_type": "truncated",
+                            }
+                        )
 
                 successful_genes += 1
-                
+
             except Exception as e:
                 self._debug_print(f"Error processing gene {gene_name}: {str(e)}")
                 skipped_genes.append(gene_name)
@@ -951,8 +1012,9 @@ class TruncatedProteinGenerator:
                 self._save_dataset_csv(dataset, include_mutations)
 
         # Print summary
-        self._print_dataset_summary(dataset, successful_genes, len(gene_list), 
-                                   skipped_genes, include_mutations)
+        self._print_dataset_summary(
+            dataset, successful_genes, len(gene_list), skipped_genes, include_mutations
+        )
 
         return dataset
 
@@ -1008,24 +1070,28 @@ class TruncatedProteinGenerator:
                         continue
 
                     # Add canonical sequence
-                    all_sequences.append({
-                        "gene": gene_name,
-                        "transcript_id": transcript_id,
-                        "variant_id": "canonical",
-                        "sequence": canonical_protein,
-                        "length": len(canonical_protein),
-                        "is_truncated": 0,
-                    })
+                    all_sequences.append(
+                        {
+                            "gene": gene_name,
+                            "transcript_id": transcript_id,
+                            "variant_id": "canonical",
+                            "sequence": canonical_protein,
+                            "length": len(canonical_protein),
+                            "is_truncated": 0,
+                        }
+                    )
 
                     # Add truncated sequence
-                    all_sequences.append({
-                        "gene": gene_name,
-                        "transcript_id": transcript_id,
-                        "variant_id": truncation_id,
-                        "sequence": truncated_protein,
-                        "length": len(truncated_protein),
-                        "is_truncated": 1,
-                    })
+                    all_sequences.append(
+                        {
+                            "gene": gene_name,
+                            "transcript_id": transcript_id,
+                            "variant_id": truncation_id,
+                            "sequence": truncated_protein,
+                            "length": len(truncated_protein),
+                            "is_truncated": 1,
+                        }
+                    )
 
                     total_pairs += 1
 
@@ -1045,9 +1111,13 @@ class TruncatedProteinGenerator:
                 output_file = self.output_dir / "protein_sequences_pairs.csv"
                 dataset.to_csv(output_file, index=False)
 
-        print(f"Generated {total_pairs} transcript-truncation pairs from {successful_genes}/{len(gene_list)} genes")
+        print(
+            f"Generated {total_pairs} transcript-truncation pairs from {successful_genes}/{len(gene_list)} genes"
+        )
         if skipped_genes:
-            print(f"Skipped {len(skipped_genes)} genes due to missing data or constraints")
+            print(
+                f"Skipped {len(skipped_genes)} genes due to missing data or constraints"
+            )
 
         return dataset
 
@@ -1103,30 +1173,36 @@ class TruncatedProteinGenerator:
             for transcript_id, variants in sequences.items():
                 # Add canonical sequence if requested
                 if not exclude_canonical and "canonical" in variants:
-                    rows.append({
-                        "gene": gene_name,
-                        "transcript_id": transcript_id,
-                        "variant_id": "canonical",
-                        "sequence": variants["canonical"],
-                    })
+                    rows.append(
+                        {
+                            "gene": gene_name,
+                            "transcript_id": transcript_id,
+                            "variant_id": "canonical",
+                            "sequence": variants["canonical"],
+                        }
+                    )
 
                 # Add truncated sequences
                 for variant_id, seq in variants.items():
                     if variant_id == "canonical":
                         continue
 
-                    rows.append({
-                        "gene": gene_name,
-                        "transcript_id": transcript_id,
-                        "variant_id": variant_id,
-                        "sequence": seq,
-                    })
+                    rows.append(
+                        {
+                            "gene": gene_name,
+                            "transcript_id": transcript_id,
+                            "variant_id": variant_id,
+                            "sequence": seq,
+                        }
+                    )
 
             # Write to file
             output_file = gene_dir / f"{gene_name}_protein_sequences.csv"
             pd.DataFrame(rows).to_csv(output_file, index=False)
 
-    def _save_dataset_fasta(self, dataset: pd.DataFrame, include_mutations: bool = False) -> None:
+    def _save_dataset_fasta(
+        self, dataset: pd.DataFrame, include_mutations: bool = False
+    ) -> None:
         """Save dataset as FASTA file."""
         records = []
 
@@ -1134,8 +1210,11 @@ class TruncatedProteinGenerator:
             if include_mutations and "variant_type" in row:
                 record_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
                 description = f"{row['variant_type']} protein"
-                
-                if row['variant_type'] == 'truncated_mutated' and 'mutation_change' in row:
+
+                if (
+                    row["variant_type"] == "truncated_mutated"
+                    and "mutation_change" in row
+                ):
                     description += f" with mutation {row['mutation_change']}"
             else:
                 record_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
@@ -1149,31 +1228,40 @@ class TruncatedProteinGenerator:
             output_file = self.output_dir / "protein_sequences_with_mutations.fasta"
         else:
             output_file = self.output_dir / "protein_sequences.fasta"
-            
+
         SeqIO.write(records, output_file, "fasta")
 
-    def _save_dataset_csv(self, dataset: pd.DataFrame, include_mutations: bool = False) -> None:
+    def _save_dataset_csv(
+        self, dataset: pd.DataFrame, include_mutations: bool = False
+    ) -> None:
         """Save dataset as CSV file."""
         if include_mutations:
             output_file = self.output_dir / "protein_sequences_with_mutations.csv"
         else:
             output_file = self.output_dir / "protein_sequences.csv"
-            
+
         dataset.to_csv(output_file, index=False)
 
-    def _print_dataset_summary(self, dataset: pd.DataFrame, successful_genes: int, 
-                             total_genes: int, skipped_genes: List[str], 
-                             include_mutations: bool = False) -> None:
+    def _print_dataset_summary(
+        self,
+        dataset: pd.DataFrame,
+        successful_genes: int,
+        total_genes: int,
+        skipped_genes: List[str],
+        include_mutations: bool = False,
+    ) -> None:
         """Print summary of dataset generation."""
         print(f"\nProtein Sequence Generation Summary:")
         print(f"  ├─ Genes processed successfully: {successful_genes}/{total_genes}")
-        
+
         if not dataset.empty:
             if include_mutations and "variant_type" in dataset.columns:
                 canonical_count = len(dataset[dataset["variant_type"] == "canonical"])
                 truncated_count = len(dataset[dataset["variant_type"] == "truncated"])
-                mutated_count = len(dataset[dataset["variant_type"] == "truncated_mutated"])
-                
+                mutated_count = len(
+                    dataset[dataset["variant_type"] == "truncated_mutated"]
+                )
+
                 print(f"  ├─ Total sequences: {len(dataset)}")
                 print(f"  ├─ Canonical sequences: {canonical_count}")
                 print(f"  ├─ Truncated sequences: {truncated_count}")
@@ -1181,20 +1269,24 @@ class TruncatedProteinGenerator:
             else:
                 truncated_count = len(dataset[dataset.get("is_truncated", 0) == 1])
                 canonical_count = len(dataset[dataset.get("is_truncated", 0) == 0])
-                
+
                 print(f"  ├─ Total sequences: {len(dataset)}")
                 print(f"  ├─ Canonical sequences: {canonical_count}")
                 print(f"  ├─ Truncated sequences: {truncated_count}")
-                
+
             print(f"  ├─ Average sequence length: {dataset['length'].mean():.1f}")
-            print(f"  ├─ Sequence length range: {dataset['length'].min()}-{dataset['length'].max()}")
-            
+            print(
+                f"  ├─ Sequence length range: {dataset['length'].min()}-{dataset['length'].max()}"
+            )
+
             genes_with_data = dataset["gene"].nunique()
             print(f"  └─ Genes with valid sequences: {genes_with_data}/{total_genes}")
         else:
             print("  └─ No valid sequences generated")
-            
+
         if skipped_genes:
-            print(f"\nSkipped genes ({len(skipped_genes)}): {', '.join(skipped_genes[:10])}")
+            print(
+                f"\nSkipped genes ({len(skipped_genes)}): {', '.join(skipped_genes[:10])}"
+            )
             if len(skipped_genes) > 10:
                 print(f"  ... and {len(skipped_genes) - 10} more")
