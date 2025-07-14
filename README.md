@@ -75,8 +75,7 @@ sbatch 4_predict_localization.sh
 **Script:** `1_cleanup_files.sh`  
 **Runtime:** 5-15 minutes  
 **Requirements:** Place your ribosome profiling BED files in `data/ribosome_profiling/`
-- `full_truncations_JL.bed` - All detected truncation sites
-- `selected_truncations_JL.bed` - Curated truncation sites
+- `truncations.bed` - Already 
 
 **Outputs:**
 - Cleaned GTF annotations with updated gene names
@@ -236,7 +235,7 @@ You can run individual pipeline steps for custom analysis:
 python3 analyze_mutations.py gene_list.txt output_dir/ \
   --genome data/genome_data/GRCh38.p7.genome.fa \
   --annotation data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf \
-  --bed data/ribosome_profiling/selected_truncations_JL_cleaned.bed \
+  --bed data/ribosome_profiling/truncations_cleaned.bed \
   --visualize \
   --sources "clinvar" \
   --impact-types "missense variant" "nonsense variant" "frameshift variant"
@@ -269,7 +268,7 @@ genome = GenomeHandler(
 )
 
 alt_isoforms = AlternativeIsoform()
-alt_isoforms.load_bed('data/ribosome_profiling/selected_truncations_JL_cleaned.bed')
+alt_isoforms.load_bed('data/ribosome_profiling/truncations_cleaned.bed')
 
 mutation_handler = MutationHandler()
 preferred_transcripts = load_preferred_transcripts(
@@ -334,7 +333,7 @@ asyncio.run(generate_proteins_with_mutations("NAXE"))
 python3 translate.py gene_list.txt output_dir/ \
   --genome data/genome_data/GRCh38.p7.genome.fa \
   --annotation data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf \
-  --bed data/ribosome_profiling/selected_truncations_JL_cleaned.bed \
+  --bed data/ribosome_profiling/truncations_cleaned.bed \
   --include-canonical \
   --include-mutations \
   --impact-types "missense variant" "frameshift variant" \
@@ -374,6 +373,4 @@ MIT License - see LICENSE file for details.
 
 ## Support
 
-For questions, issues, or contributions:
-- Open an issue on GitHub
-- Check SLURM job logs in `out/` directory for detailed error messa
+For questions, issues, or contributions please open an issue on GitHub.

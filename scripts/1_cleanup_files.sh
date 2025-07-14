@@ -54,8 +54,7 @@ if [ "$missing_riboprof" = true ]; then
     echo ""
     echo "❌ Missing ribosome profiling BED files!"
     echo "Please place your experimental data files in $RIBOPROF_DIR:"
-    echo "  - full_truncations_JL.bed (all detected truncation sites)"
-    echo "  - selected_truncations_JL.bed (curated truncation sites)"
+    echo "  - truncations.bed (all detected truncation sites)"
     exit 1
 fi
 
@@ -80,8 +79,7 @@ echo "Verifying cleanup outputs..."
 
 expected_outputs=(
     "$GENOME_DIR/gencode.v25.annotation.ensembl_cleaned.gtf"
-    "$RIBOPROF_DIR/full_truncations_JL_cleaned.bed"
-    "$RIBOPROF_DIR/selected_truncations_JL_cleaned.bed"
+    "$RIBOPROF_DIR/truncations_cleaned.bed"
     "$RIBOPROF_DIR/gene_list.txt"
     "$RIBOPROF_DIR/gene_list_reduced.txt"
 )
