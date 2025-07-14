@@ -217,8 +217,6 @@ class TruncatedProteinGenerator:
         truncation_start = truncation_feature["start"]
         truncation_end = truncation_feature["end"]
 
-        print(f"Truncation start: {truncation_start}, end: {truncation_end}")
-
         # Find the original stop codon (our endpoint)
         stop_codons = features[features["feature_type"] == "stop_codon"]
 
@@ -238,7 +236,6 @@ class TruncatedProteinGenerator:
 
         # Get CDS regions that overlap with our new range
         cds_regions = features[features["feature_type"] == "CDS"].copy()
-        print("CDS regions:", cds_regions)
         overlapping_cds = []
 
         for _, cds in cds_regions.iterrows():
@@ -263,8 +260,6 @@ class TruncatedProteinGenerator:
                     max(cds_start, extract_end) if extract_end else cds_start
                 )
                 effective_end = min(cds_end, alt_start_pos)
-
-            print(effective_end, effective_start)
             
             # Handle the length check with special case for single nucleotide CDS
             if effective_end > effective_start:
@@ -300,15 +295,12 @@ class TruncatedProteinGenerator:
             cds_seq = self.genome.get_sequence(
                 chromosome, cds["start"], cds["end"], strand
             )
-            print(f"Extracting CDS from {cds['start']} to {cds['end']} on {chromosome} ({strand})")
-            print(f"CDS length: {cds['length']}")
             coding_sequence += str(cds_seq)
 
         # Translate the sequence directly
         if len(coding_sequence) >= 3:
             # Ensure length is divisible by 3
             remainder = len(coding_sequence) % 3
-            print(f"Truncated coding sequence length: {len(coding_sequence)} (remainder: {remainder})")
             if remainder > 0:
                 coding_sequence = coding_sequence[remainder:]  # Remove from beginning due to BED intersect issues            
 
@@ -597,10 +589,15 @@ class TruncatedProteinGenerator:
             self._debug_print(f"No mutations found in region")
             return pd.DataFrame()
         
-        # Filter by impact types if specified
+        # Filter to only missense variants for now
+        mutations = mutations[mutations['impact'] == 'missense variant'].copy()
+
+        # Filter by impact types if specified (but only missense variants will remain)
         if impact_types:
             mutations = mutations[mutations['impact'].isin(impact_types)]
             
+        self._debug_print(f"Class is only equipped to handle missense variants, temporarily.")
+
         return mutations
 
     async def extract_gene_proteins_with_mutations(
@@ -824,7 +821,7 @@ class TruncatedProteinGenerator:
         skipped_genes = []
 
         if impact_types is None:
-            impact_types = ["missense variant", "nonsense variant", "frameshift variant"]
+            impact_types = ["missense variant"]
 
         # Process each gene
         for gene_idx, gene_name in enumerate(gene_list, 1):
@@ -1054,90 +1051,6 @@ class TruncatedProteinGenerator:
         if skipped_genes:
             print(f"Skipped {len(skipped_genes)} genes due to missing data or constraints")
 
-        return dataset
-
-    def create_protein_sequence_dataset(
-        self,
-        gene_list: List[str],
-        preferred_transcripts: Optional[Set[str]] = None,
-        output_format: str = "fasta,csv",
-        include_canonical: bool = True,
-        min_length: int = 50,
-        max_length: int = 1000,
-    ) -> pd.DataFrame:
-        """Create a dataset of protein sequences from canonical and truncated transcripts.
-
-        Args:
-            gene_list: List of gene names to process
-            preferred_transcripts: Set of preferred transcript IDs
-            output_format: Format to save sequences ('fasta', 'csv', or both)
-            include_canonical: Whether to include canonical transcripts as examples
-            min_length: Minimum protein length to include
-            max_length: Maximum protein length to include
-
-        Returns:
-            DataFrame with the dataset information
-        """
-        all_sequences = []
-        successful_genes = 0
-
-        # Process each gene
-        for gene_idx, gene_name in enumerate(gene_list, 1):
-            # Generate sequences
-            sequences = self.generate_protein_variants(
-                gene_name=gene_name,
-                preferred_transcripts=preferred_transcripts,
-                output_format=None,  # Don't save individual files
-            )
-
-            if not sequences:
-                continue
-
-            successful_genes += 1
-
-            # Flatten sequence dictionary for dataset
-            for transcript_id, variants in sequences.items():
-                # Add canonical sequence if requested
-                if include_canonical and "canonical" in variants:
-                    canonical_seq = variants["canonical"]
-
-                    if min_length <= len(canonical_seq) <= max_length:
-                        all_sequences.append({
-                            "gene": gene_name,
-                            "transcript_id": transcript_id,
-                            "variant_id": "canonical",
-                            "sequence": canonical_seq,
-                            "length": len(canonical_seq),
-                            "is_truncated": 0,
-                        })
-
-                # Add truncated sequences
-                for variant_id, seq in variants.items():
-                    if variant_id == "canonical":
-                        continue
-
-                    if min_length <= len(seq) <= max_length:
-                        all_sequences.append({
-                            "gene": gene_name,
-                            "transcript_id": transcript_id,
-                            "variant_id": variant_id,
-                            "sequence": seq,
-                            "length": len(seq),
-                            "is_truncated": 1,
-                        })
-
-        # Create dataset
-        dataset = pd.DataFrame(all_sequences)
-
-        # Save dataset
-        if not dataset.empty:
-            if "fasta" in output_format.lower():
-                self._save_dataset_fasta(dataset)
-            if "csv" in output_format.lower():
-                output_file = self.output_dir / "protein_sequence_dataset.csv"
-                dataset.to_csv(output_file, index=False)
-
-        print(f"Generated protein dataset from {successful_genes}/{len(gene_list)} genes")
         return dataset
 
     # ===== HELPER METHODS =====
