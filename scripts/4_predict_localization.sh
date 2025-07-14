@@ -94,36 +94,36 @@ for file_info in "${available_files[@]}"; do
     echo "  Input file: $(basename $input_file)"
     
     if [ -f "$input_file" ]; then
-        # Create temporary working directory for this prediction
-        temp_dir="../results/$dataset/localization/temp_$(basename $input_file .fasta)"
-        mkdir -p "$temp_dir"
-        
-        # Copy input file to temp directory (DeepLoc outputs in same dir as input)
-        temp_input="$temp_dir/$(basename $input_file)"
-        cp "$input_file" "$temp_input"
+        # Create descriptive temporary subfolder for this specific run
+        temp_subdir="../results/$dataset/localization/${dataset}_${file_type}_temp"
+        mkdir -p "$temp_subdir"
         
         echo "  Starting DeepLoc Fast mode for $dataset ($file_type) at $(date)"
-        deeploc2 -f "$temp_input" -m Fast -d cuda
+        deeploc2 -f "$input_file" -m Fast -o "$temp_subdir/" -d cuda
+        
+        # Find and move the Fast results file
+        fast_result=$(find "$temp_subdir" -name "results_*.csv" | head -n 1)
+        if [ -n "$fast_result" ] && [ -f "$fast_result" ]; then
+            mv "$fast_result" "../results/$dataset/localization/protein_sequences_${file_type}_Fast_results.csv"
+            echo "  ✓ Moved Fast results to protein_sequences_${file_type}_Fast_results.csv"
+        else
+            echo "  ✗ Fast results not found"
+        fi
         
         echo "  Starting DeepLoc Accurate mode for $dataset ($file_type) at $(date)"
-        deeploc2 -f "$temp_input" -m Accurate -d cuda
+        deeploc2 -f "$input_file" -m Accurate -o "$temp_subdir/" -d cuda
         
-        # Move results to organized location and rename appropriately
-        base_name=$(basename $input_file .fasta)
-        final_dir="../results/$dataset/localization"
-        
-        if [ -f "$temp_dir/${base_name}_results.csv" ]; then
-            mv "$temp_dir/${base_name}_results.csv" "$final_dir/${base_name}_Fast_results.csv"
-            echo "  ✓ Moved Fast results to $final_dir/${base_name}_Fast_results.csv"
+        # Find and move the Accurate results file
+        accurate_result=$(find "$temp_subdir" -name "results_*.csv" | head -n 1)
+        if [ -n "$accurate_result" ] && [ -f "$accurate_result" ]; then
+            mv "$accurate_result" "../results/$dataset/localization/protein_sequences_${file_type}_Accurate_results.csv"
+            echo "  ✓ Moved Accurate results to protein_sequences_${file_type}_Accurate_results.csv"
+        else
+            echo "  ✗ Accurate results not found"
         fi
         
-        if [ -f "$temp_dir/${base_name}_Accurate_results.csv" ]; then
-            mv "$temp_dir/${base_name}_Accurate_results.csv" "$final_dir/${base_name}_Accurate_results.csv"
-            echo "  ✓ Moved Accurate results to $final_dir/${base_name}_Accurate_results.csv"
-        fi
-        
-        # Clean up temp directory
-        rm -rf "$temp_dir"
+        # Clean up temp subfolder
+        rm -rf "$temp_subdir"
         
         echo "  Completed $dataset ($file_type) at $(date)"
     else
@@ -135,66 +135,75 @@ done
 echo ""
 echo "Verifying DeepLoc outputs..."
 
-# Check for all possible output combinations
-expected_outputs=()
-for dataset in "${datasets[@]}"; do
-    for file_type in "pairs" "mutations"; do
-        base_name="protein_sequences_${file_type}"
-        expected_outputs+=("../results/$dataset/localization/${base_name}_Fast_results.csv")
-        expected_outputs+=("../results/$dataset/localization/${base_name}_Accurate_results.csv")
-    done
-done
-
-all_outputs_present=true
+# Check for outputs based on what files were actually processed
 found_outputs=()
+processed_files=()
 
-for file in "${expected_outputs[@]}"; do
-    if [ -f "$file" ]; then
-        count=$(($(wc -l < "$file") - 1))  # Subtract header
-        echo "✓ $(basename $file) ($count predictions)"
-        found_outputs+=("$file")
+# Build list of files that should have been processed
+for file_info in "${available_files[@]}"; do
+    IFS=':' read -r dataset file_type input_file <<< "$file_info"
+    base_name="protein_sequences_${file_type}"
+    
+    fast_output="../results/$dataset/localization/${base_name}_Fast_results.csv"
+    accurate_output="../results/$dataset/localization/${base_name}_Accurate_results.csv"
+    
+    if [ -f "$fast_output" ]; then
+        count=$(($(wc -l < "$fast_output") - 1))  # Subtract header
+        echo "✓ $(basename $fast_output) ($count predictions)"
+        found_outputs+=("$fast_output")
+    else
+        echo "✗ $(basename $fast_output) missing"
     fi
+    
+    if [ -f "$accurate_output" ]; then
+        count=$(($(wc -l < "$accurate_output") - 1))  # Subtract header
+        echo "✓ $(basename $accurate_output) ($count predictions)"
+        found_outputs+=("$accurate_output")
+    else
+        echo "✗ $(basename $accurate_output) missing"
+    fi
+    
+    processed_files+=("$dataset:$file_type")
 done
 
 if [ ${#found_outputs[@]} -eq 0 ]; then
+    echo ""
     echo "❌ No DeepLoc outputs were generated!"
-    all_outputs_present=false
+    echo "Check the SLURM log for DeepLoc error messages."
+    
+    # Debug: List what files exist in localization directories
+    echo ""
+    echo "Debug: Files in localization directories:"
+    for dataset in "${datasets[@]}"; do
+        localization_dir="../results/$dataset/localization"
+        if [ -d "$localization_dir" ]; then
+            echo "  $dataset/localization/:"
+            ls -la "$localization_dir" | sed 's/^/    /'
+        fi
+    done
+    
+    exit 1
 else
     echo ""
     echo "🎉 DeepLoc predictions completed successfully!"
     echo ""
     echo "Generated predictions:"
     
+    # Group outputs by dataset
     for dataset in "${datasets[@]}"; do
-        echo "  ├─ $dataset/localization/"
+        dataset_outputs=($(printf '%s\n' "${found_outputs[@]}" | grep "$dataset/localization/"))
         
-        # Check pairs files
-        pairs_fast="../results/$dataset/localization/protein_sequences_pairs_Fast_results.csv"
-        pairs_accurate="../results/$dataset/localization/protein_sequences_pairs_Accurate_results.csv"
-        mutations_fast="../results/$dataset/localization/protein_sequences_with_mutations_Fast_results.csv"
-        mutations_accurate="../results/$dataset/localization/protein_sequences_with_mutations_Accurate_results.csv"
-        
-        if [ -f "$pairs_fast" ]; then
-            echo "  │  ├─ protein_sequences_pairs_Fast_results.csv"
-        fi
-        if [ -f "$pairs_accurate" ]; then
-            echo "  │  ├─ protein_sequences_pairs_Accurate_results.csv"
-        fi
-        if [ -f "$mutations_fast" ]; then
-            echo "  │  ├─ protein_sequences_with_mutations_Fast_results.csv"
-        fi
-        if [ -f "$mutations_accurate" ]; then
-            echo "  │  └─ protein_sequences_with_mutations_Accurate_results.csv"
+        if [ ${#dataset_outputs[@]} -gt 0 ]; then
+            echo "  ├─ $dataset/localization/"
+            for output in "${dataset_outputs[@]}"; do
+                echo "  │  ├─ $(basename $output)"
+            done
         fi
     done
-fi
-
-if [ "$all_outputs_present" = true ] || [ ${#found_outputs[@]} -gt 0 ]; then
+    
+    echo ""
+    echo "Summary: Generated ${#found_outputs[@]} prediction files from ${#processed_files[@]} input files"
     echo ""
     echo "Next step:"
     echo "  Analyze localization predictions for your specific research questions"
-else
-    echo ""
-    echo "❌ DeepLoc prediction failed. Check the SLURM output file for detailed error messages."
-    exit 1
 fi
