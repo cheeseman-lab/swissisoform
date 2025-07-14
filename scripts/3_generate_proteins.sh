@@ -82,7 +82,7 @@ run_task() {
     
     echo "Task $task_id: Starting $task_name at $(date)"
     
-    python3 translate.py "$gene_list" "$output_dir" \
+    python3 generate_proteins.py "$gene_list" "$output_dir" \
       --genome "$GENOME_PATH" \
       --annotation "$ANNOTATION_PATH" \
       --bed "$TRUNCATIONS_PATH" \
