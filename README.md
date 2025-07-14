@@ -65,17 +65,22 @@ sbatch 4_predict_localization.sh
 
 ### Step 0: Download Reference Data
 **Script:** `0_download_genome.sh`  
-**Runtime:** 10-30 minutes  
+**Runtime:** ~10 minutes  
 **Downloads:**
 - Human reference genome (GRCh38.p7)
 - GENCODE v25 annotations (primary)
 - GENCODE v47 annotations (for gene name updates)
 
 ### Step 1: Data Cleanup
-**Script:** `1_cleanup_files.sh`  
-**Runtime:** 5-15 minutes  
-**Requirements:** Place your ribosome profiling BED files in `data/ribosome_profiling/`
-- `truncations.bed` - Already 
+**Script:** `1_cleanup_files.sh`
+**Runtime:** ~1 minute
+**Requirements:**
+* Ribosome profiling BED files are already provided:
+  * `data/ribosome_profiling/truncations.bed`
+* Preferred transcript list is already provided:
+  * `data/genome_data/hela_top_transcript.txt`
+
+You can optionally replace these files with your own data following the same format.
 
 **Outputs:**
 - Cleaned GTF annotations with updated gene names
@@ -133,8 +138,8 @@ swissisoform/
 │   │   ├── gencode.v25.annotation.ensembl_cleaned.gtf
 │   │   └── hela_top_transcript.txt
 │   └── ribosome_profiling/
-│       ├── full_truncations_JL_cleaned.bed
-│       ├── selected_truncations_JL_cleaned.bed
+│       ├── truncations.bed
+│       ├── truncations_cleaned.bed
 │       ├── gene_list.txt (all genes)
 │       └── gene_list_reduced.txt (curated genes)
 ├── results/

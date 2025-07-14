@@ -109,6 +109,7 @@ if [ "$all_outputs_present" = true ]; then
     echo "  └─ Gene lists for analysis"
     echo ""
     echo "Next step:"
+    echo "  Run: sbatch 2_analyze_mutations.sh"
     echo "  Run: sbatch 3_generate_proteins.sh"
 else
     echo ""

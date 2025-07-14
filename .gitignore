@@ -16,10 +16,14 @@ data/ribosome_profiling/*
 data/mutation_data/*
 !data/mutation_data/.gitkeep
 
+# results
+results/*
+
 # test notebooks
 notebooks/
 
-# script outputs
+# out files 
+# TODO: remove results from here
 scripts/out
 scripts/results
 scripts/results_reduced
