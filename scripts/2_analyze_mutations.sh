@@ -65,25 +65,34 @@ run_mutation_analysis() {
     local gene_list=$1
     local output_dir=$2
     local label=$3
+    local visualize=$4
 
     echo "[$label] Analysis started at $(date)"
 
-    python3 analyze_mutations.py "$gene_list" "$output_dir" \
-        --genome "$GENOME_PATH" \
-        --annotation "$ANNOTATION_PATH" \
-        --bed "$TRUNCATIONS_PATH" \
-        --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
-        --visualize \
-        --sources "clinvar" \
+    cmd=(python3 analyze_mutations.py "$gene_list" "$output_dir"
+        --genome "$GENOME_PATH"
+        --annotation "$ANNOTATION_PATH"
+        --bed "$TRUNCATIONS_PATH"
+        --preferred-transcripts "$PREFERRED_TRANSCRIPTS"
+        --sources "clinvar"
         --impact-types "missense variant" "nonsense variant" "frameshift variant"
+    )
+
+    if [ "$visualize" = true ]; then
+        cmd+=(--visualize)
+    fi
+
+    "${cmd[@]}"
 
     echo "[$label] Analysis completed at $(date)"
 }
 
-run_mutation_analysis "$RIBOPROF_DIR/gene_list_reduced.txt" "../results/reduced/mutations" "Reduced" &
+# Reduced dataset (with visualization)
+run_mutation_analysis "$RIBOPROF_DIR/gene_list_reduced.txt" "../results/reduced/mutations" "Reduced" true &
 PID1=$!
 
-run_mutation_analysis "$RIBOPROF_DIR/gene_list.txt" "../results/full/mutations" "Full" &
+# Full dataset (without visualization)
+run_mutation_analysis "$RIBOPROF_DIR/gene_list.txt" "../results/full/mutations" "Full" false &
 PID2=$!
 
 echo "Waiting for both tasks to complete..."

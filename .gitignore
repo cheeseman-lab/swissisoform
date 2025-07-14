@@ -5,11 +5,16 @@ src/swissisoform.egg-info
 src/swissisoform/__pycache__
 
 # data
-data/genome_data/*.fa
-data/genome_data/*.gtf
-data/genome_data/*.txt
-data/ribosome_profiling
-data/mutation_data
+data/genome_data/*
+!data/genome_data/hela_top_transcript.txt
+!data/genome_data/.gitkeep
+
+data/ribosome_profiling/*
+!data/ribosome_profiling/truncations.bed
+!data/ribosome_profiling/.gitkeep
+
+data/mutation_data/*
+!data/mutation_data/.gitkeep
 
 # test notebooks
 notebooks/
