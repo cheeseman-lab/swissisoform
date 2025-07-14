@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=swissisoform_proteins   # Job name
+#SBATCH --job-name=proteins   # Job name
 #SBATCH --partition=20                     # Partition name
 #SBATCH --ntasks=4                         # Run 4 parallel tasks
 #SBATCH --cpus-per-task=6                  # CPUs per task (4*6=24 total)

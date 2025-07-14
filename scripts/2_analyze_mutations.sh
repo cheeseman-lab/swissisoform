@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=swissisoform_mutations  # Job name
+#SBATCH --job-name=mutations  # Job name
 #SBATCH --partition=20                     # Partition name
 #SBATCH --ntasks=2                         # Run 2 parallel tasks
 #SBATCH --cpus-per-task=8                  # CPUs per task (2*8=16 total)
