@@ -1,10 +1,10 @@
 #!/bin/bash
 
-#SBATCH --job-name=mutations  # Job name
+#SBATCH --job-name=mutations               # Job name
 #SBATCH --partition=20                     # Partition name
 #SBATCH --ntasks=2                         # Run 2 parallel tasks
 #SBATCH --cpus-per-task=8                  # CPUs per task (2*8=16 total)
-#SBATCH --mem=24G                          # Total memory for all tasks
+#SBATCH --mem=64G                          # Total memory for all tasks
 #SBATCH --time=12:00:00                    # Time limit (hrs:min:sec)
 #SBATCH --output=out/mutations-%j.out      # Standard output log
 

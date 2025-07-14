@@ -1,10 +1,10 @@
 #!/bin/bash
 
-#SBATCH --job-name=proteins   # Job name
+#SBATCH --job-name=proteins                # Job name
 #SBATCH --partition=20                     # Partition name
 #SBATCH --ntasks=4                         # Run 4 parallel tasks
 #SBATCH --cpus-per-task=6                  # CPUs per task (4*6=24 total)
-#SBATCH --mem=32G                          # Total memory for all tasks
+#SBATCH --mem=64G                          # Total memory for all tasks
 #SBATCH --time=24:00:00                    # Time limit (hrs:min:sec)
 #SBATCH --output=out/proteins-%j.out       # Standard output log
 
