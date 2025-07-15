@@ -57,7 +57,6 @@ async def main(
         bed_path: Path to the alternative isoform BED file
         preferred_transcripts_path: Optional path to file with preferred transcript IDs
         visualize: Whether to generate visualizations
-        include_unfiltered: Whether to include unfiltered mutation analysis
         sources: List of mutation sources to query
         impact_types: List of mutation impact types to include
     """
@@ -104,7 +103,6 @@ async def main(
     print(f"  ├─ Sources: {', '.join(sources)}")
     print(f"  ├─ Impact types: {', '.join(impact_types)}")
     print(f"  ├─ Visualizations: {visualize}")
-    print(f"  ├─ Include unfiltered: {include_unfiltered}")
     if preferred_transcripts:
         print(f"  └─ Using {len(preferred_transcripts)} preferred transcripts")
 

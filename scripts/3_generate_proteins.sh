@@ -2,49 +2,57 @@
 
 #SBATCH --job-name=proteins                # Job name
 #SBATCH --partition=20                     # Partition name
-#SBATCH --ntasks=4                         # Run 4 parallel tasks
-#SBATCH --cpus-per-task=6                  # CPUs per task (4*6=24 total)
-#SBATCH --mem=64G                          # Total memory for all tasks
+#SBATCH --array=1-4                        # Job array with 4 tasks
+#SBATCH --cpus-per-task=6                  # CPUs per task
+#SBATCH --mem=16G                          # Memory per task (64G total = 16G × 4)
 #SBATCH --time=24:00:00                    # Time limit (hrs:min:sec)
-#SBATCH --output=out/proteins-%j.out       # Standard output log
+#SBATCH --output=out/proteins-%A_%a.out    # %A = job ID, %a = array task ID
 
 # 3_generate_proteins.sh
 # Generates protein sequence datasets from truncated transcripts
 
 echo "======================================================="
 echo "SwissIsoform Pipeline Step 3: Generate Protein Datasets"
+echo "Array Task ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_MAX}"
 echo "======================================================="
 
-# Check if required input files exist
-echo "Checking for required input files..."
+# Only run setup checks on the first task to avoid race conditions
+if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
+    # Check if required input files exist
+    echo "Checking for required input files..."
 
-GENOME_DIR="../data/genome_data"
-RIBOPROF_DIR="../data/ribosome_profiling"
+    GENOME_DIR="../data/genome_data"
+    RIBOPROF_DIR="../data/ribosome_profiling"
 
-required_files=(
-    "$GENOME_DIR/GRCh38.p7.genome.fa"
-    "$GENOME_DIR/gencode.v25.annotation.ensembl_cleaned.gtf"
-    "$RIBOPROF_DIR/truncations_cleaned.bed"
-    "$RIBOPROF_DIR/gene_list.txt"
-    "$RIBOPROF_DIR/gene_list_reduced.txt"
-)
+    required_files=(
+        "$GENOME_DIR/GRCh38.p7.genome.fa"
+        "$GENOME_DIR/gencode.v25.annotation.ensembl_cleaned.gtf"
+        "$RIBOPROF_DIR/truncations_cleaned.bed"
+        "$RIBOPROF_DIR/gene_list.txt"
+        "$RIBOPROF_DIR/gene_list_reduced.txt"
+    )
 
-echo ""
-echo "Checking required files..."
-missing_files=false
-for file in "${required_files[@]}"; do
-    if [ -f "$file" ]; then
-        echo "✓ $(basename $file)"
-    else
-        echo "✗ $(basename $file) missing"
-        missing_files=true
-    fi
-done
-
-if [ "$missing_files" = true ]; then
     echo ""
-    echo "❌ Missing required files! Run 1_cleanup_files.sh first"
-    exit 1
+    echo "Checking required files..."
+    missing_files=false
+    for file in "${required_files[@]}"; do
+        if [ -f "$file" ]; then
+            echo "✓ $(basename $file)"
+        else
+            echo "✗ $(basename $file) missing"
+            missing_files=true
+        fi
+    done
+
+    if [ "$missing_files" = true ]; then
+        echo ""
+        echo "❌ Missing required files! Run 1_cleanup_files.sh first"
+        exit 1
+    fi
+
+    # Create results directory structure
+    mkdir -p ../results/reduced/proteins
+    mkdir -p ../results/full/proteins
 fi
 
 # Activate conda environment
@@ -66,112 +74,128 @@ MIN_LENGTH=10
 MAX_LENGTH=100000
 FORMAT="fasta,csv"
 
-# Create results directory structure
-mkdir -p ../results/reduced/proteins
-mkdir -p ../results/full/proteins
+# Run the appropriate task based on array task ID
+case $SLURM_ARRAY_TASK_ID in
+    1)
+        # Task 1: Reduced dataset pairs
+        echo "Array Task 1: Starting reduced pairs generation at $(date)"
+        python3 generate_proteins.py "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" \
+          --genome "$GENOME_PATH" \
+          --annotation "$ANNOTATION_PATH" \
+          --bed "$TRUNCATIONS_PATH" \
+          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
+          --min-length "$MIN_LENGTH" \
+          --max-length "$MAX_LENGTH" \
+          --format "$FORMAT" \
+          --include-canonical \
+          --pairs-only
+        echo "Array Task 1: Completed reduced pairs generation at $(date)"
+        ;;
+    2)
+        # Task 2: Reduced dataset with mutations
+        echo "Array Task 2: Starting reduced mutations generation at $(date)"
+        python3 generate_proteins.py "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" \
+          --genome "$GENOME_PATH" \
+          --annotation "$ANNOTATION_PATH" \
+          --bed "$TRUNCATIONS_PATH" \
+          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
+          --min-length "$MIN_LENGTH" \
+          --max-length "$MAX_LENGTH" \
+          --format "$FORMAT" \
+          --include-canonical \
+          --include-mutations \
+          --impact-types "missense variant"
+        echo "Array Task 2: Completed reduced mutations generation at $(date)"
+        ;;
+    3)
+        # Task 3: Full dataset pairs
+        echo "Array Task 3: Starting full pairs generation at $(date)"
+        python3 generate_proteins.py "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" \
+          --genome "$GENOME_PATH" \
+          --annotation "$ANNOTATION_PATH" \
+          --bed "$TRUNCATIONS_PATH" \
+          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
+          --min-length "$MIN_LENGTH" \
+          --max-length "$MAX_LENGTH" \
+          --format "$FORMAT" \
+          --include-canonical \
+          --pairs-only
+        echo "Array Task 3: Completed full pairs generation at $(date)"
+        ;;
+    4)
+        # Task 4: Full dataset with mutations
+        echo "Array Task 4: Starting full mutations generation at $(date)"
+        python3 generate_proteins.py "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" \
+          --genome "$GENOME_PATH" \
+          --annotation "$ANNOTATION_PATH" \
+          --bed "$TRUNCATIONS_PATH" \
+          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
+          --min-length "$MIN_LENGTH" \
+          --max-length "$MAX_LENGTH" \
+          --format "$FORMAT" \
+          --include-canonical \
+          --include-mutations \
+          --impact-types "missense variant"
+        echo "Array Task 4: Completed full mutations generation at $(date)"
+        ;;
+    *)
+        echo "Unknown array task ID: $SLURM_ARRAY_TASK_ID"
+        exit 1
+        ;;
+esac
 
-echo "Starting protein sequence generation with 4 parallel tasks at $(date)"
-
-# Function to run each task with proper argument handling
-run_task() {
-    local task_id=$1
-    local gene_list=$2
-    local output_dir=$3
-    local task_name=$4
-    shift 4  # Remove the first 4 arguments, leaving only the extra args
+# Only verify outputs on the last task to complete
+if [ "$SLURM_ARRAY_TASK_ID" -eq 4 ]; then
+    # Wait a moment for any file system sync
+    sleep 5
     
-    echo "Task $task_id: Starting $task_name at $(date)"
-    
-    python3 generate_proteins.py "$gene_list" "$output_dir" \
-      --genome "$GENOME_PATH" \
-      --annotation "$ANNOTATION_PATH" \
-      --bed "$TRUNCATIONS_PATH" \
-      --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
-      --min-length "$MIN_LENGTH" \
-      --max-length "$MAX_LENGTH" \
-      --format "$FORMAT" \
-      --include-canonical \
-      "$@"  # Pass remaining arguments properly
-    
-    echo "Task $task_id: Completed $task_name at $(date)"
-}
+    echo ""
+    echo "Verifying generated datasets..."
 
-# Launch 4 tasks with proper argument handling
-run_task 1 "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" "reduced pairs" --pairs-only &
-TASK1_PID=$!
+    expected_files=(
+        "../results/reduced/proteins/protein_sequences_pairs.fasta"
+        "../results/reduced/proteins/protein_sequences_pairs.csv"
+        "../results/reduced/proteins/protein_sequences_with_mutations.fasta"
+        "../results/reduced/proteins/protein_sequences_with_mutations.csv"
+        "../results/full/proteins/protein_sequences_pairs.fasta"
+        "../results/full/proteins/protein_sequences_pairs.csv"
+        "../results/full/proteins/protein_sequences_with_mutations.fasta"
+        "../results/full/proteins/protein_sequences_with_mutations.csv"
+    )
 
-run_task 2 "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" "reduced mutations" --include-mutations --impact-types "missense variant" &
-TASK2_PID=$!
-
-run_task 3 "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" "full pairs" --pairs-only &
-TASK3_PID=$!
-
-run_task 4 "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" "full mutations" --include-mutations --impact-types "missense variant" &
-TASK4_PID=$!
-
-# Wait for all tasks to complete
-echo "Waiting for all tasks to complete..."
-wait $TASK1_PID
-echo "Task 1 (reduced pairs) finished"
-
-wait $TASK2_PID
-echo "Task 2 (reduced mutations) finished"
-
-wait $TASK3_PID
-echo "Task 3 (full pairs) finished"
-
-wait $TASK4_PID
-echo "Task 4 (full mutations) finished"
-
-echo "All protein sequence generation completed at $(date)"
-
-# Verify outputs
-echo ""
-echo "Verifying generated datasets..."
-
-expected_files=(
-    "../results/reduced/proteins/protein_sequences_pairs.fasta"
-    "../results/reduced/proteins/protein_sequences_pairs.csv"
-    "../results/reduced/proteins/protein_sequences_with_mutations.fasta"
-    "../results/reduced/proteins/protein_sequences_with_mutations.csv"
-    "../results/full/proteins/protein_sequences_pairs.fasta"
-    "../results/full/proteins/protein_sequences_pairs.csv"
-    "../results/full/proteins/protein_sequences_with_mutations.fasta"
-    "../results/full/proteins/protein_sequences_with_mutations.csv"
-)
-
-all_files_present=true
-for file in "${expected_files[@]}"; do
-    if [ -f "$file" ]; then
-        if [[ "$file" == *.fasta ]]; then
-            count=$(grep -c '^>' "$file")
-            echo "✓ $(basename $file) ($count sequences)"
-        elif [[ "$file" == *.csv ]]; then
-            count=$(($(wc -l < "$file") - 1))  # Subtract header
-            echo "✓ $(basename $file) ($count rows)"
+    all_files_present=true
+    for file in "${expected_files[@]}"; do
+        if [ -f "$file" ]; then
+            if [[ "$file" == *.fasta ]]; then
+                count=$(grep -c '^>' "$file")
+                echo "✓ $(basename $file) ($count sequences)"
+            elif [[ "$file" == *.csv ]]; then
+                count=$(($(wc -l < "$file") - 1))  # Subtract header
+                echo "✓ $(basename $file) ($count rows)"
+            fi
+        else
+            echo "✗ $(basename $file) missing"
+            all_files_present=false
         fi
-    else
-        echo "✗ $(basename $file) missing"
-        all_files_present=false
-    fi
-done
+    done
 
-if [ "$all_files_present" = true ]; then
-    echo ""
-    echo "🎉 Protein sequence generation completed successfully!"
-    echo ""
-    echo "Generated datasets:"
-    echo "  ├─ reduced/proteins/            # Curated truncation sites"
-    echo "  │  ├─ protein_sequences_pairs.*       # Canonical + truncated pairs"
-    echo "  │  └─ protein_sequences_with_mutations.*  # With mutations"
-    echo "  └─ full/proteins/               # All truncation sites"
-    echo "     ├─ protein_sequences_pairs.*       # Canonical + truncated pairs"
-    echo "     └─ protein_sequences_with_mutations.*  # With mutations"
-    echo ""
-    echo "Next step:"
-    echo "  Run: sbatch 4_predict_localization.sh"
-else
-    echo ""
-    echo "❌ Protein generation failed. Some output files are missing."
-    exit 1
+    if [ "$all_files_present" = true ]; then
+        echo ""
+        echo "🎉 Protein sequence generation completed successfully!"
+        echo ""
+        echo "Generated datasets:"
+        echo "  ├─ reduced/proteins/            # Curated truncation sites"
+        echo "  │  ├─ protein_sequences_pairs.*       # Canonical + truncated pairs"
+        echo "  │  └─ protein_sequences_with_mutations.*  # With mutations"
+        echo "  └─ full/proteins/               # All truncation sites"
+        echo "     ├─ protein_sequences_pairs.*       # Canonical + truncated pairs"
+        echo "     └─ protein_sequences_with_mutations.*  # With mutations"
+        echo ""
+        echo "Next step:"
+        echo "  Run: sbatch 4_predict_localization.sh"
+    else
+        echo ""
+        echo "❌ Protein generation failed. Some output files are missing."
+        exit 1
+    fi
 fi

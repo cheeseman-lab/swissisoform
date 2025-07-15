@@ -841,34 +841,21 @@ class TruncatedProteinGenerator:
         min_length: int = 10,
         max_length: int = 100000,
     ) -> pd.DataFrame:
-        """Create a dataset of protein sequences with optional mutation integration.
-
-        Args:
-            gene_list: List of gene names to process
-            preferred_transcripts: Set of preferred transcript IDs
-            include_mutations: Whether to include mutation variants
-            impact_types: Mutation impact types to include
-            output_format: Format to save sequences ('fasta', 'csv', or both)
-            min_length: Minimum protein length to include
-            max_length: Maximum protein length to include
-
-        Returns:
-            DataFrame with the dataset information
-        """
+        """Create a dataset of protein sequences with optional mutation integration."""
         all_sequences = []
         successful_genes = 0
         skipped_genes = []
-
+        
         if impact_types is None:
             impact_types = ["missense variant"]
-
+        
         # Process each gene
         for gene_idx, gene_name in enumerate(gene_list, 1):
             try:
                 self._debug_print(
                     f"Processing gene {gene_idx}/{len(gene_list)}: {gene_name}"
                 )
-
+                
                 if include_mutations and self.mutation_handler:
                     # Use mutation-enhanced extraction
                     enhanced_pairs = await self.extract_gene_proteins_with_mutations(
@@ -877,17 +864,16 @@ class TruncatedProteinGenerator:
                         include_mutations,
                         impact_types,
                     )
-
                     if not enhanced_pairs:
                         skipped_genes.append(gene_name)
                         continue
-
+                    
                     for pair in enhanced_pairs:
                         canonical_protein = pair["canonical"]["protein"]
                         truncated_protein = pair["truncated_base"]["protein"]
                         transcript_id = pair["transcript_id"]
                         truncation_id = pair["truncation_id"]
-
+                        
                         # Check length constraints
                         if not (min_length <= len(canonical_protein) <= max_length):
                             continue
@@ -895,7 +881,7 @@ class TruncatedProteinGenerator:
                             continue
                         if truncated_protein == canonical_protein:
                             continue
-
+                        
                         # Add canonical sequence
                         all_sequences.append(
                             {
@@ -905,9 +891,18 @@ class TruncatedProteinGenerator:
                                 "sequence": canonical_protein,
                                 "length": len(canonical_protein),
                                 "variant_type": "canonical",
+                                # Empty mutation fields for canonical
+                                "mutation_position": None,
+                                "mutation_change": None,
+                                "aa_change": None,
+                                "hgvsc": None,
+                                "hgvsp": None,
+                                "mutation_impact": None,
+                                "mutation_source": None,
+                                "clinvar_variant_id": None,
                             }
                         )
-
+                        
                         # Add base truncated sequence
                         all_sequences.append(
                             {
@@ -917,22 +912,39 @@ class TruncatedProteinGenerator:
                                 "sequence": truncated_protein,
                                 "length": len(truncated_protein),
                                 "variant_type": "truncated",
+                                # Empty mutation fields for base truncated
+                                "mutation_position": None,
+                                "mutation_change": None,
+                                "aa_change": None,
+                                "hgvsc": None,
+                                "hgvsp": None,
+                                "mutation_impact": None,
+                                "mutation_source": None,
+                                "clinvar_variant_id": None,
                             }
                         )
-
-                        # Add mutation variants
-                        for mut_idx, mut_variant in enumerate(
-                            pair["truncated_mutations"]
-                        ):
+                        
+                        # Add mutation variants with full information
+                        for mut_idx, mut_variant in enumerate(pair["truncated_mutations"]):
                             mutated_protein = mut_variant["protein"]
-
                             if (
                                 min_length <= len(mutated_protein) <= max_length
                                 and mutated_protein != canonical_protein
                             ):
                                 mut_info = mut_variant["mutation"]
-                                variant_id = f"{truncation_id}_mut_{mut_info['position']}_{mut_info['reference']}>{mut_info['alternate']}"
-
+                                
+                                # Calculate amino acid difference
+                                aa_difference = self._calculate_aa_difference(
+                                    canonical_protein, mutated_protein
+                                )
+                                
+                                # Create enhanced variant ID with AA change
+                                base_variant_id = f"canonical_mut_{mut_info['position']}_{mut_info['reference']}>{mut_info['alternate']}"
+                                if aa_difference:
+                                    variant_id = f"{base_variant_id}_{aa_difference}"
+                                else:
+                                    variant_id = base_variant_id
+                                
                                 all_sequences.append(
                                     {
                                         "gene": gene_name,
@@ -940,29 +952,33 @@ class TruncatedProteinGenerator:
                                         "variant_id": variant_id,
                                         "sequence": mutated_protein,
                                         "length": len(mutated_protein),
-                                        "variant_type": "truncated_mutated",
+                                        "variant_type": "canonical_mutated",
+                                        # Full mutation information
                                         "mutation_position": mut_info["position"],
                                         "mutation_change": f"{mut_info['reference']}>{mut_info['alternate']}",
-                                        "mutation_impact": mut_info["impact"],
-                                        "mutation_source": mut_info["source"],
+                                        "aa_change": aa_difference,
+                                        "hgvsc": mut_info.get("hgvsc", ""),
+                                        "hgvsp": mut_info.get("hgvsp", ""),
+                                        "mutation_impact": mut_info.get("impact", ""),
+                                        "mutation_source": mut_info.get("source", ""),
+                                        "clinvar_variant_id": mut_info.get("variant_id", ""),
                                     }
                                 )
                 else:
-                    # Use standard extraction without mutations
+                    # Standard extraction without mutations
                     gene_pairs = self.extract_gene_proteins(
                         gene_name, preferred_transcripts
                     )
-
                     if not gene_pairs:
                         skipped_genes.append(gene_name)
                         continue
-
+                    
                     for pair in gene_pairs:
                         canonical_protein = pair["canonical"]["protein"]
                         truncated_protein = pair["truncated"]["protein"]
                         transcript_id = pair["transcript_id"]
                         truncation_id = pair["truncation_id"]
-
+                        
                         # Check length constraints
                         if not (min_length <= len(canonical_protein) <= max_length):
                             continue
@@ -970,8 +986,8 @@ class TruncatedProteinGenerator:
                             continue
                         if truncated_protein == canonical_protein:
                             continue
-
-                        # Add canonical sequence
+                        
+                        # Add canonical sequence (without mutation columns for non-mutation mode)
                         all_sequences.append(
                             {
                                 "gene": gene_name,
@@ -982,7 +998,7 @@ class TruncatedProteinGenerator:
                                 "variant_type": "canonical",
                             }
                         )
-
+                        
                         # Add truncated sequence
                         all_sequences.append(
                             {
@@ -994,29 +1010,29 @@ class TruncatedProteinGenerator:
                                 "variant_type": "truncated",
                             }
                         )
-
+                
                 successful_genes += 1
-
             except Exception as e:
                 self._debug_print(f"Error processing gene {gene_name}: {str(e)}")
                 skipped_genes.append(gene_name)
-
+        
         # Create dataset
         dataset = pd.DataFrame(all_sequences)
-
+        
         # Save dataset if requested
         if not dataset.empty and output_format:
             if "fasta" in output_format.lower():
                 self._save_dataset_fasta(dataset, include_mutations)
             if "csv" in output_format.lower():
                 self._save_dataset_csv(dataset, include_mutations)
-
+        
         # Print summary
         self._print_dataset_summary(
             dataset, successful_genes, len(gene_list), skipped_genes, include_mutations
         )
-
+        
         return dataset
+
 
     def create_protein_sequence_dataset_pairs(
         self,

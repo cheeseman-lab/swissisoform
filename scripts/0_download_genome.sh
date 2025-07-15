@@ -90,7 +90,7 @@ if [ "$all_present" = true ]; then
     echo "Next steps:"
     echo "1. Place your ribosome profiling BED files in ../ribosome_profiling/"
     echo "2. Add preferred transcripts to hela_top_transcript.txt (optional)"
-    echo "3. Run: bash ../scripts/1_cleanup_files.sh"
+    echo "3. Run: bash 1_cleanup_files.sh"
 else
     echo ""
     echo "❌ Some files are missing. Please check the download errors above."
