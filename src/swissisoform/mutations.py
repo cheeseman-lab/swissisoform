@@ -850,7 +850,6 @@ class MutationHandler:
         alt_isoform_handler,
         output_dir: str,
         visualize: bool = False,
-        include_unfiltered: bool = False,
         impact_types: Optional[Dict[str, List[str]]] = None,
         preferred_transcripts: Optional[Set[str]] = None,
     ) -> Dict:
@@ -865,7 +864,6 @@ class MutationHandler:
             alt_isoform_handler: Initialized AlternativeIsoform instance
             output_dir: Directory to save output files
             visualize: Whether to generate visualizations
-            include_unfiltered: Whether to include unfiltered mutation analysis
             impact_types: Dict mapping sources to impact types to filter by
             preferred_transcripts: Set of transcript IDs to prioritize
 
@@ -1254,90 +1252,3 @@ class MutationHandler:
             logger.error(f"Error processing gene {gene_name}: {str(e)}")
             print(f"  └─ Error: {str(e)}")
             return {"gene_name": gene_name, "status": "error", "error": str(e)}
-
-
-# Legacy functions for backwards compatibility with existing scripts
-async def analyze_mutations(
-    gene_name: str,
-    mutation_handler: "MutationHandler",
-    alt_features: pd.DataFrame,
-    sources: Optional[List[str]] = None,
-    impact_types: Optional[Dict[str, List[str]]] = None,
-    aggregator_csv_path: Optional[str] = None,
-) -> Optional[pd.DataFrame]:
-    """Analyze mutations in alternative isoform regions.
-
-    Args:
-        gene_name: Name of the gene to analyze
-        mutation_handler: Initialized MutationHandler instance
-        alt_features: DataFrame containing alternative isoform features
-        sources: List of mutation sources to query ('clinvar', 'gnomad', 'aggregator')
-        impact_types: Dictionary mapping sources to impact types to filter by
-        aggregator_csv_path: Path to aggregator CSV file (only needed if 'aggregator' in sources)
-
-    Returns:
-        DataFrame containing mutations in alternative isoform regions or None if no mutations found
-    """
-    if sources is None:
-        sources = ["clinvar"]
-
-    if impact_types is None:
-        impact_types = {}  # Default to no filtering by impact type
-
-    print(f"Fetching mutations from sources: {', '.join(sources)}...")
-
-    mutations = await mutation_handler.get_visualization_ready_mutations(
-        gene_name=gene_name,
-        alt_features=alt_features,
-        sources=sources,
-        aggregator_csv_path=aggregator_csv_path,
-    )
-
-    # Filter mutations by impact type for each source if specified
-    if not mutations.empty and impact_types:
-        print(f"Filtering for impact types by source:")
-        filtered_mutations = pd.DataFrame()
-
-        for source, impacts in impact_types.items():
-            print(f"  - {source}: {', '.join(impacts)}")
-            source_mutations = mutations[
-                mutations["source"].str.lower() == source.lower()
-            ]
-
-            if not source_mutations.empty:
-                filtered_source = source_mutations[
-                    source_mutations["impact"].isin(impacts)
-                ]
-                filtered_mutations = pd.concat([filtered_mutations, filtered_source])
-
-            # Keep mutations from sources that don't have filters specified
-            other_sources = [s for s in sources if s.lower() != source.lower()]
-            for other_source in other_sources:
-                other_mutations = mutations[
-                    mutations["source"].str.lower() == other_source.lower()
-                ]
-                filtered_mutations = pd.concat([filtered_mutations, other_mutations])
-
-        mutations = filtered_mutations
-
-    if mutations.empty:
-        print("No matching mutations found")
-        return None
-
-    print(f"Found {len(mutations)} mutations in truncation regions")
-
-    # Get mutation statistics
-    mutation_impacts = mutations["impact"].value_counts().to_dict()
-    clinical_sig = mutations["clinical_significance"].value_counts().to_dict()
-
-    # Create truncation regions string
-    truncation_regions = alt_features.apply(
-        lambda x: f"{x['start']}-{x['end']}", axis=1
-    ).tolist()
-
-    print("\nMutation Analysis:")
-    print(f"Impact types: {mutation_impacts}")
-    print(f"Clinical significance: {clinical_sig}")
-    print(f"Truncation regions: {truncation_regions}")
-
-    return mutations

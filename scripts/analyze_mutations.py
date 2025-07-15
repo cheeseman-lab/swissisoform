@@ -44,7 +44,6 @@ async def main(
     bed_path: str,
     preferred_transcripts_path: Optional[str] = None,
     visualize: bool = False,
-    include_unfiltered: bool = False,
     sources: List[str] = None,
     impact_types: List[str] = None,
 ):
@@ -120,7 +119,6 @@ async def main(
             alt_isoform_handler=alt_isoforms,
             output_dir=output_dir,
             visualize=visualize,
-            include_unfiltered=include_unfiltered,
             impact_types=impact_types_dict,
             preferred_transcripts=preferred_transcripts,
         )
@@ -173,11 +171,6 @@ if __name__ == "__main__":
         "--visualize", action="store_true", help="Generate visualizations for each gene"
     )
     parser.add_argument(
-        "--include-unfiltered",
-        action="store_true",
-        help="Include unfiltered mutation analysis in visualizations",
-    )
-    parser.add_argument(
         "--sources",
         nargs="+",
         default=["clinvar"],
@@ -205,7 +198,6 @@ if __name__ == "__main__":
             bed_path=args.bed,
             preferred_transcripts_path=args.preferred_transcripts,
             visualize=args.visualize,
-            include_unfiltered=args.include_unfiltered,
             sources=args.sources,
             impact_types=args.impact_types,
         )
