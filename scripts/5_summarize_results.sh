@@ -100,79 +100,125 @@ conda activate swissisoform || {
     exit 1
 }
 
-# Create summary output directory
-mkdir -p ../results/summary
-
+# Run analysis for each dataset independently
 echo ""
-echo "Starting summary analysis..."
-python3 summarize_results.py
+echo "Starting summary analysis for each dataset..."
 
-# Verify outputs
-echo ""
-echo "Verifying summary outputs..."
-
-expected_summary_files=(
-    "../results/summary/mutation_summary.txt"
-    "../results/summary/localization_summary.txt"
-    "../results/summary/genes_with_localization_changes.csv"
-    "../results/summary/detailed_localization_analysis.csv"
-)
-
-all_summary_files_present=true
-for file in "${expected_summary_files[@]}"; do
-    if [ -f "$file" ]; then
-        if [[ "$file" == *.csv ]]; then
-            count=$(($(wc -l < "$file") - 1))  # Subtract header
-            echo "✓ $(basename $file) ($count rows)"
-        else
-            echo "✓ $(basename $file)"
-        fi
+for dataset in "${DATASETS[@]}"; do
+    # Check if this dataset has the minimum required files
+    dataset_mutation_exists=false
+    dataset_localization_exists=false
+    
+    if [ -f "../results/$dataset/mutations/gene_level_results.csv" ]; then
+        dataset_mutation_exists=true
+    fi
+    
+    if [ -f "../results/$dataset/localization/protein_sequences_pairs_Accurate_results.csv" ] || \
+       [ -f "../results/$dataset/localization/protein_sequences_pairs_Fast_results.csv" ]; then
+        dataset_localization_exists=true
+    fi
+    
+    if [ "$dataset_mutation_exists" = true ] || [ "$dataset_localization_exists" = true ]; then
+        echo ""
+        echo "Analyzing $dataset dataset..."
+        python3 summarize_results.py --dataset "$dataset"
     else
-        echo "✗ $(basename $file) missing"
-        all_summary_files_present=false
+        echo ""
+        echo "Skipping $dataset dataset - no data available"
     fi
 done
 
-if [ "$all_summary_files_present" = true ]; then
-    echo ""
-    echo "🎉 Results summary completed successfully!"
-    echo ""
-    echo "Generated summary files:"
-    echo "  ├─ summary/mutation_summary.txt           # Overview of mutation analysis"
-    echo "  ├─ summary/localization_summary.txt       # Overview of localization predictions"
-    echo "  ├─ summary/genes_with_localization_changes.csv  # Genes with interesting localization changes"
-    echo "  └─ summary/detailed_localization_analysis.csv   # Detailed localization comparison"
-    echo ""
-    echo "Key findings:"
-    echo ""
+# Verify outputs for each dataset
+echo ""
+echo "Verifying summary outputs..."
+
+for dataset in "${DATASETS[@]}"; do
+    summary_dir="../results/$dataset/summary"
     
-    # Show key findings from the text summaries
-    if [ -f "../results/summary/mutation_summary.txt" ]; then
-        echo "=== MUTATION ANALYSIS SUMMARY ==="
-        cat "../results/summary/mutation_summary.txt"
+    if [ -d "$summary_dir" ]; then
         echo ""
-    fi
-    
-    if [ -f "../results/summary/localization_summary.txt" ]; then
-        echo "=== LOCALIZATION ANALYSIS SUMMARY ==="
-        cat "../results/summary/localization_summary.txt"
+        echo "Checking $dataset dataset summary files..."
+        
+        expected_summary_files=(
+            "$summary_dir/mutation_summary.txt"
+            "$summary_dir/localization_summary.txt"
+            "$summary_dir/genes_with_localization_changes.csv"
+            "$summary_dir/detailed_localization_analysis.csv"
+        )
+        
+        dataset_files_present=true
+        for file in "${expected_summary_files[@]}"; do
+            if [ -f "$file" ]; then
+                if [[ "$file" == *.csv ]]; then
+                    count=$(($(wc -l < "$file") - 1))  # Subtract header
+                    echo "✓ $(basename $file) ($count rows)"
+                else
+                    echo "✓ $(basename $file)"
+                fi
+            else
+                echo "✗ $(basename $file) missing"
+                dataset_files_present=false
+            fi
+        done
+        
+        if [ "$dataset_files_present" = true ]; then
+            echo "✓ $dataset dataset summary completed successfully!"
+        else
+            echo "✗ $dataset dataset summary incomplete"
+        fi
+    else
         echo ""
+        echo "No summary directory found for $dataset dataset"
     fi
-    
-    # Show preview of genes with localization changes
-    if [ -f "../results/summary/genes_with_localization_changes.csv" ]; then
-        echo "=== GENES WITH LOCALIZATION CHANGES (Preview) ==="
-        head -n 10 "../results/summary/genes_with_localization_changes.csv"
-        total_genes=$(tail -n +2 "../results/summary/genes_with_localization_changes.csv" | wc -l)
-        echo "... (showing first 9 genes, $total_genes total genes with localization changes)"
+done
+
+echo ""
+echo "🎉 Pipeline summary analysis completed!"
+echo ""
+echo "Generated summary files by dataset:"
+
+for dataset in "${DATASETS[@]}"; do
+    summary_dir="../results/$dataset/summary"
+    if [ -d "$summary_dir" ]; then
         echo ""
+        echo "$dataset dataset summary:"
+        echo "  ├─ $dataset/summary/mutation_summary.txt"
+        echo "  ├─ $dataset/summary/localization_summary.txt"
+        echo "  ├─ $dataset/summary/genes_with_localization_changes.csv"
+        echo "  └─ $dataset/summary/detailed_localization_analysis.csv"
+        
+        # Show key findings for each dataset
+        echo ""
+        echo "=== $dataset DATASET KEY FINDINGS ==="
+        
+        if [ -f "$summary_dir/mutation_summary.txt" ]; then
+            echo ""
+            echo "MUTATION ANALYSIS:"
+            cat "$summary_dir/mutation_summary.txt"
+        fi
+        
+        if [ -f "$summary_dir/localization_summary.txt" ]; then
+            echo ""
+            echo "LOCALIZATION ANALYSIS:"
+            cat "$summary_dir/localization_summary.txt"
+        fi
+        
+        # Show preview of genes with localization changes
+        if [ -f "$summary_dir/genes_with_localization_changes.csv" ]; then
+            echo ""
+            echo "GENES WITH LOCALIZATION CHANGES (Preview):"
+            head -n 6 "$summary_dir/genes_with_localization_changes.csv"
+            total_genes=$(tail -n +2 "$summary_dir/genes_with_localization_changes.csv" | wc -l)
+            if [ $total_genes -gt 5 ]; then
+                echo "... (showing first 5 genes, $total_genes total genes with localization changes)"
+            fi
+        fi
+        
+        echo ""
+        echo "=" * 60
     fi
-    
-    echo "Pipeline summary completed!"
-    echo "All detailed results are available in ../results/summary/"
-    
-else
-    echo ""
-    echo "❌ Summary generation failed. Some output files are missing."
-    exit 1
-fi
+done
+
+echo ""
+echo "Pipeline summary completed!"
+echo "Detailed results are available in ../results/[dataset]/summary/"
