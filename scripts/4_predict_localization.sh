@@ -76,6 +76,11 @@ conda activate deeploc || {
     echo "  5. pip install DeepLoc-2.1.0.tar.gz"
     exit 1
 }
+# Remove outputs directory if it exists
+if [ -d "outputs/" ]; then
+    echo "Removing existing outputs/ directory..."
+    rm -rf outputs/
+fi
 
 # Create localization output directories
 for dataset in "${datasets[@]}"; do
@@ -200,6 +205,12 @@ else
             done
         fi
     done
+
+    # Remove outputs directory if it exists
+    if [ -d "outputs/" ]; then
+        echo "Removing existing outputs/ directory..."
+        rm -rf outputs/
+    fi
     
     echo ""
     echo "Summary: Generated ${#found_outputs[@]} prediction files from ${#processed_files[@]} input files"
