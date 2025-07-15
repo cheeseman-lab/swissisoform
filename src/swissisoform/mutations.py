@@ -771,14 +771,6 @@ class MutationHandler:
         # Process combined data
         combined_df = pd.concat(dfs_to_combine, ignore_index=True)
 
-        # Remove duplicates
-        combined_df = combined_df.drop_duplicates(
-            subset=["position", "reference", "alternate"], keep="first"
-        )
-
-        if verbose:
-            print(f"Found {len(combined_df)} unique variants after deduplication")
-
         # Convert position to numeric
         combined_df["position"] = pd.to_numeric(
             combined_df["position"], errors="coerce"
