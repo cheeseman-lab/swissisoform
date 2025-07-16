@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=deeploc    # Job name
+#SBATCH --job-name=deeploc                 # Job name
 #SBATCH --partition=nvidia-t4-20           # GPU partition
 #SBATCH --array=1-4                        # Job array with 4 tasks
 #SBATCH --cpus-per-task=8                  # CPUs per task

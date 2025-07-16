@@ -623,6 +623,37 @@ class TruncatedProteinGenerator:
             f"Class is only equipped to handle missense variants, temporarily."
         )
         return mutations
+    
+    def _calculate_aa_difference(self, original_protein: str, mutated_protein: str) -> Optional[str]:
+        """Calculate amino acid difference between two protein sequences.
+        
+        Args:
+            original_protein: Original protein sequence
+            mutated_protein: Mutated protein sequence
+        
+        Returns:
+            String in format "A123V" (original AA, position, new AA) or None if no single change
+        """
+        if len(original_protein) != len(mutated_protein):
+            # Handle length differences (indels, frameshifts, etc.)
+            return f"len_{len(original_protein)}>{len(mutated_protein)}"
+        
+        differences = []
+        for i, (orig_aa, mut_aa) in enumerate(zip(original_protein, mutated_protein)):
+            if orig_aa != mut_aa:
+                # Use 1-based positioning like standard notation
+                differences.append(f"{orig_aa}{i+1}{mut_aa}")
+        
+        if len(differences) == 0:
+            return None  # No difference
+        elif len(differences) == 1:
+            return differences[0]  # Single AA change
+        else:
+            # Multiple changes - could truncate or show first few
+            if len(differences) <= 3:
+                return "_".join(differences)
+            else:
+                return f"{differences[0]}_and_{len(differences)-1}_more"
 
     async def extract_gene_proteins_with_mutations(
         self,
