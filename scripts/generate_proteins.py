@@ -26,6 +26,7 @@ from swissisoform.translation import TruncatedProteinGenerator
 from swissisoform.utils import (
     parse_gene_list,
     load_preferred_transcripts,
+    print_translation_summary,
 )
 
 # Configure logger
@@ -110,9 +111,8 @@ async def main(
     # Read gene list
     print(f"\nReading gene list from {gene_list_path}")
     gene_names = parse_gene_list(gene_list_path)
-    total_genes = len(gene_names)
 
-    # Print configuration
+    total_genes = len(gene_names)
     mode_name = "Mutations" if mutations_mode else "Pairs"
     print(f"\nStarting protein sequence generation for {total_genes} genes")
     print(f"Configuration:")
@@ -123,59 +123,57 @@ async def main(
     print(f"  └─ Output format: {output_format}")
 
     if preferred_transcripts:
-        print(f"Using {len(preferred_transcripts)} preferred transcripts when available")
+        print(
+            f"Using {len(preferred_transcripts)} preferred transcripts when available"
+        )
 
     # Process genes with progress reporting
     successful_genes = 0
     failed_genes = []
-    
+
     for gene_idx, gene_name in enumerate(gene_names, 1):
         print(f"\nProcessing gene {gene_idx}/{total_genes}: {gene_name}")
-        
+
         try:
+            # Test if gene has any data before full processing
+            test_pairs = protein_generator.extract_gene_proteins(
+                gene_name, preferred_transcripts
+            )
+            if not test_pairs:
+                print(f"  └─ ❌ No transcript-truncation pairs found")
+                failed_genes.append(gene_name)
+                continue
+
+            print(f"  ├─ Found {len(test_pairs)} transcript-truncation pairs")
+
+            # Additional info for mutations mode
             if mutations_mode:
-                # Test if gene has any data before full processing
-                test_pairs = protein_generator.extract_gene_proteins(
-                    gene_name, preferred_transcripts
-                )
-                if not test_pairs:
-                    print(f"  └─ ❌ No transcript-truncation pairs found")
-                    failed_genes.append(gene_name)
-                    continue
-                
-                print(f"  ├─ Found {len(test_pairs)} transcript-truncation pairs")
-                print(f"  └─ ✅ Gene processed successfully")
-                successful_genes += 1
-            else:
-                # For pairs mode, just check basic extraction
-                gene_pairs = protein_generator.extract_gene_proteins(
-                    gene_name, preferred_transcripts
-                )
-                if not gene_pairs:
-                    print(f"  └─ ❌ No transcript-truncation pairs found")
-                    failed_genes.append(gene_name)
-                    continue
-                
-                print(f"  ├─ Found {len(gene_pairs)} transcript-truncation pairs")
-                print(f"  └─ ✅ Gene processed successfully")
-                successful_genes += 1
-                
+                # Quick check for mutations in truncation regions
+                truncation_features = alt_isoforms.get_visualization_features(gene_name)
+                if not truncation_features.empty:
+                    print(f"  ├─ Found {len(truncation_features)} truncation regions")
+
+            print(f"  └─ ✅ Gene processed successfully")
+            successful_genes += 1
+
         except Exception as e:
             print(f"  └─ ❌ Error processing gene: {str(e)}")
             failed_genes.append(gene_name)
 
     # Generate the full dataset
     print(f"\nGenerating final dataset...")
-    
+
     if mutations_mode:
-        dataset = await protein_generator.create_protein_sequence_dataset_with_mutations(
-            gene_list=gene_names,
-            preferred_transcripts=preferred_transcripts,
-            include_mutations=True,
-            impact_types=impact_types,
-            output_format=output_format,
-            min_length=min_length,
-            max_length=max_length,
+        dataset = (
+            await protein_generator.create_protein_sequence_dataset_with_mutations(
+                gene_list=gene_names,
+                preferred_transcripts=preferred_transcripts,
+                include_mutations=True,
+                impact_types=impact_types,
+                output_format=output_format,
+                min_length=min_length,
+                max_length=max_length,
+            )
         )
     else:
         dataset = protein_generator.create_protein_sequence_dataset_pairs(
@@ -189,29 +187,19 @@ async def main(
     # Final summary
     end_time = datetime.now()
     duration = end_time - start_time
-    
-    print(f"\n🏁 FINAL SUMMARY")
-    print("=" * 60)
-    print(f"  ├─ Genes processed successfully: {successful_genes}/{total_genes}")
-    if failed_genes:
-        print(f"  ├─ Failed genes: {len(failed_genes)}")
-        if len(failed_genes) <= 5:
-            print(f"  │   └─ {', '.join(failed_genes)}")
-        else:
-            print(f"  │   └─ {', '.join(failed_genes[:5])}, ... and {len(failed_genes)-5} more")
-    
-    if not dataset.empty:
-        print(f"  ├─ Total sequences generated: {len(dataset)}")
-        if mutations_mode and 'variant_type' in dataset.columns:
-            type_counts = dataset['variant_type'].value_counts()
-            for variant_type, count in type_counts.items():
-                print(f"  │   ├─ {variant_type}: {count}")
-        print(f"  └─ Average sequence length: {dataset['length'].mean():.1f}")
-    else:
-        print(f"  └─ ❌ No sequences generated")
+
+    # Create and print summary using the utils function
+    print_translation_summary(
+        dataset=dataset,
+        successful_genes=successful_genes,
+        total_genes=total_genes,
+        failed_genes=failed_genes,
+        mutations_mode=mutations_mode,
+        output_dir=output_dir,
+    )
 
     print(
-        f"\nCompleted in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+        f"\n  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
     )
 
 
@@ -224,50 +212,50 @@ if __name__ == "__main__":
     parser.add_argument(
         "--genome",
         default="../data/genome_data/GRCh38.p7.genome.fa",
-        help="Path to genome FASTA file"
+        help="Path to genome FASTA file",
     )
     parser.add_argument(
         "--annotation",
         default="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf",
-        help="Path to genome annotation GTF file"
+        help="Path to genome annotation GTF file",
     )
     parser.add_argument(
         "--bed",
         default="../data/ribosome_profiling/truncations_cleaned.bed",
-        help="Path to alternative isoform BED file"
+        help="Path to alternative isoform BED file",
     )
     parser.add_argument(
         "--preferred-transcripts",
         default="../data/genome_data/hela_top_transcript.txt",
-        help="Path to file containing preferred transcript IDs"
+        help="Path to file containing preferred transcript IDs",
     )
     parser.add_argument(
         "--mutations",
         action="store_true",
-        help="Enable mutations mode (generate canonical + truncated + mutated sequences)"
+        help="Enable mutations mode (generate canonical + truncated + mutated sequences)",
     )
     parser.add_argument(
         "--impact-types",
         nargs="+",
         default=None,
-        help="Mutation impact types to include (space-separated, only used with --mutations)"
+        help="Mutation impact types to include (space-separated, only used with --mutations)",
     )
     parser.add_argument(
-        "--min-length", 
-        type=int, 
-        default=10, 
-        help="Minimum protein length to include"
+        "--min-length",
+        type=int,
+        default=10,
+        help="Minimum protein length to include",
     )
     parser.add_argument(
-        "--max-length", 
-        type=int, 
-        default=100000, 
-        help="Maximum protein length to include"
+        "--max-length",
+        type=int,
+        default=100000,
+        help="Maximum protein length to include",
     )
     parser.add_argument(
-        "--format", 
-        default="fasta,csv", 
-        help="Output format: fasta, csv, or fasta,csv"
+        "--format",
+        default="fasta,csv",
+        help="Output format: fasta, csv, or fasta,csv",
     )
 
     args = parser.parse_args()

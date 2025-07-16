@@ -623,27 +623,29 @@ class TruncatedProteinGenerator:
             f"Class is only equipped to handle missense variants, temporarily."
         )
         return mutations
-    
-    def _calculate_aa_difference(self, original_protein: str, mutated_protein: str) -> Optional[str]:
+
+    def _calculate_aa_difference(
+        self, original_protein: str, mutated_protein: str
+    ) -> Optional[str]:
         """Calculate amino acid difference between two protein sequences.
-        
+
         Args:
             original_protein: Original protein sequence
             mutated_protein: Mutated protein sequence
-        
+
         Returns:
             String in format "A123V" (original AA, position, new AA) or None if no single change
         """
         if len(original_protein) != len(mutated_protein):
             # Handle length differences (indels, frameshifts, etc.)
             return f"len_{len(original_protein)}>{len(mutated_protein)}"
-        
+
         differences = []
         for i, (orig_aa, mut_aa) in enumerate(zip(original_protein, mutated_protein)):
             if orig_aa != mut_aa:
                 # Use 1-based positioning like standard notation
-                differences.append(f"{orig_aa}{i+1}{mut_aa}")
-        
+                differences.append(f"{orig_aa}{i + 1}{mut_aa}")
+
         if len(differences) == 0:
             return None  # No difference
         elif len(differences) == 1:
@@ -653,7 +655,7 @@ class TruncatedProteinGenerator:
             if len(differences) <= 3:
                 return "_".join(differences)
             else:
-                return f"{differences[0]}_and_{len(differences)-1}_more"
+                return f"{differences[0]}_and_{len(differences) - 1}_more"
 
     async def extract_gene_proteins_with_mutations(
         self,
@@ -876,17 +878,17 @@ class TruncatedProteinGenerator:
         all_sequences = []
         successful_genes = 0
         skipped_genes = []
-        
+
         if impact_types is None:
             impact_types = ["missense variant"]
-        
+
         # Process each gene
         for gene_idx, gene_name in enumerate(gene_list, 1):
             try:
                 self._debug_print(
                     f"Processing gene {gene_idx}/{len(gene_list)}: {gene_name}"
                 )
-                
+
                 if include_mutations and self.mutation_handler:
                     # Use mutation-enhanced extraction
                     enhanced_pairs = await self.extract_gene_proteins_with_mutations(
@@ -898,13 +900,13 @@ class TruncatedProteinGenerator:
                     if not enhanced_pairs:
                         skipped_genes.append(gene_name)
                         continue
-                    
+
                     for pair in enhanced_pairs:
                         canonical_protein = pair["canonical"]["protein"]
                         truncated_protein = pair["truncated_base"]["protein"]
                         transcript_id = pair["transcript_id"]
                         truncation_id = pair["truncation_id"]
-                        
+
                         # Check length constraints
                         if not (min_length <= len(canonical_protein) <= max_length):
                             continue
@@ -912,7 +914,7 @@ class TruncatedProteinGenerator:
                             continue
                         if truncated_protein == canonical_protein:
                             continue
-                        
+
                         # Add canonical sequence
                         all_sequences.append(
                             {
@@ -933,7 +935,7 @@ class TruncatedProteinGenerator:
                                 "clinvar_variant_id": None,
                             }
                         )
-                        
+
                         # Add base truncated sequence
                         all_sequences.append(
                             {
@@ -954,28 +956,30 @@ class TruncatedProteinGenerator:
                                 "clinvar_variant_id": None,
                             }
                         )
-                        
+
                         # Add mutation variants with full information
-                        for mut_idx, mut_variant in enumerate(pair["truncated_mutations"]):
+                        for mut_idx, mut_variant in enumerate(
+                            pair["truncated_mutations"]
+                        ):
                             mutated_protein = mut_variant["protein"]
                             if (
                                 min_length <= len(mutated_protein) <= max_length
                                 and mutated_protein != canonical_protein
                             ):
                                 mut_info = mut_variant["mutation"]
-                                
+
                                 # Calculate amino acid difference
                                 aa_difference = self._calculate_aa_difference(
                                     canonical_protein, mutated_protein
                                 )
-                                
+
                                 # Create enhanced variant ID with AA change
                                 base_variant_id = f"canonical_mut_{mut_info['position']}_{mut_info['reference']}>{mut_info['alternate']}"
                                 if aa_difference:
                                     variant_id = f"{base_variant_id}_{aa_difference}"
                                 else:
                                     variant_id = base_variant_id
-                                
+
                                 all_sequences.append(
                                     {
                                         "gene": gene_name,
@@ -992,7 +996,9 @@ class TruncatedProteinGenerator:
                                         "hgvsp": mut_info.get("hgvsp", ""),
                                         "mutation_impact": mut_info.get("impact", ""),
                                         "mutation_source": mut_info.get("source", ""),
-                                        "clinvar_variant_id": mut_info.get("variant_id", ""),
+                                        "clinvar_variant_id": mut_info.get(
+                                            "variant_id", ""
+                                        ),
                                     }
                                 )
                 else:
@@ -1003,13 +1009,13 @@ class TruncatedProteinGenerator:
                     if not gene_pairs:
                         skipped_genes.append(gene_name)
                         continue
-                    
+
                     for pair in gene_pairs:
                         canonical_protein = pair["canonical"]["protein"]
                         truncated_protein = pair["truncated"]["protein"]
                         transcript_id = pair["transcript_id"]
                         truncation_id = pair["truncation_id"]
-                        
+
                         # Check length constraints
                         if not (min_length <= len(canonical_protein) <= max_length):
                             continue
@@ -1017,7 +1023,7 @@ class TruncatedProteinGenerator:
                             continue
                         if truncated_protein == canonical_protein:
                             continue
-                        
+
                         # Add canonical sequence (without mutation columns for non-mutation mode)
                         all_sequences.append(
                             {
@@ -1029,7 +1035,7 @@ class TruncatedProteinGenerator:
                                 "variant_type": "canonical",
                             }
                         )
-                        
+
                         # Add truncated sequence
                         all_sequences.append(
                             {
@@ -1041,29 +1047,28 @@ class TruncatedProteinGenerator:
                                 "variant_type": "truncated",
                             }
                         )
-                
+
                 successful_genes += 1
             except Exception as e:
                 self._debug_print(f"Error processing gene {gene_name}: {str(e)}")
                 skipped_genes.append(gene_name)
-        
+
         # Create dataset
         dataset = pd.DataFrame(all_sequences)
-        
+
         # Save dataset if requested
         if not dataset.empty and output_format:
             if "fasta" in output_format.lower():
                 self._save_dataset_fasta(dataset, include_mutations)
             if "csv" in output_format.lower():
                 self._save_dataset_csv(dataset, include_mutations)
-        
+
         # Print summary
         self._print_dataset_summary(
             dataset, successful_genes, len(gene_list), skipped_genes, include_mutations
         )
-        
-        return dataset
 
+        return dataset
 
     def create_protein_sequence_dataset_pairs(
         self,
@@ -1153,7 +1158,9 @@ class TruncatedProteinGenerator:
         # Save dataset
         if not dataset.empty:
             if "fasta" in output_format.lower():
-                self._save_dataset_fasta(dataset, include_mutations=False, pairs_only=True)
+                self._save_dataset_fasta(
+                    dataset, include_mutations=False, pairs_only=True
+                )
             if "csv" in output_format.lower():
                 output_file = self.output_dir / "protein_sequences_pairs.csv"
                 dataset.to_csv(output_file, index=False)
@@ -1248,7 +1255,10 @@ class TruncatedProteinGenerator:
             pd.DataFrame(rows).to_csv(output_file, index=False)
 
     def _save_dataset_fasta(
-        self, dataset: pd.DataFrame, include_mutations: bool = False, pairs_only: bool = False
+        self,
+        dataset: pd.DataFrame,
+        include_mutations: bool = False,
+        pairs_only: bool = False,
     ) -> None:
         """Save dataset as FASTA file."""
         records = []

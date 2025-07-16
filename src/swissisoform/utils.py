@@ -224,6 +224,146 @@ def print_mutation_summary(results_df, output_dir):
     )
 
 
+def print_translation_summary(
+    dataset: pd.DataFrame,
+    successful_genes: int,
+    total_genes: int,
+    failed_genes: List[str],
+    mutations_mode: bool,
+    output_dir: str,
+) -> None:
+    """Print comprehensive summary of protein sequence generation results.
+
+    Args:
+        dataset: Generated protein sequence dataset
+        successful_genes: Number of successfully processed genes
+        total_genes: Total number of genes attempted
+        failed_genes: List of gene names that failed processing
+        mutations_mode: Whether mutations were included
+        output_dir: Output directory path
+    """
+    print(f"\nProtein Sequence Generation Summary:")
+    print(f"  ├─ Total genes processed: {total_genes}")
+
+    # Status breakdown
+    print(f"\n  ├─ Status breakdown:")
+    print(f"  │  ├─ Success: {successful_genes}")
+    if failed_genes:
+        print(f"  │  └─ Failed: {len(failed_genes)}")
+    else:
+        print(f"  │  └─ Failed: 0")
+
+    # Dataset statistics
+    if not dataset.empty:
+        print(f"\n  ├─ Sequence Generation:")
+        print(f"  │  ├─ Total sequences generated: {len(dataset):,}")
+
+        # Calculate transcript-truncation pairs
+        genes_with_data = dataset["gene"].nunique()
+        if mutations_mode and "variant_type" in dataset.columns:
+            # Count unique transcript-truncation pairs (canonical + truncated base pairs)
+            base_sequences = dataset[
+                dataset["variant_type"].isin(["canonical", "truncated"])
+            ]
+            unique_pairs = (
+                len(base_sequences) // 2
+                if len(base_sequences) % 2 == 0
+                else (len(base_sequences) + 1) // 2
+            )
+        else:
+            # For pairs mode, total sequences / 2 = pairs
+            unique_pairs = (
+                len(dataset) // 2 if len(dataset) % 2 == 0 else (len(dataset) + 1) // 2
+            )
+
+        print(f"  │  ├─ Transcript-truncation pairs: {unique_pairs}")
+        print(
+            f"  │  └─ Average sequences per gene: {len(dataset) / genes_with_data:.1f}"
+        )
+
+        # Mode-specific breakdown
+        if mutations_mode and "variant_type" in dataset.columns:
+            print(f"\n  ├─ Sequence breakdown:")
+            type_counts = dataset["variant_type"].value_counts()
+            for variant_type, count in type_counts.items():
+                percentage = (count / len(dataset)) * 100
+                print(f"  │  ├─ {variant_type}: {count:,} ({percentage:.1f}%)")
+
+            # Mutation-specific statistics
+            if "canonical_mutated" in type_counts:
+                mutation_data = dataset[dataset["variant_type"] == "canonical_mutated"]
+                if not mutation_data.empty:
+                    print(f"\n  ├─ Mutation Analysis:")
+                    print(f"  │  ├─ Total mutations integrated: {len(mutation_data)}")
+                    print(
+                        f"  │  ├─ Unique mutation positions: {mutation_data['mutation_position'].nunique()}"
+                    )
+
+                    if "aa_change" in mutation_data.columns:
+                        aa_changes = mutation_data["aa_change"].dropna()
+                        silent_mutations = len(mutation_data) - len(aa_changes)
+                        print(f"  │  ├─ Mutations with AA changes: {len(aa_changes)}")
+                        if silent_mutations > 0:
+                            print(f"  │  ├─ Silent mutations: {silent_mutations}")
+
+                    # Breakdown by impact type if available
+                    if "mutation_impact" in mutation_data.columns:
+                        impact_counts = mutation_data["mutation_impact"].value_counts()
+                        print(f"  │  │")
+                        print(f"  │  ├─ Breakdown by impact type:")
+                        for impact_type, count in impact_counts.items():
+                            percentage = (count / len(mutation_data)) * 100
+                            print(
+                                f"  │  │  ├─ {impact_type}: {count} ({percentage:.1f}%)"
+                            )
+
+                    print(
+                        f"  │  └─ Average mutations per gene: {len(mutation_data) / genes_with_data:.1f}"
+                    )
+        else:
+            # Pairs mode breakdown
+            if "is_truncated" in dataset.columns:
+                canonical_count = len(dataset[dataset["is_truncated"] == 0])
+                truncated_count = len(dataset[dataset["is_truncated"] == 1])
+                print(f"\n  ├─ Sequence breakdown:")
+                print(f"  │  ├─ Canonical: {canonical_count:,}")
+                print(f"  │  └─ Truncated: {truncated_count:,}")
+
+        # Length statistics
+        print(f"\n  ├─ Length statistics:")
+        print(f"  │  ├─ Average: {dataset['length'].mean():.1f} amino acids")
+        print(f"  │  ├─ Range: {dataset['length'].min()}-{dataset['length'].max()}")
+        print(f"  │  └─ Median: {dataset['length'].median():.1f}")
+
+    else:
+        print(f"\n  ├─ No sequences generated")
+
+    # Failed genes details
+    if failed_genes:
+        print(f"\n  ├─ Genes with errors:")
+        for gene in failed_genes[:5]:  # Show first 5
+            print(f"  │  ├─ {gene}: No transcript-truncation pairs found")
+        if len(failed_genes) > 5:
+            print(f"  │  └─ ... and {len(failed_genes) - 5} more")
+
+    # Output files
+    output_path = Path(output_dir)
+    print(f"\n  ├─ Results saved to: {output_dir}")
+
+    if mutations_mode:
+        fasta_file = output_path / "protein_sequences_with_mutations.fasta"
+        csv_file = output_path / "protein_sequences_with_mutations.csv"
+        print(f"  ├─ Protein sequences with mutations saved to: {csv_file.name}")
+        if fasta_file.exists():
+            print(f"  ├─ FASTA format saved to: {fasta_file.name}")
+    else:
+        fasta_file = output_path / "protein_sequences_pairs.fasta"
+        csv_file = output_path / "protein_sequences_pairs.csv"
+        print(f"  ├─ Protein sequence pairs saved to: {csv_file.name}")
+        if fasta_file.exists():
+            print(f"  ├─ FASTA format saved to: {fasta_file.name}")
+
+
 def update_gencode_gene_names(
     input_gtf_path: Union[str, Path],
     output_gtf_path: Union[str, Path],
