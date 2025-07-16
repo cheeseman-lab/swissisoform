@@ -25,7 +25,7 @@ from swissisoform.utils import (
     parse_gene_list,
     save_gene_level_results,
     save_truncation_level_results,
-    print_analysis_summary,
+    print_mutation_summary,
     load_preferred_transcripts,
 )
 
@@ -132,7 +132,7 @@ async def main(
 
     # Create and print summary
     results_df = pd.DataFrame(results)
-    print_analysis_summary(results_df, output_dir)
+    print_mutation_summary(results_df, output_dir)
 
     print(
         f"  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"

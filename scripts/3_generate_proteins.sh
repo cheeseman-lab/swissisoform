@@ -86,9 +86,7 @@ case $SLURM_ARRAY_TASK_ID in
           --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
           --min-length "$MIN_LENGTH" \
           --max-length "$MAX_LENGTH" \
-          --format "$FORMAT" \
-          --include-canonical \
-          --pairs-only
+          --format "$FORMAT"
         echo "Array Task 1: Completed reduced pairs generation at $(date)"
         ;;
     2)
@@ -102,8 +100,7 @@ case $SLURM_ARRAY_TASK_ID in
           --min-length "$MIN_LENGTH" \
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT" \
-          --include-canonical \
-          --include-mutations \
+          --mutations \
           --impact-types "missense variant"
         echo "Array Task 2: Completed reduced mutations generation at $(date)"
         ;;
@@ -117,9 +114,7 @@ case $SLURM_ARRAY_TASK_ID in
           --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
           --min-length "$MIN_LENGTH" \
           --max-length "$MAX_LENGTH" \
-          --format "$FORMAT" \
-          --include-canonical \
-          --pairs-only
+          --format "$FORMAT"
         echo "Array Task 3: Completed full pairs generation at $(date)"
         ;;
     4)
@@ -133,8 +128,7 @@ case $SLURM_ARRAY_TASK_ID in
           --min-length "$MIN_LENGTH" \
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT" \
-          --include-canonical \
-          --include-mutations \
+          --mutations \
           --impact-types "missense variant"
         echo "Array Task 4: Completed full mutations generation at $(date)"
         ;;

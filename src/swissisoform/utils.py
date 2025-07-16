@@ -113,7 +113,7 @@ def save_truncation_level_results(
     print(f"Transcript-truncation pair analysis saved to {output_path}")
 
 
-def print_analysis_summary(results_df, output_dir):
+def print_mutation_summary(results_df, output_dir):
     """Print summary statistics from the analysis results.
 
     Args:
