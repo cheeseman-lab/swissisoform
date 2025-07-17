@@ -11,6 +11,7 @@ SwissIsoform is a Python package for analyzing alternative protein isoforms disc
 - **Mutation integration** into protein sequences
 - **Interactive visualizations** of transcript features and mutations
 - **Subcellular localization prediction** using DeepLoc
+- **Comprehensive results summary and analysis**
 
 ## Installation
 
@@ -64,6 +65,9 @@ sbatch scripts/3_generate_proteins.sh
 
 # Predict localization (SLURM, GPU)
 sbatch scripts/4_predict_localization.sh
+
+# Summarize results (no SLURM needed)
+bash scripts/5_summarize_results.sh
 ```
 
 ### Interactive Analysis (Jupyter)
@@ -149,6 +153,25 @@ pairs_dataset = protein_generator.create_protein_sequence_dataset_pairs(
 )
 ```
 
+#### Results Analysis
+
+```python
+from swissisoform.analysis import SummaryAnalyzer
+
+# Initialize analyzer
+analyzer = SummaryAnalyzer()
+
+# Analyze a specific dataset
+analyzer.analyze_dataset("reduced")  # or "full"
+
+# The analyzer will:
+# - Load mutation analysis results
+# - Load localization predictions
+# - Identify genes with localization changes
+# - Generate comprehensive summaries
+# - Save results to results/[dataset]/summary/
+```
+
 ## Data Structure
 
 ```
@@ -168,13 +191,20 @@ swissisoform/
     │   │   ├── gene_level_results.csv
     │   │   ├── truncation_level_results.csv
     │   │   └── [gene_name]/         # Visualizations
-    │   └── proteins/
-    │       ├── protein_sequences_pairs.fasta/csv
-    │       ├── protein_sequences_with_mutations.fasta/csv
-    │       └── *_results.csv        # DeepLoc predictions
+    │   ├── proteins/
+    │   │   ├── protein_sequences_pairs.fasta/csv
+    │   │   ├── protein_sequences_with_mutations.fasta/csv
+    │   │   └── *_results.csv        # DeepLoc predictions
+    │   └── summary/                 # NEW: Analysis summaries
+    │       ├── mutation_summary.txt
+    │       ├── localization_summary.txt
+    │       ├── genes_with_localization_changes.csv
+    │       ├── detailed_localization_analysis.csv
+    │       └── gene_level_summary.csv
     └── full/                        # All genes (~1,100 genes)
         ├── mutations/
-        └── proteins/
+        ├── proteins/
+        └── summary/                 # NEW: Analysis summaries
 ```
 
 ## Output Files
@@ -191,6 +221,13 @@ swissisoform/
 ### Localization Predictions
 - **`*_results.csv`**: DeepLoc predictions (Fast and Accurate modes)
 
+### Summary Analysis (NEW)
+- **`mutation_summary.txt`**: Text summary of mutation analysis results
+- **`localization_summary.txt`**: Text summary of localization predictions and changes
+- **`genes_with_localization_changes.csv`**: Genes where truncated/mutated isoforms have different predicted localizations
+- **`detailed_localization_analysis.csv`**: Complete localization predictions for all sequences
+- **`gene_level_summary.csv`**: Gene-level prioritized targets with mutation and localization statistics
+
 ## File Formats
 
 **FASTA sequences:**
@@ -205,6 +242,31 @@ gene,transcript_id,variant_id,sequence,length,variant_type
 NAXE,ENST00000123456,canonical,MAKTG...,245,canonical
 NAXE,ENST00000123456,trunc_AUG_100_200,KTGFL...,180,truncated
 ```
+
+**Gene-level summary columns:**
+```csv
+gene,canonical_localization,total_truncating_isoforms,truncating_isoforms_with_localization_change,
+total_missense_variants,missense_variants_with_localization_change,total_variants_with_localization_change,
+total_frameshift_mutations,total_nonsense_mutations,total_frameshift_or_nonsense_mutations,
+total_missense_mutations,total_mutations_all_types,...
+```
+
+## Key Analysis Features
+
+### Mutation Analysis
+- **Frameshift OR Nonsense mutations**: Protein-truncating variants from ClinVar
+- **Missense mutations**: Single amino acid changes that may affect localization
+- **Comprehensive mutation mapping**: Mutations are mapped to truncation regions
+
+### Localization Analysis
+- **Canonical vs Truncated**: Compare localization predictions between full-length and truncated isoforms
+- **Canonical vs Missense**: Compare localization predictions between wild-type and mutated sequences
+- **Prioritized gene targets**: Genes ranked by number of isoforms with localization changes
+
+### Summary Statistics
+- **Gene-level prioritization**: Focus on genes with the most interesting localization changes
+- **Clinical relevance**: Integration with ClinVar mutation data
+- **Comprehensive reporting**: Text summaries and detailed CSV files for further analysis
 
 ## Requirements
 
