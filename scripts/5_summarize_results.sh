@@ -1,13 +1,5 @@
 #!/bin/bash
 
-#SBATCH --job-name=summarize                  # Job name
-#SBATCH --partition=20                        # Partition name
-#SBATCH --ntasks=1                            # Run a single task
-#SBATCH --cpus-per-task=4                     # CPUs per task
-#SBATCH --mem=2G                              # Memory for the job
-#SBATCH --time=1:00:00                        # Time limit
-#SBATCH --output=out/summarize-%j.out         # Standard output log
-
 # 5_summarize_results.sh
 # Summarizes pipeline results: mutations and localization predictions
 
@@ -100,78 +92,10 @@ conda activate swissisoform || {
     exit 1
 }
 
-# Run analysis for each dataset independently
+# Run summary analysis for both datasets
 echo ""
-echo "Starting summary analysis for each dataset..."
-
-for dataset in "${DATASETS[@]}"; do
-    # Check if this dataset has the minimum required files
-    dataset_mutation_exists=false
-    dataset_localization_exists=false
-    
-    if [ -f "../results/$dataset/mutations/gene_level_results.csv" ]; then
-        dataset_mutation_exists=true
-    fi
-    
-    if [ -f "../results/$dataset/localization/protein_sequences_pairs_Accurate_results.csv" ] || \
-       [ -f "../results/$dataset/localization/protein_sequences_pairs_Fast_results.csv" ]; then
-        dataset_localization_exists=true
-    fi
-    
-    if [ "$dataset_mutation_exists" = true ] || [ "$dataset_localization_exists" = true ]; then
-        echo ""
-        echo "Analyzing $dataset dataset..."
-        python3 summarize_results.py --dataset "$dataset"
-    else
-        echo ""
-        echo "Skipping $dataset dataset - no data available"
-    fi
-done
-
-# Verify outputs for each dataset
-echo ""
-echo "Verifying summary outputs..."
-
-for dataset in "${DATASETS[@]}"; do
-    summary_dir="../results/$dataset/summary"
-    
-    if [ -d "$summary_dir" ]; then
-        echo ""
-        echo "Checking $dataset dataset summary files..."
-        
-        expected_summary_files=(
-            "$summary_dir/mutation_summary.txt"
-            "$summary_dir/localization_summary.txt"
-            "$summary_dir/genes_with_localization_changes.csv"
-            "$summary_dir/detailed_localization_analysis.csv"
-            "$summary_dir/gene_level_summary.csv"
-        )
-        
-        dataset_files_present=true
-        for file in "${expected_summary_files[@]}"; do
-            if [ -f "$file" ]; then
-                if [[ "$file" == *.csv ]]; then
-                    count=$(($(wc -l < "$file") - 1))  # Subtract header
-                    echo "✓ $(basename $file) ($count rows)"
-                else
-                    echo "✓ $(basename $file)"
-                fi
-            else
-                echo "✗ $(basename $file) missing"
-                dataset_files_present=false
-            fi
-        done
-        
-        if [ "$dataset_files_present" = true ]; then
-            echo "✓ $dataset dataset summary completed successfully!"
-        else
-            echo "✗ $dataset dataset summary incomplete"
-        fi
-    else
-        echo ""
-        echo "No summary directory found for $dataset dataset"
-    fi
-done
+echo "Starting summary analysis..."
+python3 summarize_results.py
 
 echo ""
 echo "🎉 Pipeline summary analysis completed!"
