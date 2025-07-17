@@ -4,8 +4,8 @@
 #SBATCH --partition=20                        # Partition name
 #SBATCH --ntasks=1                            # Run a single task
 #SBATCH --cpus-per-task=4                     # CPUs per task
-#SBATCH --mem=16G                             # Memory for the job
-#SBATCH --time=2:00:00                        # Time limit
+#SBATCH --mem=2G                              # Memory for the job
+#SBATCH --time=1:00:00                        # Time limit
 #SBATCH --output=out/summarize-%j.out         # Standard output log
 
 # 5_summarize_results.sh
@@ -144,6 +144,7 @@ for dataset in "${DATASETS[@]}"; do
             "$summary_dir/localization_summary.txt"
             "$summary_dir/genes_with_localization_changes.csv"
             "$summary_dir/detailed_localization_analysis.csv"
+            "$summary_dir/gene_level_summary.csv"
         )
         
         dataset_files_present=true
@@ -185,7 +186,8 @@ for dataset in "${DATASETS[@]}"; do
         echo "  ├─ $dataset/summary/mutation_summary.txt"
         echo "  ├─ $dataset/summary/localization_summary.txt"
         echo "  ├─ $dataset/summary/genes_with_localization_changes.csv"
-        echo "  └─ $dataset/summary/detailed_localization_analysis.csv"
+        echo "  ├─ $dataset/summary/detailed_localization_analysis.csv"
+        echo "  └─ $dataset/summary/gene_level_summary.csv"
         
         # Show key findings for each dataset
         echo ""
@@ -215,7 +217,7 @@ for dataset in "${DATASETS[@]}"; do
         fi
         
         echo ""
-        echo "=" * 60
+        echo "============================================================"
     fi
 done
 

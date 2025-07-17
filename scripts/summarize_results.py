@@ -40,6 +40,34 @@ def load_mutation_results(dataset):
     return gene_results, pair_results
 
 
+def load_protein_sequences(dataset):
+    """Load protein sequence data to get variant metadata."""
+    base_path = Path(f"../results/{dataset}/proteins")
+    
+    pairs_file = base_path / "protein_sequences_pairs.csv"
+    mutations_file = base_path / "protein_sequences_with_mutations.csv"
+    
+    protein_data = {}
+    
+    if pairs_file.exists():
+        pairs_df = pd.read_csv(pairs_file)
+        print(f"Loaded {len(pairs_df)} protein sequence pairs for {dataset}")
+        # Index by sequence identifier
+        for _, row in pairs_df.iterrows():
+            seq_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
+            protein_data[seq_id] = row.to_dict()
+    
+    if mutations_file.exists():
+        mutations_df = pd.read_csv(mutations_file)
+        print(f"Loaded {len(mutations_df)} protein sequence mutations for {dataset}")
+        # Index by sequence identifier
+        for _, row in mutations_df.iterrows():
+            seq_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
+            protein_data[seq_id] = row.to_dict()
+    
+    return protein_data
+
+
 def load_localization_results(dataset):
     """Load localization prediction results for a dataset."""
     base_path = Path(f"../results/{dataset}/localization")
@@ -137,8 +165,15 @@ def analyze_mutations(dataset, gene_results, pair_results):
                     (pair_results[frameshift_col] > 0)
                     | (pair_results[nonsense_col] > 0)
                 ]["gene_name"].nunique()
+                
+                # Calculate total truncating mutations
+                total_truncating_mutations = (
+                    pair_results[frameshift_col].sum() + 
+                    pair_results[nonsense_col].sum()
+                )
+                
                 summary_lines.append(
-                    f"  Truncating (Frameshift OR Nonsense): {genes_with_truncating} genes"
+                    f"  Truncating (Frameshift OR Nonsense): {genes_with_truncating} genes ({total_truncating_mutations} total mutations)"
                 )
 
             # Total mutations
@@ -182,22 +217,35 @@ def parse_sequence_id(seq_id):
         return None, None, None
 
 
-def parse_deeploc_localization(localization):
-    """Parse DeepLoc localization which can be multiple locations separated by |."""
+def normalize_localization(localization):
+    """Normalize localization by sorting multiple locations."""
     if pd.isna(localization) or not localization:
         return "Unknown"
 
     localization = str(localization).strip()
-
-    # If multiple localizations, take the first one as primary
+    
+    # If multiple localizations, sort them for consistent comparison
     if "|" in localization:
-        primary_loc = localization.split("|")[0].strip()
-        return primary_loc
-
+        locations = [loc.strip() for loc in localization.split("|")]
+        locations.sort()  # Sort alphabetically for consistency
+        return "|".join(locations)
+    
     return localization
 
 
-def analyze_localizations(dataset, loc_results):
+def are_localizations_different(loc1, loc2):
+    """Check if two localizations are different, accounting for multi-location predictions."""
+    if pd.isna(loc1) or pd.isna(loc2):
+        return True
+    
+    # Normalize both localizations
+    norm_loc1 = normalize_localization(loc1)
+    norm_loc2 = normalize_localization(loc2)
+    
+    return norm_loc1 != norm_loc2
+
+
+def analyze_localizations(dataset, loc_results, protein_data):
     """Analyze localization predictions for a specific dataset."""
     print(f"\n=== ANALYZING LOCALIZATIONS FOR {dataset.upper()} DATASET ===")
 
@@ -232,7 +280,6 @@ def analyze_localizations(dataset, loc_results):
         return summary_lines, all_localization_comparisons
 
     summary_lines.append(f"Using {model_type} model predictions")
-    summary_lines.append(f"Total sequences analyzed: {len(pairs_data)}")
 
     # Check if we have the required columns
     if "Sequence_ID" not in pairs_data.columns:
@@ -246,13 +293,15 @@ def analyze_localizations(dataset, loc_results):
     # Parse sequence IDs and analyze localizations
     pairs_parsed = []
     for _, row in pairs_data.iterrows():
-        # Use the standardized column names
         seq_id = row.get("Sequence_ID", "")
-        localization = parse_deeploc_localization(row.get("Localisation", ""))
+        localization = row.get("Localisation", "")
 
         if seq_id and localization:
             gene, transcript, variant = parse_sequence_id(seq_id)
             if gene and transcript and variant:
+                # Get additional metadata from protein data
+                protein_info = protein_data.get(seq_id, {})
+                
                 pairs_parsed.append(
                     {
                         "dataset": dataset,
@@ -263,14 +312,19 @@ def analyze_localizations(dataset, loc_results):
                         "prediction": localization,
                         "confidence": 0,  # DeepLoc doesn't provide a single confidence score
                         "source": "pairs",
+                        "protein_info": protein_info,
                     }
                 )
 
     pairs_df = pd.DataFrame(pairs_parsed)
 
     if not pairs_df.empty:
+        # Count total gene pairs analyzed
+        total_genes = pairs_df["gene"].nunique()
+        
         # Group by gene and analyze canonical vs truncated
         gene_localization_changes = []
+        localization_change_details = []
 
         for gene in pairs_df["gene"].unique():
             gene_data = pairs_df[pairs_df["gene"] == gene]
@@ -281,40 +335,67 @@ def analyze_localizations(dataset, loc_results):
 
             if not canonical_seqs.empty and not truncated_seqs.empty:
                 canonical_loc = canonical_seqs.iloc[0]["prediction"]
+                canonical_info = canonical_seqs.iloc[0]["protein_info"]
 
                 for _, trunc_seq in truncated_seqs.iterrows():
                     trunc_loc = trunc_seq["prediction"]
+                    trunc_info = trunc_seq["protein_info"]
 
-                    if canonical_loc != trunc_loc:
-                        gene_localization_changes.append(
-                            {
-                                "dataset": dataset,
-                                "gene": gene,
-                                "transcript": trunc_seq["transcript"],
-                                "canonical_localization": canonical_loc,
-                                "truncated_localization": trunc_loc,
-                                "truncated_variant": trunc_seq["variant"],
-                                "localization_change_type": "canonical_vs_truncated",
-                                "model_type": model_type,
-                            }
-                        )
+                    if are_localizations_different(canonical_loc, trunc_loc):
+                        # Merge protein info for comprehensive record
+                        change_record = {
+                            "dataset": dataset,
+                            "gene": gene,
+                            "transcript": trunc_seq["transcript"],
+                            "canonical_localization": canonical_loc,
+                            "truncated_localization": trunc_loc,
+                            "truncated_variant": trunc_seq["variant"],
+                            "localization_change_type": "canonical_vs_truncated",
+                            "model_type": model_type,
+                            # Add protein sequence info
+                            "canonical_length": canonical_info.get("length", ""),
+                            "truncated_length": trunc_info.get("length", ""),
+                            "variant_type": trunc_info.get("variant_type", ""),
+                            "mutation_position": trunc_info.get("mutation_position", ""),
+                            "mutation_change": trunc_info.get("mutation_change", ""),
+                            "aa_change": trunc_info.get("aa_change", ""),
+                            "hgvsc": trunc_info.get("hgvsc", ""),
+                            "hgvsp": trunc_info.get("hgvsp", ""),
+                            "mutation_impact": trunc_info.get("mutation_impact", ""),
+                            "mutation_source": trunc_info.get("mutation_source", ""),
+                            "clinvar_variant_id": trunc_info.get("clinvar_variant_id", ""),
+                        }
+                        
+                        gene_localization_changes.append(change_record)
+                        
+                        # Store change details for summary
+                        localization_change_details.append({
+                            "gene": gene,
+                            "from": canonical_loc,
+                            "to": trunc_loc,
+                            "type": "canonical_vs_truncated"
+                        })
 
-        summary_lines.append(
-            f"Genes with canonical vs truncated localization changes: {len(gene_localization_changes)}"
-        )
+        # Count unique genes with localization changes
+        unique_genes_with_changes = len(set(change["gene"] for change in gene_localization_changes))
+        
+        summary_lines.append(f"Total gene pairs analyzed: {total_genes}")
+        summary_lines.append(f"Genes with canonical vs truncated localization changes: {unique_genes_with_changes} out of {total_genes}")
+        
         all_localization_comparisons.extend(gene_localization_changes)
 
         # Analyze mutations if available
         if mutations_data is not None:
             mutations_parsed = []
             for _, row in mutations_data.iterrows():
-                # Use the standardized column names
                 seq_id = row.get("Sequence_ID", "")
-                localization = parse_deeploc_localization(row.get("Localisation", ""))
+                localization = row.get("Localisation", "")
 
                 if seq_id and localization:
                     gene, transcript, variant = parse_sequence_id(seq_id)
                     if gene and transcript and variant:
+                        protein_info = protein_data.get(seq_id, {})
+                        
                         mutations_parsed.append(
                             {
                                 "dataset": dataset,
@@ -323,20 +404,18 @@ def analyze_localizations(dataset, loc_results):
                                 "variant": variant,
                                 "sequence_id": seq_id,
                                 "prediction": localization,
-                                "confidence": 0,  # DeepLoc doesn't provide a single confidence score
+                                "confidence": 0,
                                 "source": "mutations",
+                                "protein_info": protein_info,
                             }
                         )
 
             mutations_df = pd.DataFrame(mutations_parsed)
 
             if not mutations_df.empty:
-                summary_lines.append(
-                    f"Mutation sequences analyzed: {len(mutations_df)}"
-                )
-
                 # Find genes with missense mutations causing localization changes
                 missense_changes = []
+                missense_change_details = []
 
                 for gene in mutations_df["gene"].unique():
                     gene_mut_data = mutations_df[mutations_df["gene"] == gene]
@@ -349,6 +428,7 @@ def analyze_localizations(dataset, loc_results):
 
                     if not canonical_pairs.empty:
                         canonical_loc = canonical_pairs.iloc[0]["prediction"]
+                        canonical_info = canonical_pairs.iloc[0]["protein_info"]
 
                         # Look for missense mutations with different localizations
                         missense_variants = gene_mut_data[
@@ -357,36 +437,70 @@ def analyze_localizations(dataset, loc_results):
 
                         for _, mut_seq in missense_variants.iterrows():
                             mut_loc = mut_seq["prediction"]
+                            mut_info = mut_seq["protein_info"]
 
-                            if canonical_loc != mut_loc:
-                                missense_changes.append(
-                                    {
-                                        "dataset": dataset,
-                                        "gene": gene,
-                                        "transcript": mut_seq["transcript"],
-                                        "canonical_localization": canonical_loc,
-                                        "mutated_localization": mut_loc,
-                                        "mutated_variant": mut_seq["variant"],
-                                        "localization_change_type": "canonical_vs_missense",
-                                        "model_type": model_type,
-                                    }
-                                )
+                            if are_localizations_different(canonical_loc, mut_loc):
+                                change_record = {
+                                    "dataset": dataset,
+                                    "gene": gene,
+                                    "transcript": mut_seq["transcript"],
+                                    "canonical_localization": canonical_loc,
+                                    "mutated_localization": mut_loc,
+                                    "mutated_variant": mut_seq["variant"],
+                                    "localization_change_type": "canonical_vs_missense",
+                                    "model_type": model_type,
+                                    # Add protein sequence info
+                                    "canonical_length": canonical_info.get("length", ""),
+                                    "mutated_length": mut_info.get("length", ""),
+                                    "variant_type": mut_info.get("variant_type", ""),
+                                    "mutation_position": mut_info.get("mutation_position", ""),
+                                    "mutation_change": mut_info.get("mutation_change", ""),
+                                    "aa_change": mut_info.get("aa_change", ""),
+                                    "hgvsc": mut_info.get("hgvsc", ""),
+                                    "hgvsp": mut_info.get("hgvsp", ""),
+                                    "mutation_impact": mut_info.get("mutation_impact", ""),
+                                    "mutation_source": mut_info.get("mutation_source", ""),
+                                    "clinvar_variant_id": mut_info.get("clinvar_variant_id", ""),
+                                }
+                                
+                                missense_changes.append(change_record)
+                                
+                                # Store change details for summary
+                                missense_change_details.append({
+                                    "gene": gene,
+                                    "from": canonical_loc,
+                                    "to": mut_loc,
+                                    "type": "canonical_vs_missense"
+                                })
 
-                summary_lines.append(
-                    f"Genes with missense mutation localization changes: {len(missense_changes)}"
-                )
+                unique_genes_with_missense_changes = len(set(change["gene"] for change in missense_changes))
+                summary_lines.append(f"Genes with missense mutation localization changes: {unique_genes_with_missense_changes} out of {total_genes}")
                 all_localization_comparisons.extend(missense_changes)
 
-        # Most common localizations
-        top_localizations = pairs_df["prediction"].value_counts().head(5)
-        summary_lines.append(f"\nTop 5 predicted localizations:")
-        for loc, count in top_localizations.items():
-            summary_lines.append(f"  {loc}: {count} sequences")
+        # Show the actual localization changes instead of just top localizations
+        if localization_change_details or (mutations_data is not None and missense_change_details):
+            summary_lines.append(f"\nLocalization changes observed:")
+            
+            # Combine all changes and count them
+            all_changes = localization_change_details + (missense_change_details if mutations_data is not None else [])
+            
+            # Count transitions
+            transition_counts = {}
+            for change in all_changes:
+                transition = f"{change['from']} → {change['to']}"
+                transition_counts[transition] = transition_counts.get(transition, 0) + 1
+            
+            # Show top transitions
+            sorted_transitions = sorted(transition_counts.items(), key=lambda x: x[1], reverse=True)
+            for transition, count in sorted_transitions[:5]:  # Show top 5
+                summary_lines.append(f"  {transition}: {count} changes")
+        else:
+            summary_lines.append(f"\nNo localization changes observed")
 
     return summary_lines, all_localization_comparisons
 
 
-def create_detailed_localization_analysis(dataset, loc_results):
+def create_detailed_localization_analysis(dataset, loc_results, protein_data):
     """Create a detailed analysis of all localization predictions for a specific dataset."""
     print(
         f"\n=== CREATING DETAILED LOCALIZATION ANALYSIS FOR {dataset.upper()} DATASET ==="
@@ -417,61 +531,266 @@ def create_detailed_localization_analysis(dataset, loc_results):
     # Process pairs data
     if pairs_data is not None:
         for _, row in pairs_data.iterrows():
-            # Use the standardized column names
             seq_id = row.get("Sequence_ID", "")
-            localization = parse_deeploc_localization(row.get("Localisation", ""))
+            localization = row.get("Localisation", "")
 
             if seq_id and localization:
                 gene, transcript, variant = parse_sequence_id(seq_id)
                 if gene and transcript and variant:
-                    detailed_results.append(
-                        {
-                            "dataset": dataset,
-                            "gene": gene,
-                            "transcript": transcript,
-                            "variant": variant,
-                            "sequence_id": seq_id,
-                            "prediction": localization,
-                            "confidence": 0,  # DeepLoc doesn't provide a single confidence score
-                            "sequence_type": "canonical"
-                            if variant == "canonical"
-                            else "truncated",
-                            "model_type": model_type,
-                            "analysis_type": "pairs",
-                        }
-                    )
+                    protein_info = protein_data.get(seq_id, {})
+                    
+                    result_record = {
+                        "dataset": dataset,
+                        "gene": gene,
+                        "transcript": transcript,
+                        "variant": variant,
+                        "sequence_id": seq_id,
+                        "prediction": localization,
+                        "confidence": 0,
+                        "sequence_type": "canonical" if variant == "canonical" else "truncated",
+                        "model_type": model_type,
+                        "analysis_type": "pairs",
+                        # Add protein sequence metadata
+                        "sequence_length": protein_info.get("length", ""),
+                        "variant_type": protein_info.get("variant_type", ""),
+                        "mutation_position": protein_info.get("mutation_position", ""),
+                        "mutation_change": protein_info.get("mutation_change", ""),
+                        "aa_change": protein_info.get("aa_change", ""),
+                        "hgvsc": protein_info.get("hgvsc", ""),
+                        "hgvsp": protein_info.get("hgvsp", ""),
+                        "mutation_impact": protein_info.get("mutation_impact", ""),
+                        "mutation_source": protein_info.get("mutation_source", ""),
+                        "clinvar_variant_id": protein_info.get("clinvar_variant_id", ""),
+                    }
+                    
+                    detailed_results.append(result_record)
 
     # Process mutations data
     if mutations_data is not None:
         for _, row in mutations_data.iterrows():
-            # Use the standardized column names
             seq_id = row.get("Sequence_ID", "")
-            localization = parse_deeploc_localization(row.get("Localisation", ""))
+            localization = row.get("Localisation", "")
 
             if seq_id and localization:
                 gene, transcript, variant = parse_sequence_id(seq_id)
                 if gene and transcript and variant:
+                    protein_info = protein_data.get(seq_id, {})
+                    
                     sequence_type = (
-                        "canonical"
-                        if variant == "canonical"
+                        "canonical" if variant == "canonical"
                         else ("mutated" if "mut" in variant else "truncated")
                     )
-                    detailed_results.append(
-                        {
-                            "dataset": dataset,
-                            "gene": gene,
-                            "transcript": transcript,
-                            "variant": variant,
-                            "sequence_id": seq_id,
-                            "prediction": localization,
-                            "confidence": 0,  # DeepLoc doesn't provide a single confidence score
-                            "sequence_type": sequence_type,
-                            "model_type": model_type,
-                            "analysis_type": "mutations",
-                        }
-                    )
+                    
+                    result_record = {
+                        "dataset": dataset,
+                        "gene": gene,
+                        "transcript": transcript,
+                        "variant": variant,
+                        "sequence_id": seq_id,
+                        "prediction": localization,
+                        "confidence": 0,
+                        "sequence_type": sequence_type,
+                        "model_type": model_type,
+                        "analysis_type": "mutations",
+                        # Add protein sequence metadata
+                        "sequence_length": protein_info.get("length", ""),
+                        "variant_type": protein_info.get("variant_type", ""),
+                        "mutation_position": protein_info.get("mutation_position", ""),
+                        "mutation_change": protein_info.get("mutation_change", ""),
+                        "aa_change": protein_info.get("aa_change", ""),
+                        "hgvsc": protein_info.get("hgvsc", ""),
+                        "hgvsp": protein_info.get("hgvsp", ""),
+                        "mutation_impact": protein_info.get("mutation_impact", ""),
+                        "mutation_source": protein_info.get("mutation_source", ""),
+                        "clinvar_variant_id": protein_info.get("clinvar_variant_id", ""),
+                    }
+                    
+                    detailed_results.append(result_record)
 
     return pd.DataFrame(detailed_results)
+
+
+def create_gene_summary(dataset, loc_results, protein_data, pair_results=None):
+    """Create a gene-level summary showing prioritized targets."""
+    print(f"\n=== CREATING GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET ===")
+    
+    if not loc_results:
+        return pd.DataFrame()
+    
+    # Get the primary localization data
+    pairs_data = None
+    mutations_data = None
+    model_type = "Unknown"
+
+    if "pairs_accurate" in loc_results:
+        pairs_data = loc_results["pairs_accurate"]
+        model_type = "Accurate"
+    elif "pairs_fast" in loc_results:
+        pairs_data = loc_results["pairs_fast"]
+        model_type = "Fast"
+
+    if "mutations_accurate" in loc_results:
+        mutations_data = loc_results["mutations_accurate"]
+    elif "mutations_fast" in loc_results:
+        mutations_data = loc_results["mutations_fast"]
+
+    if pairs_data is None:
+        return pd.DataFrame()
+
+    # Parse pairs data
+    pairs_parsed = []
+    for _, row in pairs_data.iterrows():
+        seq_id = row.get("Sequence_ID", "")
+        localization = row.get("Localisation", "")
+
+        if seq_id and localization:
+            gene, transcript, variant = parse_sequence_id(seq_id)
+            if gene and transcript and variant:
+                pairs_parsed.append({
+                    "gene": gene,
+                    "transcript": transcript,
+                    "variant": variant,
+                    "prediction": localization,
+                    "seq_id": seq_id,
+                })
+
+    pairs_df = pd.DataFrame(pairs_parsed)
+    
+    # Parse mutations data if available
+    mutations_parsed = []
+    if mutations_data is not None:
+        for _, row in mutations_data.iterrows():
+            seq_id = row.get("Sequence_ID", "")
+            localization = row.get("Localisation", "")
+
+            if seq_id and localization:
+                gene, transcript, variant = parse_sequence_id(seq_id)
+                if gene and transcript and variant:
+                    mutations_parsed.append({
+                        "gene": gene,
+                        "transcript": transcript,
+                        "variant": variant,
+                        "prediction": localization,
+                        "seq_id": seq_id,
+                    })
+
+    mutations_df = pd.DataFrame(mutations_parsed)
+
+    # Create gene-level summary
+    gene_summaries = []
+    
+    for gene in pairs_df["gene"].unique():
+        gene_pairs = pairs_df[pairs_df["gene"] == gene]
+        
+        # Find canonical sequence
+        canonical_seqs = gene_pairs[gene_pairs["variant"] == "canonical"]
+        if canonical_seqs.empty:
+            continue
+            
+        canonical_loc = canonical_seqs.iloc[0]["prediction"]
+        
+        # Count truncating variants with localization changes
+        truncated_seqs = gene_pairs[gene_pairs["variant"].str.startswith("trunc")]
+        truncating_changes = 0
+        for _, trunc_seq in truncated_seqs.iterrows():
+            if are_localizations_different(canonical_loc, trunc_seq["prediction"]):
+                truncating_changes += 1
+        
+        # Count missense variants with localization changes
+        missense_changes = 0
+        if not mutations_df.empty:
+            gene_mutations = mutations_df[mutations_df["gene"] == gene]
+            missense_variants = gene_mutations[gene_mutations["variant"].str.contains("mut", na=False)]
+            
+            for _, mut_seq in missense_variants.iterrows():
+                if are_localizations_different(canonical_loc, mut_seq["prediction"]):
+                    missense_changes += 1
+        
+        # Get mutation counts from pair_results if available
+        frameshift_mutations = 0
+        nonsense_mutations = 0
+        missense_mutations = 0
+        total_mutations = 0
+        frameshift_variants = []
+        nonsense_variants = []
+        missense_variants = []
+        
+        if pair_results is not None:
+            gene_mutation_data = pair_results[pair_results["gene_name"] == gene]
+            if not gene_mutation_data.empty:
+                # Sum up mutations for this gene across all transcript-truncation pairs
+                if "mutations_frameshift_variant" in gene_mutation_data.columns:
+                    frameshift_mutations = gene_mutation_data["mutations_frameshift_variant"].sum()
+                if "mutations_nonsense_variant" in gene_mutation_data.columns:
+                    nonsense_mutations = gene_mutation_data["mutations_nonsense_variant"].sum()
+                if "mutations_missense_variant" in gene_mutation_data.columns:
+                    missense_mutations = gene_mutation_data["mutations_missense_variant"].sum()
+                if "mutation_count_total" in gene_mutation_data.columns:
+                    total_mutations = gene_mutation_data["mutation_count_total"].sum()
+                
+                # Collect variant IDs for each mutation type
+                for _, row in gene_mutation_data.iterrows():
+                    # Extract frameshift variant IDs
+                    if "clinvar_ids_frameshift_variant" in row.index and pd.notna(row["clinvar_ids_frameshift_variant"]) and row["clinvar_ids_frameshift_variant"] != "":
+                        frameshift_variants.extend(str(row["clinvar_ids_frameshift_variant"]).split(","))
+                    
+                    # Extract nonsense variant IDs  
+                    if "clinvar_ids_nonsense_variant" in row.index and pd.notna(row["clinvar_ids_nonsense_variant"]) and row["clinvar_ids_nonsense_variant"] != "":
+                        nonsense_variants.extend(str(row["clinvar_ids_nonsense_variant"]).split(","))
+                    
+                    # Extract missense variant IDs
+                    if "clinvar_ids_missense_variant" in row.index and pd.notna(row["clinvar_ids_missense_variant"]) and row["clinvar_ids_missense_variant"] != "":
+                        missense_variants.extend(str(row["clinvar_ids_missense_variant"]).split(","))
+                
+                # Clean up variant lists (remove empty strings and duplicates)
+                frameshift_variants = list(set([v.strip() for v in frameshift_variants if v.strip()]))
+                nonsense_variants = list(set([v.strip() for v in nonsense_variants if v.strip()]))
+                missense_variants = list(set([v.strip() for v in missense_variants if v.strip()]))
+        
+        # Calculate truncating mutations (frameshift OR nonsense)
+        truncating_mutations = frameshift_mutations + nonsense_mutations
+        truncating_variants = list(set(frameshift_variants + nonsense_variants))
+        
+        # Get gene metadata from protein data
+        canonical_seq_id = canonical_seqs.iloc[0]["seq_id"]
+        gene_info = protein_data.get(canonical_seq_id, {})
+        
+        gene_summary = {
+            "dataset": dataset,
+            "gene": gene,
+            "canonical_localization": canonical_loc,
+            # Localization analysis results
+            "total_truncating_variants": len(truncated_seqs),
+            "truncating_variants_with_localization_change": truncating_changes,
+            "total_missense_variants": len(missense_variants) if not mutations_df.empty else 0,
+            "missense_variants_with_localization_change": missense_changes,
+            "total_variants_with_localization_change": truncating_changes + missense_changes,
+            # Mutation analysis results (from clinical data)
+            "total_frameshift_mutations": frameshift_mutations,
+            "total_nonsense_mutations": nonsense_mutations,
+            "total_truncating_mutations": truncating_mutations,
+            "total_missense_mutations": missense_mutations,
+            "total_mutations_all_types": total_mutations,
+            # Variant IDs for each mutation type
+            "frameshift_variant_ids": ",".join(frameshift_variants) if frameshift_variants else "",
+            "nonsense_variant_ids": ",".join(nonsense_variants) if nonsense_variants else "",
+            "truncating_variant_ids": ",".join(truncating_variants) if truncating_variants else "",
+            "missense_variant_ids": ",".join(missense_variants) if missense_variants else "",
+            "model_type": model_type,
+            # Add gene metadata
+            "transcript_id": gene_info.get("transcript_id", ""),
+            "canonical_sequence_length": gene_info.get("length", ""),
+        }
+        
+        gene_summaries.append(gene_summary)
+    
+    gene_summary_df = pd.DataFrame(gene_summaries)
+    
+    # Sort by total variants with localization changes (prioritized targets)
+    if not gene_summary_df.empty:
+        gene_summary_df = gene_summary_df.sort_values("total_variants_with_localization_change", ascending=False)
+    
+    return gene_summary_df
 
 
 def main():
@@ -501,6 +820,10 @@ def main():
     print(f"\nLoading mutation analysis results for {dataset} dataset...")
     gene_results, pair_results = load_mutation_results(dataset)
 
+    # Load protein sequence data for metadata
+    print(f"\nLoading protein sequence data for {dataset} dataset...")
+    protein_data = load_protein_sequences(dataset)
+
     # Load localization results for this dataset
     print(f"\nLoading localization prediction results for {dataset} dataset...")
     loc_results = load_localization_results(dataset)
@@ -510,13 +833,16 @@ def main():
 
     # Analyze localizations
     localization_summary, localization_comparisons = analyze_localizations(
-        dataset, loc_results
+        dataset, loc_results, protein_data
     )
 
     # Create detailed localization analysis
     detailed_localization_df = create_detailed_localization_analysis(
-        dataset, loc_results
+        dataset, loc_results, protein_data
     )
+
+    # Create gene-level summary
+    gene_summary_df = create_gene_summary(dataset, loc_results, protein_data, pair_results)
 
     # Save summaries
     print(f"\n=== SAVING RESULTS FOR {dataset.upper()} DATASET ===")
@@ -531,7 +857,7 @@ def main():
         f.write("\n".join(localization_summary))
     print("Saved localization summary")
 
-    # Save genes with localization changes
+    # Save genes with localization changes (only variants with changes)
     if localization_comparisons:
         localization_changes_df = pd.DataFrame(localization_comparisons)
         localization_changes_df.to_csv(
@@ -545,7 +871,7 @@ def main():
         )
         print("No localization changes found")
 
-    # Save detailed localization analysis
+    # Save detailed localization analysis (all variants assessed)
     if not detailed_localization_df.empty:
         detailed_localization_df.to_csv(
             summary_dir / "detailed_localization_analysis.csv", index=False
@@ -560,8 +886,44 @@ def main():
         )
         print("No detailed localization data available")
 
+    # Save gene-level summary (prioritized targets)
+    if not gene_summary_df.empty:
+        gene_summary_df.to_csv(
+            summary_dir / "gene_level_summary.csv", index=False
+        )
+        print(
+            f"Saved gene-level summary for {len(gene_summary_df)} genes"
+        )
+    else:
+        # Create empty file
+        pd.DataFrame().to_csv(
+            summary_dir / "gene_level_summary.csv", index=False
+        )
+        print("No gene-level summary data available")
+
     print(f"\nSummary analysis for {dataset} dataset completed!")
     print(f"Results saved to: {summary_dir}")
+    
+    # Print brief summary of gene-level results
+    if not gene_summary_df.empty:
+        print(f"\n=== GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET ===")
+        
+        # Top genes by total variants with localization changes
+        top_genes = gene_summary_df.head(10)
+        print(f"Top 10 genes by variants with localization changes:")
+        for _, gene in top_genes.iterrows():
+            print(f"  {gene['gene']}: {gene['total_variants_with_localization_change']} variants with loc changes "
+                  f"({gene['truncating_variants_with_localization_change']} truncating, "
+                  f"{gene['missense_variants_with_localization_change']} missense) | "
+                  f"Clinical mutations: {gene['total_mutations_all_types']} total "
+                  f"({gene['total_truncating_mutations']} truncating, {gene['total_missense_mutations']} missense)")
+        
+        # Summary statistics
+        total_genes_with_changes = len(gene_summary_df[gene_summary_df['total_variants_with_localization_change'] > 0])
+        total_genes = len(gene_summary_df)
+        total_genes_with_mutations = len(gene_summary_df[gene_summary_df['total_mutations_all_types'] > 0])
+        print(f"\nSummary: {total_genes_with_changes} out of {total_genes} genes have variants with localization changes")
+        print(f"Summary: {total_genes_with_mutations} out of {total_genes} genes have clinical mutations in dataset")
 
 
 if __name__ == "__main__":
