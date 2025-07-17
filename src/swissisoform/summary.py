@@ -285,21 +285,37 @@ class SummaryAnalyzer:
             summary_lines.append("No localization data available")
             return summary_lines, all_localization_comparisons
 
-        # Prefer accurate results over fast results
+        # Prefer accurate results over fast results, but ensure consistency
         pairs_data = None
         mutations_data = None
+        model_type = "Unknown"
 
-        if "pairs_accurate" in loc_results:
+        # First, check what's available and prioritize Accurate if both pairs and mutations exist
+        has_pairs_accurate = "pairs_accurate" in loc_results
+        has_pairs_fast = "pairs_fast" in loc_results
+        has_mutations_accurate = "mutations_accurate" in loc_results
+        has_mutations_fast = "mutations_fast" in loc_results
+
+        # Prioritize Accurate model if available for both, otherwise use Fast
+        if has_pairs_accurate and (has_mutations_accurate or not has_mutations_fast):
             pairs_data = loc_results["pairs_accurate"]
             model_type = "Accurate"
-        elif "pairs_fast" in loc_results:
+            if has_mutations_accurate:
+                mutations_data = loc_results["mutations_accurate"]
+            # If no mutations data at all, that's fine
+        elif has_pairs_fast:
             pairs_data = loc_results["pairs_fast"]
             model_type = "Fast"
+            if has_mutations_fast:
+                mutations_data = loc_results["mutations_fast"]
 
-        if "mutations_accurate" in loc_results:
-            mutations_data = loc_results["mutations_accurate"]
-        elif "mutations_fast" in loc_results:
-            mutations_data = loc_results["mutations_fast"]
+        print(f"Using {model_type} model for localization analysis")
+        if pairs_data is not None and mutations_data is not None:
+            print(f"Both pairs and mutations data available with {model_type} model")
+        elif pairs_data is not None:
+            print(f"Only pairs data available with {model_type} model")
+        elif mutations_data is not None:
+            print(f"Only mutations data available with {model_type} model")
 
         if pairs_data is None:
             summary_lines.append("No localization data available")
@@ -582,22 +598,28 @@ class SummaryAnalyzer:
         if not loc_results:
             return pd.DataFrame(detailed_results)
 
-        # Process pairs data
+        # Process pairs data with consistent model selection
         pairs_data = None
         mutations_data = None
         model_type = "Unknown"
 
-        if "pairs_accurate" in loc_results:
+        # First, check what's available and prioritize Accurate if both pairs and mutations exist
+        has_pairs_accurate = "pairs_accurate" in loc_results
+        has_pairs_fast = "pairs_fast" in loc_results
+        has_mutations_accurate = "mutations_accurate" in loc_results
+        has_mutations_fast = "mutations_fast" in loc_results
+
+        # Prioritize Accurate model if available for both, otherwise use Fast
+        if has_pairs_accurate and (has_mutations_accurate or not has_mutations_fast):
             pairs_data = loc_results["pairs_accurate"]
             model_type = "Accurate"
-        elif "pairs_fast" in loc_results:
+            if has_mutations_accurate:
+                mutations_data = loc_results["mutations_accurate"]
+        elif has_pairs_fast:
             pairs_data = loc_results["pairs_fast"]
             model_type = "Fast"
-
-        if "mutations_accurate" in loc_results:
-            mutations_data = loc_results["mutations_accurate"]
-        elif "mutations_fast" in loc_results:
-            mutations_data = loc_results["mutations_fast"]
+            if has_mutations_fast:
+                mutations_data = loc_results["mutations_fast"]
 
         # Process pairs data
         if pairs_data is not None:
@@ -700,22 +722,28 @@ class SummaryAnalyzer:
         if not loc_results:
             return pd.DataFrame()
 
-        # Get the primary localization data
+        # Get the primary localization data with consistent model selection
         pairs_data = None
         mutations_data = None
         model_type = "Unknown"
 
-        if "pairs_accurate" in loc_results:
+        # First, check what's available and prioritize Accurate if both pairs and mutations exist
+        has_pairs_accurate = "pairs_accurate" in loc_results
+        has_pairs_fast = "pairs_fast" in loc_results
+        has_mutations_accurate = "mutations_accurate" in loc_results
+        has_mutations_fast = "mutations_fast" in loc_results
+
+        # Prioritize Accurate model if available for both, otherwise use Fast
+        if has_pairs_accurate and (has_mutations_accurate or not has_mutations_fast):
             pairs_data = loc_results["pairs_accurate"]
             model_type = "Accurate"
-        elif "pairs_fast" in loc_results:
+            if has_mutations_accurate:
+                mutations_data = loc_results["mutations_accurate"]
+        elif has_pairs_fast:
             pairs_data = loc_results["pairs_fast"]
             model_type = "Fast"
-
-        if "mutations_accurate" in loc_results:
-            mutations_data = loc_results["mutations_accurate"]
-        elif "mutations_fast" in loc_results:
-            mutations_data = loc_results["mutations_fast"]
+            if has_mutations_fast:
+                mutations_data = loc_results["mutations_fast"]
 
         if pairs_data is None:
             return pd.DataFrame()
