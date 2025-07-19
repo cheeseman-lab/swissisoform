@@ -1,12 +1,11 @@
 #!/bin/bash
-
 #SBATCH --job-name=deeploc                 # Job name
-#SBATCH --partition=nvidia-t4-20           # GPU partition
-#SBATCH --array=1-4                        # Job array with 4 tasks
-#SBATCH --cpus-per-task=8                  # CPUs per task
-#SBATCH --mem=48G                          # Memory per task (48G total = 12G × 4)
+#SBATCH --partition=nvidia-A4000-20        # Faster GPU partition
+#SBATCH --array=1-8                        # Split into 8 tasks for better parallelization
+#SBATCH --cpus-per-task=4                  # CPUs 
+#SBATCH --mem=36G                          # Memory per task
 #SBATCH --gres=gpu:1                       # Request 1 GPU per task
-#SBATCH --time=24:00:00                    # Time limit
+#SBATCH --time=36:00:00                    # Time limit
 #SBATCH --output=out/deeploc-%A_%a.out     # %A = job ID, %a = array task ID
 
 # 4_predict_localization.sh
@@ -30,11 +29,10 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     # Check what protein sequence files are available
     echo ""
     echo "Checking for input files..."
-
     datasets=("reduced" "full")
     available_files=()
     missing_files=()
-
+    
     for dataset in "${datasets[@]}"; do
         pairs_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
         mutations_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
@@ -55,7 +53,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
             missing_files+=("$dataset:mutations")
         fi
     done
-
+    
     # Create localization output directories
     for dataset in "${datasets[@]}"; do
         mkdir -p ../results/$dataset/localization
@@ -78,30 +76,38 @@ conda activate deeploc || {
     exit 1
 }
 
-# Define which file each task processes
+# Define which file and mode each task processes (8 tasks total)
 case $SLURM_ARRAY_TASK_ID in
     1)
-        # Task 1: Reduced pairs
-        dataset="reduced"
-        file_type="pairs"
+        dataset="reduced"; file_type="pairs"; mode="Fast"
         input_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
         ;;
     2)
-        # Task 2: Reduced mutations
-        dataset="reduced"
-        file_type="mutations"
-        input_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
-        ;;
-    3)
-        # Task 3: Full pairs
-        dataset="full"
-        file_type="pairs"
+        dataset="reduced"; file_type="pairs"; mode="Accurate"
         input_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
         ;;
+    3)
+        dataset="reduced"; file_type="mutations"; mode="Fast"
+        input_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
+        ;;
     4)
-        # Task 4: Full mutations
-        dataset="full"
-        file_type="mutations"
+        dataset="reduced"; file_type="mutations"; mode="Accurate"
+        input_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
+        ;;
+    5)
+        dataset="full"; file_type="pairs"; mode="Fast"
+        input_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
+        ;;
+    6)
+        dataset="full"; file_type="pairs"; mode="Accurate"
+        input_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
+        ;;
+    7)
+        dataset="full"; file_type="mutations"; mode="Fast"
+        input_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
+        ;;
+    8)
+        dataset="full"; file_type="mutations"; mode="Accurate"
         input_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
         ;;
     *)
@@ -110,9 +116,9 @@ case $SLURM_ARRAY_TASK_ID in
         ;;
 esac
 
-# Process the assigned file
+# Process the assigned file with specified mode
 echo ""
-echo "Array Task ${SLURM_ARRAY_TASK_ID}: Processing $dataset dataset ($file_type sequences)..."
+echo "Array Task ${SLURM_ARRAY_TASK_ID}: Processing $dataset dataset ($file_type sequences, $mode mode)..."
 echo "  Input file: $(basename $input_file)"
 
 if [ -f "$input_file" ]; then
@@ -123,31 +129,26 @@ if [ -f "$input_file" ]; then
     fi
     
     # Create descriptive temporary subfolder for this specific run
-    temp_subdir="../results/$dataset/localization/${dataset}_${file_type}_temp_$$"
+    temp_subdir="../results/$dataset/localization/${dataset}_${file_type}_${mode}_temp_$$"
     mkdir -p "$temp_subdir"
     
-    echo "  Starting DeepLoc Fast mode for $dataset ($file_type) at $(date)"
-    deeploc2 -f "$input_file" -m Fast -o "$temp_subdir/" -d cuda
+    echo "  Starting DeepLoc $mode mode for $dataset ($file_type) at $(date)"
     
-    # Find and move the Fast results file
-    fast_result=$(find "$temp_subdir" -name "results_*.csv" | head -n 1)
-    if [ -n "$fast_result" ] && [ -f "$fast_result" ]; then
-        mv "$fast_result" "../results/$dataset/localization/protein_sequences_${file_type}_Fast_results.csv"
-        echo "  ✓ Moved Fast results to protein_sequences_${file_type}_Fast_results.csv"
+    # Set GPU memory growth to avoid OOM errors
+    export TF_FORCE_GPU_ALLOW_GROWTH=true
+    export CUDA_VISIBLE_DEVICES=0
+    
+    deeploc2 -f "$input_file" -m "$mode" -o "$temp_subdir/" -d cuda
+    
+    # Find and move the results file
+    result_file=$(find "$temp_subdir" -name "results_*.csv" | head -n 1)
+    if [ -n "$result_file" ] && [ -f "$result_file" ]; then
+        output_file="../results/$dataset/localization/protein_sequences_${file_type}_${mode}_results.csv"
+        mv "$result_file" "$output_file"
+        echo "  ✓ Moved $mode results to protein_sequences_${file_type}_${mode}_results.csv"
     else
-        echo "  ✗ Fast results not found"
-    fi
-    
-    echo "  Starting DeepLoc Accurate mode for $dataset ($file_type) at $(date)"
-    deeploc2 -f "$input_file" -m Accurate -o "$temp_subdir/" -d cuda
-    
-    # Find and move the Accurate results file
-    accurate_result=$(find "$temp_subdir" -name "results_*.csv" | head -n 1)
-    if [ -n "$accurate_result" ] && [ -f "$accurate_result" ]; then
-        mv "$accurate_result" "../results/$dataset/localization/protein_sequences_${file_type}_Accurate_results.csv"
-        echo "  ✓ Moved Accurate results to protein_sequences_${file_type}_Accurate_results.csv"
-    else
-        echo "  ✗ Accurate results not found"
+        echo "  ✗ $mode results not found"
+        exit 1
     fi
     
     # Clean up temp subfolder
@@ -159,50 +160,41 @@ if [ -f "$input_file" ]; then
         rm -rf outputs/
     fi
     
-    echo "  Completed $dataset ($file_type) at $(date)"
+    echo "  Completed $dataset ($file_type, $mode) at $(date)"
 else
-    echo "  ⚠ Skipping $dataset ($file_type) - input file not found"
+    echo "  ⚠ Skipping $dataset ($file_type, $mode) - input file not found"
     exit 1
 fi
 
 # Only verify outputs on the last task to complete
-if [ "$SLURM_ARRAY_TASK_ID" -eq 4 ]; then
+if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     # Wait a moment for any file system sync
     sleep 10
     
     echo ""
     echo "Verifying DeepLoc outputs..."
-
     # Check for outputs from all tasks
     datasets=("reduced" "full")
     file_types=("pairs" "mutations")
+    modes=("Fast" "Accurate")
     found_outputs=()
     
     for dataset in "${datasets[@]}"; do
         for file_type in "${file_types[@]}"; do
-            base_name="protein_sequences_${file_type}"
-            
-            fast_output="../results/$dataset/localization/${base_name}_Fast_results.csv"
-            accurate_output="../results/$dataset/localization/${base_name}_Accurate_results.csv"
-            
-            if [ -f "$fast_output" ]; then
-                count=$(($(wc -l < "$fast_output") - 1))  # Subtract header
-                echo "✓ $dataset/$(basename $fast_output) ($count predictions)"
-                found_outputs+=("$fast_output")
-            else
-                echo "✗ $dataset/$(basename $fast_output) missing"
-            fi
-            
-            if [ -f "$accurate_output" ]; then
-                count=$(($(wc -l < "$accurate_output") - 1))  # Subtract header
-                echo "✓ $dataset/$(basename $accurate_output) ($count predictions)"
-                found_outputs+=("$accurate_output")
-            else
-                echo "✗ $dataset/$(basename $accurate_output) missing"
-            fi
+            for mode in "${modes[@]}"; do
+                output_file="../results/$dataset/localization/protein_sequences_${file_type}_${mode}_results.csv"
+                
+                if [ -f "$output_file" ]; then
+                    count=$(($(wc -l < "$output_file") - 1))  # Subtract header
+                    echo "✓ $dataset/$(basename $output_file) ($count predictions)"
+                    found_outputs+=("$output_file")
+                else
+                    echo "✗ $dataset/$(basename $output_file) missing"
+                fi
+            done
         done
     done
-
+    
     if [ ${#found_outputs[@]} -eq 0 ]; then
         echo ""
         echo "❌ No DeepLoc outputs were generated!"
