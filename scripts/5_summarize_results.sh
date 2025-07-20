@@ -100,45 +100,59 @@ python3 summarize_results.py
 echo ""
 echo "🎉 Pipeline summary analysis completed!"
 echo ""
-echo "Generated summary files by dataset:"
+echo "Generated summary files by dataset and model:"
 
 for dataset in "${DATASETS[@]}"; do
     summary_dir="../results/$dataset/summary"
     if [ -d "$summary_dir" ]; then
         echo ""
         echo "$dataset dataset summary:"
-        echo "  ├─ $dataset/summary/mutation_summary.txt"
-        echo "  ├─ $dataset/summary/localization_summary.txt"
-        echo "  ├─ $dataset/summary/genes_with_localization_changes.csv"
-        echo "  ├─ $dataset/summary/detailed_localization_analysis.csv"
-        echo "  └─ $dataset/summary/gene_level_summary.csv"
+        echo "  ├─ $dataset/summary/mutation_summary.txt (shared)"
         
-        # Show key findings for each dataset
+        # Check for model-specific subdirectories
+        for model in "accurate" "fast"; do
+            model_dir="$summary_dir/$model"
+            if [ -d "$model_dir" ]; then
+                echo "  ├─ $dataset/summary/$model/ (${model^} model results)"
+                echo "  │  ├─ localization_summary.txt"
+                echo "  │  ├─ genes_with_localization_changes.csv"
+                echo "  │  ├─ detailed_localization_analysis.csv"
+                echo "  │  └─ gene_level_summary.csv"
+            fi
+        done
+        
+        # Show key findings for each dataset and model
         echo ""
         echo "=== $dataset DATASET KEY FINDINGS ==="
         
         if [ -f "$summary_dir/mutation_summary.txt" ]; then
             echo ""
-            echo "MUTATION ANALYSIS:"
+            echo "MUTATION ANALYSIS (shared across models):"
             cat "$summary_dir/mutation_summary.txt"
         fi
         
-        if [ -f "$summary_dir/localization_summary.txt" ]; then
-            echo ""
-            echo "LOCALIZATION ANALYSIS:"
-            cat "$summary_dir/localization_summary.txt"
-        fi
-        
-        # Show preview of genes with localization changes
-        if [ -f "$summary_dir/genes_with_localization_changes.csv" ]; then
-            echo ""
-            echo "GENES WITH LOCALIZATION CHANGES (Preview):"
-            head -n 6 "$summary_dir/genes_with_localization_changes.csv"
-            total_genes=$(tail -n +2 "$summary_dir/genes_with_localization_changes.csv" | wc -l)
-            if [ $total_genes -gt 5 ]; then
-                echo "... (showing first 5 genes, $total_genes total genes with localization changes)"
+        # Show findings for each model
+        for model in "accurate" "fast"; do
+            model_dir="$summary_dir/$model"
+            if [ -d "$model_dir" ]; then
+                echo ""
+                echo "LOCALIZATION ANALYSIS - ${model^} MODEL:"
+                if [ -f "$model_dir/localization_summary.txt" ]; then
+                    cat "$model_dir/localization_summary.txt"
+                fi
+                
+                # Show preview of genes with localization changes for this model
+                if [ -f "$model_dir/genes_with_localization_changes.csv" ]; then
+                    echo ""
+                    echo "GENES WITH LOCALIZATION CHANGES - ${model^} MODEL (Preview):"
+                    head -n 6 "$model_dir/genes_with_localization_changes.csv"
+                    total_genes=$(tail -n +2 "$model_dir/genes_with_localization_changes.csv" | wc -l)
+                    if [ $total_genes -gt 5 ]; then
+                        echo "... (showing first 5 genes, $total_genes total genes with localization changes in ${model^} model)"
+                    fi
+                fi
             fi
-        fi
+        done
         
         echo ""
         echo "============================================================"
@@ -147,4 +161,4 @@ done
 
 echo ""
 echo "Pipeline summary completed!"
-echo "Detailed results are available in ../results/[dataset]/summary/"
+echo "Detailed results are available in ../results/[dataset]/summary/[model]/"

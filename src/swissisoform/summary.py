@@ -40,6 +40,22 @@ class SummaryAnalyzer:
 
         return has_mutation_data or has_localization_data
 
+    def get_available_models(self, dataset):
+        """Determine which models have data available for a dataset."""
+        loc_results = self.load_localization_results(dataset)
+        
+        available_models = []
+        
+        # Check for Accurate model
+        if "pairs_accurate" in loc_results:
+            available_models.append("Accurate")
+            
+        # Check for Fast model  
+        if "pairs_fast" in loc_results:
+            available_models.append("Fast")
+            
+        return available_models
+
     def load_mutation_results(self, dataset):
         """Load mutation analysis results for a dataset."""
         base_path = Path(f"../results/{dataset}/mutations")
@@ -269,13 +285,13 @@ class SummaryAnalyzer:
 
         return norm_loc1 != norm_loc2
 
-    def analyze_localizations(self, dataset, loc_results, protein_data):
-        """Analyze localization predictions for a specific dataset."""
-        print(f"\n=== ANALYZING LOCALIZATIONS FOR {dataset.upper()} DATASET ===")
+    def analyze_localizations_for_model(self, dataset, loc_results, protein_data, model_type):
+        """Analyze localization predictions for a specific dataset and model."""
+        print(f"\n=== ANALYZING LOCALIZATIONS FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ===")
 
         summary_lines = []
         summary_lines.append(
-            f"LOCALIZATION ANALYSIS SUMMARY - {dataset.upper()} DATASET"
+            f"LOCALIZATION ANALYSIS SUMMARY - {dataset.upper()} DATASET - {model_type.upper()} MODEL"
         )
         summary_lines.append("=" * 60)
 
@@ -285,40 +301,19 @@ class SummaryAnalyzer:
             summary_lines.append("No localization data available")
             return summary_lines, all_localization_comparisons
 
-        # Prefer accurate results over fast results, but ensure consistency
+        # Get data for the specified model
         pairs_data = None
         mutations_data = None
-        model_type = "Unknown"
 
-        # First, check what's available and prioritize Accurate if both pairs and mutations exist
-        has_pairs_accurate = "pairs_accurate" in loc_results
-        has_pairs_fast = "pairs_fast" in loc_results
-        has_mutations_accurate = "mutations_accurate" in loc_results
-        has_mutations_fast = "mutations_fast" in loc_results
-
-        # Prioritize Accurate model if available for both, otherwise use Fast
-        if has_pairs_accurate and (has_mutations_accurate or not has_mutations_fast):
-            pairs_data = loc_results["pairs_accurate"]
-            model_type = "Accurate"
-            if has_mutations_accurate:
-                mutations_data = loc_results["mutations_accurate"]
-            # If no mutations data at all, that's fine
-        elif has_pairs_fast:
-            pairs_data = loc_results["pairs_fast"]
-            model_type = "Fast"
-            if has_mutations_fast:
-                mutations_data = loc_results["mutations_fast"]
-
-        print(f"Using {model_type} model for localization analysis")
-        if pairs_data is not None and mutations_data is not None:
-            print(f"Both pairs and mutations data available with {model_type} model")
-        elif pairs_data is not None:
-            print(f"Only pairs data available with {model_type} model")
-        elif mutations_data is not None:
-            print(f"Only mutations data available with {model_type} model")
+        if model_type.lower() == "accurate":
+            pairs_data = loc_results.get("pairs_accurate")
+            mutations_data = loc_results.get("mutations_accurate")
+        elif model_type.lower() == "fast":
+            pairs_data = loc_results.get("pairs_fast")
+            mutations_data = loc_results.get("mutations_fast")
 
         if pairs_data is None:
-            summary_lines.append("No localization data available")
+            summary_lines.append(f"No {model_type} model localization data available")
             return summary_lines, all_localization_comparisons
 
         summary_lines.append(f"Using {model_type} model predictions")
@@ -587,10 +582,10 @@ class SummaryAnalyzer:
 
         return summary_lines, all_localization_comparisons
 
-    def create_detailed_localization_analysis(self, dataset, loc_results, protein_data):
-        """Create a detailed analysis of all localization predictions for a specific dataset."""
+    def create_detailed_localization_analysis_for_model(self, dataset, loc_results, protein_data, model_type):
+        """Create a detailed analysis of all localization predictions for a specific dataset and model."""
         print(
-            f"\n=== CREATING DETAILED LOCALIZATION ANALYSIS FOR {dataset.upper()} DATASET ==="
+            f"\n=== CREATING DETAILED LOCALIZATION ANALYSIS FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ==="
         )
 
         detailed_results = []
@@ -598,28 +593,16 @@ class SummaryAnalyzer:
         if not loc_results:
             return pd.DataFrame(detailed_results)
 
-        # Process pairs data with consistent model selection
+        # Get data for the specified model
         pairs_data = None
         mutations_data = None
-        model_type = "Unknown"
 
-        # First, check what's available and prioritize Accurate if both pairs and mutations exist
-        has_pairs_accurate = "pairs_accurate" in loc_results
-        has_pairs_fast = "pairs_fast" in loc_results
-        has_mutations_accurate = "mutations_accurate" in loc_results
-        has_mutations_fast = "mutations_fast" in loc_results
-
-        # Prioritize Accurate model if available for both, otherwise use Fast
-        if has_pairs_accurate and (has_mutations_accurate or not has_mutations_fast):
-            pairs_data = loc_results["pairs_accurate"]
-            model_type = "Accurate"
-            if has_mutations_accurate:
-                mutations_data = loc_results["mutations_accurate"]
-        elif has_pairs_fast:
-            pairs_data = loc_results["pairs_fast"]
-            model_type = "Fast"
-            if has_mutations_fast:
-                mutations_data = loc_results["mutations_fast"]
+        if model_type.lower() == "accurate":
+            pairs_data = loc_results.get("pairs_accurate")
+            mutations_data = loc_results.get("mutations_accurate")
+        elif model_type.lower() == "fast":
+            pairs_data = loc_results.get("pairs_fast")
+            mutations_data = loc_results.get("mutations_fast")
 
         # Process pairs data
         if pairs_data is not None:
@@ -713,37 +696,25 @@ class SummaryAnalyzer:
 
         return pd.DataFrame(detailed_results)
 
-    def create_gene_summary(
-        self, dataset, loc_results, protein_data, pair_results=None
+    def create_gene_summary_for_model(
+        self, dataset, loc_results, protein_data, model_type, pair_results=None
     ):
-        """Create a gene-level summary showing prioritized targets."""
-        print(f"\n=== CREATING GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET ===")
+        """Create a gene-level summary showing prioritized targets for a specific model."""
+        print(f"\n=== CREATING GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ===")
 
         if not loc_results:
             return pd.DataFrame()
 
-        # Get the primary localization data with consistent model selection
+        # Get data for the specified model
         pairs_data = None
         mutations_data = None
-        model_type = "Unknown"
 
-        # First, check what's available and prioritize Accurate if both pairs and mutations exist
-        has_pairs_accurate = "pairs_accurate" in loc_results
-        has_pairs_fast = "pairs_fast" in loc_results
-        has_mutations_accurate = "mutations_accurate" in loc_results
-        has_mutations_fast = "mutations_fast" in loc_results
-
-        # Prioritize Accurate model if available for both, otherwise use Fast
-        if has_pairs_accurate and (has_mutations_accurate or not has_mutations_fast):
-            pairs_data = loc_results["pairs_accurate"]
-            model_type = "Accurate"
-            if has_mutations_accurate:
-                mutations_data = loc_results["mutations_accurate"]
-        elif has_pairs_fast:
-            pairs_data = loc_results["pairs_fast"]
-            model_type = "Fast"
-            if has_mutations_fast:
-                mutations_data = loc_results["mutations_fast"]
+        if model_type.lower() == "accurate":
+            pairs_data = loc_results.get("pairs_accurate")
+            mutations_data = loc_results.get("mutations_accurate")
+        elif model_type.lower() == "fast":
+            pairs_data = loc_results.get("pairs_fast")
+            mutations_data = loc_results.get("mutations_fast")
 
         if pairs_data is None:
             return pd.DataFrame()
@@ -963,120 +934,182 @@ class SummaryAnalyzer:
         return gene_summary_df
 
     def analyze_dataset(self, dataset):
-        """Analyze a complete dataset and save all results."""
+        """Analyze a complete dataset and save all results for both models when available."""
         print(f"\nAnalyzing {dataset} dataset...")
 
         # Create summary directory for this dataset
         summary_dir = Path(f"../results/{dataset}/summary")
         summary_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load all data for this dataset
+        # Load shared data for this dataset
         print(f"\nLoading data for {dataset} dataset...")
         gene_results, pair_results = self.load_mutation_results(dataset)
         protein_data = self.load_protein_sequences(dataset)
         loc_results = self.load_localization_results(dataset)
 
-        # Analyze mutations
+        # Analyze mutations (same for both models)
         mutation_summary = self.analyze_mutations(dataset, gene_results, pair_results)
 
-        # Analyze localizations
-        localization_summary, localization_comparisons = self.analyze_localizations(
-            dataset, loc_results, protein_data
-        )
+        # Get available models
+        available_models = self.get_available_models(dataset)
+        
+        if not available_models:
+            print(f"No localization models available for {dataset} dataset")
+            return
 
-        # Create detailed localization analysis
-        detailed_localization_df = self.create_detailed_localization_analysis(
-            dataset, loc_results, protein_data
-        )
+        print(f"Available models for {dataset}: {', '.join(available_models)}")
 
-        # Create gene-level summary
-        gene_summary_df = self.create_gene_summary(
-            dataset, loc_results, protein_data, pair_results
-        )
+        # Analyze each available model separately
+        for model_type in available_models:
+            print(f"\n=== ANALYZING {model_type.upper()} MODEL FOR {dataset.upper()} DATASET ===")
+            
+            # Create model-specific subdirectory
+            model_summary_dir = summary_dir / model_type.lower()
+            model_summary_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save all results
-        print(f"\n=== SAVING RESULTS FOR {dataset.upper()} DATASET ===")
+            # Analyze localizations for this model
+            localization_summary, localization_comparisons = self.analyze_localizations_for_model(
+                dataset, loc_results, protein_data, model_type
+            )
 
-        # Save mutation summary
+            # Create detailed localization analysis for this model
+            detailed_localization_df = self.create_detailed_localization_analysis_for_model(
+                dataset, loc_results, protein_data, model_type
+            )
+
+            # Create gene-level summary for this model
+            gene_summary_df = self.create_gene_summary_for_model(
+                dataset, loc_results, protein_data, model_type, pair_results
+            )
+
+            # Save model-specific results
+            print(f"\n=== SAVING {model_type.upper()} MODEL RESULTS FOR {dataset.upper()} DATASET ===")
+
+            # Save localization summary
+            with open(model_summary_dir / "localization_summary.txt", "w") as f:
+                f.write("\n".join(localization_summary))
+            print(f"Saved {model_type} localization summary")
+
+            # Save genes with localization changes (only variants with changes)
+            if localization_comparisons:
+                localization_changes_df = pd.DataFrame(localization_comparisons)
+                localization_changes_df.to_csv(
+                    model_summary_dir / "genes_with_localization_changes.csv", index=False
+                )
+                print(f"Saved {len(localization_changes_df)} {model_type} localization changes")
+            else:
+                # Create empty file
+                pd.DataFrame().to_csv(
+                    model_summary_dir / "genes_with_localization_changes.csv", index=False
+                )
+                print(f"No {model_type} localization changes found")
+
+            # Save detailed localization analysis (all variants assessed)
+            if not detailed_localization_df.empty:
+                detailed_localization_df.to_csv(
+                    model_summary_dir / "detailed_localization_analysis.csv", index=False
+                )
+                print(
+                    f"Saved detailed {model_type} analysis of {len(detailed_localization_df)} localization predictions"
+                )
+            else:
+                # Create empty file
+                pd.DataFrame().to_csv(
+                    model_summary_dir / "detailed_localization_analysis.csv", index=False
+                )
+                print(f"No detailed {model_type} localization data available")
+
+            # Save gene-level summary (prioritized targets)
+            if not gene_summary_df.empty:
+                gene_summary_df.to_csv(model_summary_dir / "gene_level_summary.csv", index=False)
+                print(f"Saved {model_type} gene-level summary for {len(gene_summary_df)} genes")
+            else:
+                # Create empty file
+                pd.DataFrame().to_csv(model_summary_dir / "gene_level_summary.csv", index=False)
+                print(f"No {model_type} gene-level summary data available")
+
+            # Print brief summary of gene-level results for this model
+            if not gene_summary_df.empty:
+                print(f"\n=== GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ===")
+
+                # Top genes by total variants with localization changes
+                top_genes = gene_summary_df.head(10)
+                print(f"Top 10 genes by variants with localization changes ({model_type} model):")
+                for _, gene in top_genes.iterrows():
+                    print(
+                        f"  {gene['gene']}: {gene['total_variants_with_localization_change']} variants with loc changes "
+                        f"({gene['truncating_isoforms_with_localization_change']} truncating, "
+                        f"{gene['missense_variants_with_localization_change']} missense) | "
+                        f"Clinical mutations: {gene['total_mutations_all_types']} total "
+                        f"({gene['total_frameshift_or_nonsense_mutations']} frameshift/nonsense, {gene['total_missense_mutations']} missense)"
+                    )
+
+                # Summary statistics
+                total_genes_with_changes = len(
+                    gene_summary_df[
+                        gene_summary_df["total_variants_with_localization_change"] > 0
+                    ]
+                )
+                total_genes = len(gene_summary_df)
+                total_genes_with_mutations = len(
+                    gene_summary_df[gene_summary_df["total_mutations_all_types"] > 0]
+                )
+                print(
+                    f"\n{model_type} model summary: {total_genes_with_changes} out of {total_genes} genes have variants with localization changes"
+                )
+                print(
+                    f"{model_type} model summary: {total_genes_with_mutations} out of {total_genes} genes have clinical mutations in dataset"
+                )
+
+        # Save mutation summary to main summary directory (shared across models)
         with open(summary_dir / "mutation_summary.txt", "w") as f:
             f.write("\n".join(mutation_summary))
-        print("Saved mutation summary")
-
-        # Save localization summary
-        with open(summary_dir / "localization_summary.txt", "w") as f:
-            f.write("\n".join(localization_summary))
-        print("Saved localization summary")
-
-        # Save genes with localization changes (only variants with changes)
-        if localization_comparisons:
-            localization_changes_df = pd.DataFrame(localization_comparisons)
-            localization_changes_df.to_csv(
-                summary_dir / "genes_with_localization_changes.csv", index=False
-            )
-            print(f"Saved {len(localization_changes_df)} localization changes")
-        else:
-            # Create empty file
-            pd.DataFrame().to_csv(
-                summary_dir / "genes_with_localization_changes.csv", index=False
-            )
-            print("No localization changes found")
-
-        # Save detailed localization analysis (all variants assessed)
-        if not detailed_localization_df.empty:
-            detailed_localization_df.to_csv(
-                summary_dir / "detailed_localization_analysis.csv", index=False
-            )
-            print(
-                f"Saved detailed analysis of {len(detailed_localization_df)} localization predictions"
-            )
-        else:
-            # Create empty file
-            pd.DataFrame().to_csv(
-                summary_dir / "detailed_localization_analysis.csv", index=False
-            )
-            print("No detailed localization data available")
-
-        # Save gene-level summary (prioritized targets)
-        if not gene_summary_df.empty:
-            gene_summary_df.to_csv(summary_dir / "gene_level_summary.csv", index=False)
-            print(f"Saved gene-level summary for {len(gene_summary_df)} genes")
-        else:
-            # Create empty file
-            pd.DataFrame().to_csv(summary_dir / "gene_level_summary.csv", index=False)
-            print("No gene-level summary data available")
+        print("Saved mutation summary (shared)")
 
         print(f"\nSummary analysis for {dataset} dataset completed!")
         print(f"Results saved to: {summary_dir}")
+        for model_type in available_models:
+            print(f"  {model_type} model results: {summary_dir / model_type.lower()}/")
 
-        # Print brief summary of gene-level results
-        if not gene_summary_df.empty:
-            print(f"\n=== GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET ===")
+    # Keep original methods for backward compatibility (they now use the first available model)
+    def analyze_localizations(self, dataset, loc_results, protein_data):
+        """Backward compatibility wrapper - uses first available model."""
+        available_models = []
+        if "pairs_accurate" in loc_results:
+            available_models.append("Accurate")
+        if "pairs_fast" in loc_results:
+            available_models.append("Fast")
+        
+        if not available_models:
+            return [], []
+            
+        # Use first available model for backward compatibility
+        return self.analyze_localizations_for_model(dataset, loc_results, protein_data, available_models[0])
 
-            # Top genes by total variants with localization changes
-            top_genes = gene_summary_df.head(10)
-            print(f"Top 10 genes by variants with localization changes:")
-            for _, gene in top_genes.iterrows():
-                print(
-                    f"  {gene['gene']}: {gene['total_variants_with_localization_change']} variants with loc changes "
-                    f"({gene['truncating_isoforms_with_localization_change']} truncating, "
-                    f"{gene['missense_variants_with_localization_change']} missense) | "
-                    f"Clinical mutations: {gene['total_mutations_all_types']} total "
-                    f"({gene['total_frameshift_or_nonsense_mutations']} frameshift/nonsense, {gene['total_missense_mutations']} missense)"
-                )
+    def create_detailed_localization_analysis(self, dataset, loc_results, protein_data):
+        """Backward compatibility wrapper - uses first available model."""
+        available_models = []
+        if "pairs_accurate" in loc_results:
+            available_models.append("Accurate")
+        if "pairs_fast" in loc_results:
+            available_models.append("Fast")
+        
+        if not available_models:
+            return pd.DataFrame()
+            
+        # Use first available model for backward compatibility
+        return self.create_detailed_localization_analysis_for_model(dataset, loc_results, protein_data, available_models[0])
 
-            # Summary statistics
-            total_genes_with_changes = len(
-                gene_summary_df[
-                    gene_summary_df["total_variants_with_localization_change"] > 0
-                ]
-            )
-            total_genes = len(gene_summary_df)
-            total_genes_with_mutations = len(
-                gene_summary_df[gene_summary_df["total_mutations_all_types"] > 0]
-            )
-            print(
-                f"\nSummary: {total_genes_with_changes} out of {total_genes} genes have variants with localization changes"
-            )
-            print(
-                f"Summary: {total_genes_with_mutations} out of {total_genes} genes have clinical mutations in dataset"
-            )
+    def create_gene_summary(self, dataset, loc_results, protein_data, pair_results=None):
+        """Backward compatibility wrapper - uses first available model."""
+        available_models = []
+        if "pairs_accurate" in loc_results:
+            available_models.append("Accurate")
+        if "pairs_fast" in loc_results:
+            available_models.append("Fast")
+        
+        if not available_models:
+            return pd.DataFrame()
+            
+        # Use first available model for backward compatibility
+        return self.create_gene_summary_for_model(dataset, loc_results, protein_data, available_models[0], pair_results)
