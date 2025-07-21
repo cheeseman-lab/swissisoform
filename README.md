@@ -195,16 +195,25 @@ swissisoform/
     │   │   ├── protein_sequences_pairs.fasta/csv
     │   │   ├── protein_sequences_with_mutations.fasta/csv
     │   │   └── *_results.csv        # DeepLoc predictions
-    │   └── summary/                 # NEW: Analysis summaries
+    │   └── summary/                 # Analysis summaries
     │       ├── mutation_summary.txt
-    │       ├── localization_summary.txt
-    │       ├── genes_with_localization_changes.csv
-    │       ├── detailed_localization_analysis.csv
-    │       └── gene_level_summary.csv
+    │       ├── accurate/            # Accurate model results
+    │       │   ├── localization_summary.txt
+    │       │   ├── genes_with_localization_changes.csv
+    │       │   ├── detailed_localization_analysis.csv
+    │       │   └── gene_level_summary.csv
+    │       └── fast/                # Fast model results
+    │           ├── localization_summary.txt
+    │           ├── genes_with_localization_changes.csv
+    │           ├── detailed_localization_analysis.csv
+    │           └── gene_level_summary.csv
     └── full/                        # All genes (~1,100 genes)
         ├── mutations/
         ├── proteins/
-        └── summary/                 # NEW: Analysis summaries
+        └── summary/                 # Analysis summaries
+            ├── mutation_summary.txt
+            ├── accurate/            # Accurate model results
+            └── fast/                # Fast model results
 ```
 
 ## Output Files
@@ -219,14 +228,17 @@ swissisoform/
 - **`protein_sequences_with_mutations.fasta/csv`**: Sequences with integrated mutations
 
 ### Localization Predictions
-- **`*_results.csv`**: DeepLoc predictions (Fast and Accurate modes)
+- **`protein_sequences_pairs_[Model].csv`**: DeepLoc predictions for canonical + truncated protein pairs
+- **`protein_sequences_mutations_[Model].csv`**: DeepLoc predictions for sequences with integrated mutations
+- **[Model]**: Either "Accurate" (ProtT5) or "Fast" (ESM1b) prediction models
 
-### Summary Analysis (NEW)
-- **`mutation_summary.txt`**: Text summary of mutation analysis results
-- **`localization_summary.txt`**: Text summary of localization predictions and changes
-- **`genes_with_localization_changes.csv`**: Genes where truncated/mutated isoforms have different predicted localizations
-- **`detailed_localization_analysis.csv`**: Complete localization predictions for all sequences
-- **`gene_level_summary.csv`**: Gene-level prioritized targets with mutation and localization statistics
+### Summary Analysis
+- **`mutation_summary.txt`**: Text summary of mutation analysis results across all datasets
+- **Model-specific directories**: Separate analysis for Accurate and Fast DeepLoc models
+  - **`localization_summary.txt`**: Text summary of localization predictions and changes
+  - **`genes_with_localization_changes.csv`**: Genes where truncated/mutated isoforms have different predicted localizations
+  - **`detailed_localization_analysis.csv`**: Complete localization predictions for all sequences
+  - **`gene_level_summary.csv`**: Gene-level prioritized targets with mutation and localization statistics
 
 ## File Formats
 
@@ -261,11 +273,13 @@ total_missense_mutations,total_mutations_all_types,...
 ### Localization Analysis
 - **Canonical vs Truncated**: Compare localization predictions between full-length and truncated isoforms
 - **Canonical vs Missense**: Compare localization predictions between wild-type and mutated sequences
+- **Model comparison**: Separate analysis for DeepLoc Accurate and Fast models
 - **Prioritized gene targets**: Genes ranked by number of isoforms with localization changes
 
 ### Summary Statistics
 - **Gene-level prioritization**: Focus on genes with the most interesting localization changes
 - **Clinical relevance**: Integration with ClinVar mutation data
+- **Model-specific insights**: Compare results between DeepLoc prediction models
 - **Comprehensive reporting**: Text summaries and detailed CSV files for further analysis
 
 ## Requirements
