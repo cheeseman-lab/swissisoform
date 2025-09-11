@@ -14,5 +14,6 @@ dependencies:
   - requests
   - gql
   - aiohttp
+  - gget
   - pip:
       - -e .

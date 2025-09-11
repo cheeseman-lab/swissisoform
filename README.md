@@ -51,7 +51,7 @@ SwissIsoform requires only **two input files** to run the analysis:
 ### Full Pipeline (SLURM)
 
 ```bash
-# Download reference data
+# Download reference data -- this will prompt for download of COSMIC data
 bash scripts/0_download_genome.sh
 
 # Clean ribosome profiling data  

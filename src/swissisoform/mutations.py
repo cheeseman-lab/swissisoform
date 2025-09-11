@@ -12,6 +12,7 @@ import requests
 import json
 import asyncio
 import logging
+import gget
 from datetime import datetime
 from pathlib import Path
 
@@ -542,6 +543,285 @@ class MutationHandler:
             for category, mask in pathogenicity_mapping.items()
         }
 
+
+    async def get_cosmic_variants(self, gene_name: str) -> pd.DataFrame:
+        """Get COSMIC variants for a gene using the downloaded TSV database.
+        
+        Args:
+            gene_name: Gene symbol (e.g., 'BRCA1')
+            
+        Returns:
+            DataFrame of processed COSMIC variants
+        """
+        cache_key = f"cosmic_{gene_name}"
+        if cache_key in self.cached_data:
+            return self.cached_data[cache_key]
+        
+        try:
+            # Run gget.cosmic in executor since it's not async
+            loop = asyncio.get_event_loop()
+            cosmic_data = await loop.run_in_executor(
+                None, 
+                self._fetch_cosmic_sync, 
+                gene_name
+            )
+            
+            # Cache the result
+            self.cached_data[cache_key] = cosmic_data
+            return cosmic_data
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch COSMIC data for {gene_name}: {str(e)}")
+            return pd.DataFrame()
+
+    def _fetch_cosmic_sync(self, gene_name: str) -> pd.DataFrame:
+        """Synchronous wrapper for gget.cosmic that queries the downloaded TSV"""
+        try:
+            # Find the COSMIC database file
+            cosmic_tsv_path = self._find_cosmic_database()
+            if not cosmic_tsv_path:
+                logger.warning("No COSMIC database found. Please download first using: gget.cosmic(searchterm=None, download_cosmic=True)")
+                return pd.DataFrame()
+            
+            # Use gget to query the downloaded COSMIC database
+            cosmic_result = gget.cosmic(
+                searchterm=gene_name,
+                cosmic_tsv_path=cosmic_tsv_path,
+                limit=1000,
+                csv=False  # Return as DataFrame
+            )
+            
+            if cosmic_result is None or cosmic_result.empty:
+                return pd.DataFrame()
+                
+            return self._process_cosmic_variants(cosmic_result)
+            
+        except Exception as e:
+            logger.error(f"gget.cosmic failed: {str(e)}")
+            return pd.DataFrame()
+
+    def _find_cosmic_database(self) -> Optional[str]:
+        """Find COSMIC database file based on the actual file structure"""
+        import os
+        from pathlib import Path
+        
+        # Search paths based on your actual directory structure
+        search_paths = [
+            "../data/mutation_data",  # Primary location
+            "data/mutation_data",     # Alternative relative path
+            ".",                      # Current directory
+            "../data/cosmic",         # Legacy location
+            "data/cosmic",
+        ]
+        
+        for search_path in search_paths:
+            path = Path(search_path)
+            if path.exists():
+                # Look for the nested COSMIC directory structure
+                # Pattern: CancerMutationCensus_AllData_Tsv_v*_GRCh*/CancerMutationCensus_AllData_v*_GRCh*.tsv
+                cosmic_dirs = list(path.glob("CancerMutationCensus_AllData_Tsv_v*_GRCh*"))
+                
+                for cosmic_dir in cosmic_dirs:
+                    if cosmic_dir.is_dir():
+                        # Look for the TSV file inside this directory
+                        tsv_files = list(cosmic_dir.glob("CancerMutationCensus_AllData_v*_GRCh*.tsv"))
+                        if tsv_files:
+                            # Return the first (and likely only) TSV file found
+                            cosmic_file = tsv_files[0]
+                            logger.info(f"Found COSMIC database: {cosmic_file}")
+                            return str(cosmic_file)
+        
+        # If not found, log what we searched to help debugging
+        logger.warning(f"No COSMIC database found. Searched paths: {search_paths}")
+        logger.warning("Expected structure: ../data/mutation_data/CancerMutationCensus_AllData_Tsv_v*_GRCh*/CancerMutationCensus_AllData_v*_GRCh*.tsv")
+        return None
+
+    def _process_cosmic_variants(self, cosmic_df: pd.DataFrame) -> pd.DataFrame:
+        """Process raw COSMIC data into standardized format."""
+        if cosmic_df.empty:
+            return pd.DataFrame()
+        
+        # Debug: Print column names to understand the data structure
+        logger.info(f"COSMIC columns: {list(cosmic_df.columns)}")
+        logger.info(f"COSMIC data shape: {cosmic_df.shape}")
+        
+        processed_variants = []
+        
+        for _, variant in cosmic_df.iterrows():
+            # Extract position from genomic coordinate
+            position = self._extract_cosmic_position(variant)
+            if position is None:
+                continue  # Skip variants without clear genomic position
+                
+            variant_info = {
+                'position': position,
+                'cosmic_id': variant.get('COSMIC_ID', variant.get('COSMIC ID', '')),
+                'gene_name': variant.get('Gene_name', variant.get('GENE_NAME', variant.get('Gene name', ''))),
+                'mutation_description': variant.get('Mutation_Description', variant.get('MUTATION_DESCRIPTION', variant.get('Mutation Description', ''))),
+                'mutation_type': variant.get('Mutation_Type', variant.get('MUTATION_TYPE', variant.get('Mutation Type', ''))),
+                'consequence': variant.get('Mutation_Class', variant.get('MUTATION_CLASS', variant.get('Mutation Class', ''))),
+                'tissue_type': variant.get('Primary_tissue', variant.get('PRIMARY_TISSUE', variant.get('Primary tissue', ''))),
+                'histology': variant.get('Histology', variant.get('HISTOLOGY', '')),
+                'pubmed_id': variant.get('Pubmed_PMID', variant.get('PUBMED_PMID', variant.get('Pubmed PMID', ''))),
+                'chromosome': self._extract_cosmic_chromosome(variant),
+                'hgvs_genomic': variant.get('Mutation_genome_position', variant.get('MUTATION_GENOME_POSITION', variant.get('Mutation genome position', ''))),
+                'hgvs_coding': variant.get('Mutation_CDS', variant.get('MUTATION_CDS', variant.get('Mutation CDS', ''))),
+                'hgvs_protein': variant.get('Mutation_AA', variant.get('MUTATION_AA', variant.get('Mutation AA', ''))),
+                'somatic_status': variant.get('Mutation_somatic_status', variant.get('MUTATION_SOMATIC_STATUS', variant.get('Mutation somatic status', ''))),
+                'resistance_mutation': variant.get('Resistance_Mutation', variant.get('RESISTANCE_MUTATION', variant.get('Resistance Mutation', ''))),
+                # Extract ref/alt from mutation description
+                'reference': self._extract_cosmic_ref(variant),
+                'alternate': self._extract_cosmic_alt(variant)
+            }
+            
+            processed_variants.append(variant_info)
+        
+        result_df = pd.DataFrame(processed_variants)
+        logger.info(f"Processed {len(result_df)} COSMIC variants")
+        return result_df
+
+    def _extract_cosmic_position(self, variant: pd.Series) -> Optional[int]:
+        """Extract genomic position from COSMIC variant data"""
+        try:
+            # Try different possible column names for genomic position
+            pos_fields = [
+                'Mutation_genome_position', 'MUTATION_GENOME_POSITION', 
+                'Mutation genome position', 'Genome_position', 'Position'
+            ]
+            
+            pos_str = None
+            for field in pos_fields:
+                if field in variant and pd.notna(variant.get(field)):
+                    pos_str = str(variant.get(field))
+                    break
+            
+            if not pos_str:
+                return None
+                
+            if ':' in pos_str:
+                # Format like "17:43044295-43044295"
+                pos_part = pos_str.split(':')[1]
+                if '-' in pos_part:
+                    return int(pos_part.split('-')[0])
+                else:
+                    return int(pos_part)
+            elif pos_str.isdigit():
+                # Direct position number
+                return int(pos_str)
+                
+            return None
+        except (ValueError, AttributeError):
+            return None
+
+    def _extract_cosmic_chromosome(self, variant: pd.Series) -> str:
+        """Extract chromosome from COSMIC variant data"""
+        # Try different possible column names for genomic position
+        pos_fields = [
+            'Mutation_genome_position', 'MUTATION_GENOME_POSITION', 
+            'Mutation genome position', 'Chromosome', 'Chr'
+        ]
+        
+        for field in pos_fields:
+            if field in variant and pd.notna(variant.get(field)):
+                pos_str = str(variant.get(field))
+                if ':' in pos_str:
+                    return pos_str.split(':')[0]
+                elif field.lower() in ['chromosome', 'chr'] and pos_str:
+                    return pos_str
+        
+        return ''
+
+    def _extract_cosmic_ref(self, variant: pd.Series) -> Optional[str]:
+        """Extract reference allele from COSMIC mutation description"""
+        # Try different mutation description fields
+        desc_fields = [
+            'Mutation_Description', 'MUTATION_DESCRIPTION', 
+            'Mutation Description', 'Mutation_CDS', 'MUTATION_CDS'
+        ]
+        
+        for field in desc_fields:
+            if field in variant and pd.notna(variant.get(field)):
+                mutation_desc = str(variant.get(field))
+                if '>' in mutation_desc:
+                    # Format like "c.123A>T"
+                    ref_part = mutation_desc.split('>')[0]
+                    if ref_part and ref_part[-1].isalpha():
+                        return ref_part[-1].upper()
+        
+        return None
+
+    def _extract_cosmic_alt(self, variant: pd.Series) -> Optional[str]:
+        """Extract alternate allele from COSMIC mutation description"""
+        # Try different mutation description fields
+        desc_fields = [
+            'Mutation_Description', 'MUTATION_DESCRIPTION', 
+            'Mutation Description', 'Mutation_CDS', 'MUTATION_CDS'
+        ]
+        
+        for field in desc_fields:
+            if field in variant and pd.notna(variant.get(field)):
+                mutation_desc = str(variant.get(field))
+                if '>' in mutation_desc:
+                    # Format like "c.123A>T"
+                    alt_part = mutation_desc.split('>')[1]
+                    if alt_part and alt_part[0].isalpha():
+                        return alt_part[0].upper()
+        
+        return None
+
+    def _standardize_cosmic_impact(self, cosmic_impact: str) -> str:
+        """Convert COSMIC mutation classifications to standardized impact terms"""
+        if pd.isna(cosmic_impact) or not isinstance(cosmic_impact, str):
+            return "unknown"
+        
+        cosmic_impact = cosmic_impact.lower().strip()
+        
+        # Map COSMIC classifications to standard terms
+        if 'missense' in cosmic_impact:
+            return 'missense variant'
+        elif 'nonsense' in cosmic_impact:
+            return 'nonsense variant'
+        elif 'frameshift' in cosmic_impact:
+            return 'frameshift variant'
+        elif 'synonymous' in cosmic_impact:
+            return 'synonymous variant'
+        elif 'splice' in cosmic_impact:
+            return 'splice variant'
+        elif 'inframe' in cosmic_impact:
+            return 'inframe variant'
+        elif 'deletion' in cosmic_impact:
+            return 'deletion'
+        elif 'insertion' in cosmic_impact:
+            return 'insertion'
+        elif 'substitution' in cosmic_impact:
+            return 'substitution'
+        else:
+            return 'other variant'
+
+    async def get_cosmic_summary(self, gene_name: str) -> Dict:
+        """Get summary statistics for COSMIC variants"""
+        cosmic_df = await self.get_cosmic_variants(gene_name)
+        
+        if cosmic_df.empty:
+            return {
+                'total_variants': 0,
+                'mutation_types': {},
+                'tissue_types': {},
+                'histology_types': {},
+                'resistance_mutations': 0,
+                'with_pubmed': 0
+            }
+        
+        summary = {
+            'total_variants': len(cosmic_df),
+            'mutation_types': cosmic_df['mutation_type'].value_counts().to_dict(),
+            'tissue_types': cosmic_df['tissue_type'].value_counts().to_dict(),
+            'histology_types': cosmic_df['histology'].value_counts().to_dict(),
+            'resistance_mutations': (cosmic_df['resistance_mutation'] == 'y').sum(),
+            'with_pubmed': cosmic_df['pubmed_id'].notna().sum(),
+            'somatic_status': cosmic_df['somatic_status'].value_counts().to_dict()
+        }
+        
         return summary
 
     def _standardize_impact_category(self, impact: str) -> str:
@@ -651,6 +931,30 @@ class MutationHandler:
                 }
             )
 
+        elif source.lower() == "cosmic":  # ADD THIS BLOCK
+            standardized_df = pd.DataFrame({
+                "position": variants_df["position"],
+                "variant_id": variants_df["cosmic_id"],
+                "reference": variants_df["reference"],  # Now uses GENOMIC_WT_ALLELE_SEQ
+                "alternate": variants_df["alternate"],  # Now uses GENOMIC_MUT_ALLELE_SEQ
+                "source": "COSMIC",
+                "impact": variants_df["consequence"].apply(self._standardize_cosmic_impact),
+                "hgvsc": variants_df["hgvs_coding"],  # Mutation CDS
+                "hgvsp": variants_df["hgvs_protein"],  # Mutation AA
+                "allele_frequency": variants_df["gnomad_exomes_af"],  # Use gnomAD freq from COSMIC
+                "clinical_significance": variants_df["clinvar_significance"],  # CLINVAR_CLNSIG from COSMIC
+                # COSMIC-specific additional fields for richer analysis
+                "cosmic_samples_tested": variants_df["cosmic_samples_tested"],
+                "cosmic_samples_mutated": variants_df["cosmic_samples_mutated"],
+                "disease": variants_df["disease"],
+                "oncogene_tsg": variants_df["oncogene_tsg"],
+                "mutation_significance_tier": variants_df["mutation_significance_tier"],
+                "gerp_score": variants_df["gerp_score"],
+                "sift_score": variants_df["sift_score"],
+                "sift_prediction": variants_df["sift_prediction"],
+                "mutation_url": variants_df["mutation_url"]
+            })
+
         return self._clean_mutation_data(standardized_df)
 
     def _clean_mutation_data(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -736,7 +1040,7 @@ class MutationHandler:
             DataFrame containing mutations ready for visualization
         """
         if sources is None:
-            sources = ["gnomad", "clinvar"]
+            sources = ["gnomad", "clinvar", "cosmic"]  # ADD "cosmic" here
         sources = [s.lower() for s in sources]
 
         # Fetch and combine data from sources
@@ -749,12 +1053,16 @@ class MutationHandler:
             try:
                 if source == "gnomad":
                     df = await self.get_gnomad_variants(gene_name)
+                    standardized_df = self.standardize_mutation_data(df, source)
                 elif source == "clinvar":
                     df = await self.get_clinvar_variants(gene_name)
+                    standardized_df = self.standardize_mutation_data(df, source)
+                elif source == "cosmic":  # ADD THIS BLOCK
+                    df = await self.get_cosmic_variants(gene_name)
+                    standardized_df = self.standardize_mutation_data(df, source)
                 else:
                     continue
 
-                standardized_df = self.standardize_mutation_data(df, source)
                 if not standardized_df.empty:
                     dfs_to_combine.append(standardized_df)
                     if verbose:
