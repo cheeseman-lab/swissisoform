@@ -823,18 +823,18 @@ class MutationHandler:
                 # URLs
                 'mutation_url': variant.get('MUTATION_URL', ''),
             }
-            
+                    
             # Dataset-specific fields
             if variant.get('cosmic_dataset') == 'cancer_census':
-                # Cancer Census specific fields (using actual column names with underscores)
+                # Cancer Census specific fields - use correct column names with spaces
                 variant_info.update({
-                    'mutation_description': variant.get('Mutation_CDS', ''),
-                    'mutation_aa': variant.get('Mutation_AA', ''),
-                    'mutation_type_cds': variant.get('Mutation_Description_CDS', ''),
-                    'mutation_type_aa': variant.get('Mutation_Description_AA', ''),
-                    'consequence': variant.get('Mutation_Description_AA', ''),
-                    'hgvs_coding': variant.get('Mutation_CDS', ''),
-                    'hgvs_protein': variant.get('Mutation_AA', ''),
+                    'mutation_description': variant.get('Mutation CDS', ''),
+                    'mutation_aa': variant.get('Mutation AA', ''),
+                    'mutation_type_cds': variant.get('Mutation Description CDS', ''),
+                    'mutation_type_aa': variant.get('Mutation Description AA', ''),
+                    'consequence': variant.get('Mutation Description AA', ''),  # This contains "Substitution - Missense"
+                    'hgvs_coding': variant.get('Mutation CDS', ''),  # This contains "c.246G>T"
+                    'hgvs_protein': variant.get('Mutation AA', ''),  # This contains "p.K82N"
                     'aa_mut_start': variant.get('AA_MUT_START', ''),
                     'aa_mut_stop': variant.get('AA_MUT_STOP', ''),
                     'shared_aa': variant.get('SHARED_AA', ''),
@@ -848,15 +848,15 @@ class MutationHandler:
                     'wgs_disease': variant.get('WGS_DISEASE', ''),
                 })
             else:
-                # NonCoding variants - fill with empty values for consistency
+                # NonCoding variants - use HGVSG for genomic notation
                 variant_info.update({
                     'mutation_description': '',
                     'mutation_aa': '',
                     'mutation_type_cds': '',
                     'mutation_type_aa': 'noncoding',
                     'consequence': 'noncoding_variant',
-                    'hgvs_coding': '',
-                    'hgvs_protein': '',
+                    'hgvs_coding': variant.get('HGVSG', ''),  # Use genomic HGVS for noncoding
+                    'hgvs_protein': '',  # No protein change for noncoding
                     'aa_mut_start': '',
                     'aa_mut_stop': '',
                     'shared_aa': '',
@@ -872,7 +872,7 @@ class MutationHandler:
                     'mutation_nc_id': variant.get('MUTATION_NC_ID', ''),
                     'cosmic_phenotype_id': variant.get('COSMIC_PHENOTYPE_ID', ''),
                     'genome_stop': variant.get('GENOME_STOP', ''),
-                })
+            })
             
             processed_variants.append(variant_info)
         
@@ -1072,6 +1072,54 @@ class MutationHandler:
         
         return hgvsc_str
 
+    def _extract_ref_alt_from_hgvs(self, hgvs_str: str) -> tuple:
+        """Extract reference and alternate alleles from HGVS notation.
+        
+        Args:
+            hgvs_str: HGVS string (coding sequence)
+            
+        Returns:
+            Tuple of (reference, alternate) or ("", "") if cannot parse
+        """
+        import re
+        
+        if pd.isna(hgvs_str) or not isinstance(hgvs_str, str):
+            return "", ""
+        
+        hgvs_str = hgvs_str.strip()
+        
+        # Clean up ClinVar format first
+        if ":" in hgvs_str:
+            parts = hgvs_str.split(":")
+            if len(parts) >= 2:
+                hgvs_str = parts[-1].strip()
+        
+        # Handle substitutions: c.14G>T, c.*65A>G, c.-75A>G
+        subst_match = re.search(r'([ATCG])>([ATCG])', hgvs_str)
+        if subst_match:
+            ref, alt = subst_match.groups()
+            return ref, alt
+        
+        # Handle deletions: c.*71del, c.-72del
+        del_match = re.search(r'([ATCG]+)?del', hgvs_str)
+        if del_match:
+            ref = del_match.group(1) if del_match.group(1) else "N"
+            return ref, ""
+        
+        # Handle duplications: c.*294dup
+        dup_match = re.search(r'([ATCG]+)?dup', hgvs_str)
+        if dup_match:
+            dup_seq = dup_match.group(1) if dup_match.group(1) else "N"
+            return "", dup_seq
+        
+        # Handle insertions: c.123_124insA
+        ins_match = re.search(r'ins([ATCG]+)', hgvs_str)
+        if ins_match:
+            ins_seq = ins_match.group(1)
+            return "", ins_seq
+        
+        return "", ""
+
     def _standardize_hgvsp(self, hgvsp_str: str, impact: str = "") -> str:
         """Standardize HGVS protein notation.
         
@@ -1208,17 +1256,41 @@ class MutationHandler:
         
     def _standardize_clinvar_data(self, variants_df: pd.DataFrame) -> pd.DataFrame:
         """Standardize ClinVar data."""
+        variants_df = variants_df.copy()
+        
+        # Create impact column first
+        variants_df['standardized_impact'] = variants_df["molecular_consequences"].apply(self._standardize_impact_category)
+        
+        # Apply HGVS standardization
+        variants_df['standardized_hgvsc'] = variants_df["cdna_change"].apply(self._standardize_hgvsc)
+        variants_df['standardized_hgvsp'] = variants_df.apply(
+            lambda row: self._standardize_hgvsp(row["protein_change"], row['standardized_impact']), 
+            axis=1
+        )
+        
+        # Extract ref/alt from HGVS since ClinVar doesn't provide them directly
+        def get_reference(row):
+            hgvs_ref, _ = self._extract_ref_alt_from_hgvs(row.get("cdna_change", ""))
+            return hgvs_ref
+        
+        def get_alternate(row):
+            _, hgvs_alt = self._extract_ref_alt_from_hgvs(row.get("cdna_change", ""))
+            return hgvs_alt
+        
+        variants_df['extracted_ref'] = variants_df.apply(get_reference, axis=1)
+        variants_df['extracted_alt'] = variants_df.apply(get_alternate, axis=1)
+        
         return pd.DataFrame({
             "position": variants_df["start"],
             "variant_id": variants_df["accession"],
-            "reference": variants_df["ref_allele"],
-            "alternate": variants_df["alt_allele"],
+            "reference": variants_df['extracted_ref'],
+            "alternate": variants_df['extracted_alt'],
             "source": "ClinVar",
-            "impact": variants_df["molecular_consequences"].apply(self._standardize_impact_category),
-            "hgvsc": variants_df["cdna_change"].apply(self._standardize_hgvsc),
-            "hgvsp": variants_df["protein_change"].apply(self._standardize_hgvsp),
+            "impact": variants_df['standardized_impact'],
+            "hgvsc": variants_df['standardized_hgvsc'],
+            "hgvsp": variants_df['standardized_hgvsp'],
             "allele_frequency": None,
-            "allele_count_hom": None,  
+            "allele_count_hom": None,
             "clinical_significance": variants_df["clinical_significance"],
         })
         
@@ -1278,33 +1350,67 @@ class MutationHandler:
         
         cosmic_impact = cosmic_impact.lower().strip()
         
-        # Map COSMIC descriptions to standard terms
+        # COSMIC mutation description mappings (based on your actual data)
         cosmic_mapping = {
+            # Direct COSMIC mutation description patterns
+            'substitution - missense': 'missense variant',
+            'substitution - nonsense': 'nonsense variant',
+            'substitution - coding silent': 'synonymous variant',
+            'deletion - frameshift': 'frameshift variant',
+            'insertion - frameshift': 'frameshift variant',
+            'deletion - in frame': 'inframe deletion',
+            'insertion - in frame': 'inframe insertion',
+            'complex - insertion inframe': 'inframe insertion',
+            'complex - deletion inframe': 'inframe deletion',
+            'complex - frameshift': 'frameshift variant',
+            
+            # Fallback patterns
             'missense': 'missense variant',
             'nonsense': 'nonsense variant',
-            'stop': 'nonsense variant',
-            'frameshift': 'frameshift variant',
-            'synonymous': 'synonymous variant',
             'silent': 'synonymous variant',
-            'splice': 'splice variant',
+            'synonymous': 'synonymous variant',
+            'frameshift': 'frameshift variant',
             'noncoding': 'noncoding variant',
+            'noncoding_variant': 'noncoding variant',
+            
+            # General categories
+            'substitution': 'substitution',
             'deletion': 'deletion',
             'insertion': 'insertion',
-            'substitution': 'substitution',
+            'complex': 'complex variant',
         }
         
-        for key, value in cosmic_mapping.items():
-            if key in cosmic_impact:
-                return value
+        # Check for exact matches first
+        for pattern, standardized in cosmic_mapping.items():
+            if pattern in cosmic_impact:
+                return standardized
         
-        # Handle inframe variants
-        if 'inframe' in cosmic_impact:
-            if 'deletion' in cosmic_impact:
+        # Handle specific patterns that might vary
+        if 'substitution' in cosmic_impact:
+            if 'missense' in cosmic_impact:
+                return 'missense variant'
+            elif 'nonsense' in cosmic_impact:
+                return 'nonsense variant'
+            elif 'silent' in cosmic_impact or 'coding silent' in cosmic_impact:
+                return 'synonymous variant'
+            else:
+                return 'substitution'
+        
+        if 'deletion' in cosmic_impact:
+            if 'frameshift' in cosmic_impact:
+                return 'frameshift variant'
+            elif 'in frame' in cosmic_impact or 'inframe' in cosmic_impact:
                 return 'inframe deletion'
-            elif 'insertion' in cosmic_impact:
+            else:
+                return 'deletion'
+        
+        if 'insertion' in cosmic_impact:
+            if 'frameshift' in cosmic_impact:
+                return 'frameshift variant'
+            elif 'in frame' in cosmic_impact or 'inframe' in cosmic_impact:
                 return 'inframe insertion'
             else:
-                return 'inframe variant'
+                return 'insertion'
         
         return 'other variant'
     
