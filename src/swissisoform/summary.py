@@ -43,17 +43,17 @@ class SummaryAnalyzer:
     def get_available_models(self, dataset):
         """Determine which models have data available for a dataset."""
         loc_results = self.load_localization_results(dataset)
-        
+
         available_models = []
-        
+
         # Check for Accurate model
         if "pairs_accurate" in loc_results:
             available_models.append("Accurate")
-            
-        # Check for Fast model  
+
+        # Check for Fast model
         if "pairs_fast" in loc_results:
             available_models.append("Fast")
-            
+
         return available_models
 
     def load_mutation_results(self, dataset):
@@ -285,9 +285,13 @@ class SummaryAnalyzer:
 
         return norm_loc1 != norm_loc2
 
-    def analyze_localizations_for_model(self, dataset, loc_results, protein_data, model_type):
+    def analyze_localizations_for_model(
+        self, dataset, loc_results, protein_data, model_type
+    ):
         """Analyze localization predictions for a specific dataset and model."""
-        print(f"\n=== ANALYZING LOCALIZATIONS FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ===")
+        print(
+            f"\n=== ANALYZING LOCALIZATIONS FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ==="
+        )
 
         summary_lines = []
         summary_lines.append(
@@ -582,7 +586,9 @@ class SummaryAnalyzer:
 
         return summary_lines, all_localization_comparisons
 
-    def create_detailed_localization_analysis_for_model(self, dataset, loc_results, protein_data, model_type):
+    def create_detailed_localization_analysis_for_model(
+        self, dataset, loc_results, protein_data, model_type
+    ):
         """Create a detailed analysis of all localization predictions for a specific dataset and model."""
         print(
             f"\n=== CREATING DETAILED LOCALIZATION ANALYSIS FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ==="
@@ -700,7 +706,9 @@ class SummaryAnalyzer:
         self, dataset, loc_results, protein_data, model_type, pair_results=None
     ):
         """Create a gene-level summary showing prioritized targets for a specific model."""
-        print(f"\n=== CREATING GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ===")
+        print(
+            f"\n=== CREATING GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ==="
+        )
 
         if not loc_results:
             return pd.DataFrame()
@@ -952,7 +960,7 @@ class SummaryAnalyzer:
 
         # Get available models
         available_models = self.get_available_models(dataset)
-        
+
         if not available_models:
             print(f"No localization models available for {dataset} dataset")
             return
@@ -961,20 +969,26 @@ class SummaryAnalyzer:
 
         # Analyze each available model separately
         for model_type in available_models:
-            print(f"\n=== ANALYZING {model_type.upper()} MODEL FOR {dataset.upper()} DATASET ===")
-            
+            print(
+                f"\n=== ANALYZING {model_type.upper()} MODEL FOR {dataset.upper()} DATASET ==="
+            )
+
             # Create model-specific subdirectory
             model_summary_dir = summary_dir / model_type.lower()
             model_summary_dir.mkdir(parents=True, exist_ok=True)
 
             # Analyze localizations for this model
-            localization_summary, localization_comparisons = self.analyze_localizations_for_model(
-                dataset, loc_results, protein_data, model_type
+            localization_summary, localization_comparisons = (
+                self.analyze_localizations_for_model(
+                    dataset, loc_results, protein_data, model_type
+                )
             )
 
             # Create detailed localization analysis for this model
-            detailed_localization_df = self.create_detailed_localization_analysis_for_model(
-                dataset, loc_results, protein_data, model_type
+            detailed_localization_df = (
+                self.create_detailed_localization_analysis_for_model(
+                    dataset, loc_results, protein_data, model_type
+                )
             )
 
             # Create gene-level summary for this model
@@ -983,7 +997,9 @@ class SummaryAnalyzer:
             )
 
             # Save model-specific results
-            print(f"\n=== SAVING {model_type.upper()} MODEL RESULTS FOR {dataset.upper()} DATASET ===")
+            print(
+                f"\n=== SAVING {model_type.upper()} MODEL RESULTS FOR {dataset.upper()} DATASET ==="
+            )
 
             # Save localization summary
             with open(model_summary_dir / "localization_summary.txt", "w") as f:
@@ -994,20 +1010,25 @@ class SummaryAnalyzer:
             if localization_comparisons:
                 localization_changes_df = pd.DataFrame(localization_comparisons)
                 localization_changes_df.to_csv(
-                    model_summary_dir / "genes_with_localization_changes.csv", index=False
+                    model_summary_dir / "genes_with_localization_changes.csv",
+                    index=False,
                 )
-                print(f"Saved {len(localization_changes_df)} {model_type} localization changes")
+                print(
+                    f"Saved {len(localization_changes_df)} {model_type} localization changes"
+                )
             else:
                 # Create empty file
                 pd.DataFrame().to_csv(
-                    model_summary_dir / "genes_with_localization_changes.csv", index=False
+                    model_summary_dir / "genes_with_localization_changes.csv",
+                    index=False,
                 )
                 print(f"No {model_type} localization changes found")
 
             # Save detailed localization analysis (all variants assessed)
             if not detailed_localization_df.empty:
                 detailed_localization_df.to_csv(
-                    model_summary_dir / "detailed_localization_analysis.csv", index=False
+                    model_summary_dir / "detailed_localization_analysis.csv",
+                    index=False,
                 )
                 print(
                     f"Saved detailed {model_type} analysis of {len(detailed_localization_df)} localization predictions"
@@ -1015,26 +1036,37 @@ class SummaryAnalyzer:
             else:
                 # Create empty file
                 pd.DataFrame().to_csv(
-                    model_summary_dir / "detailed_localization_analysis.csv", index=False
+                    model_summary_dir / "detailed_localization_analysis.csv",
+                    index=False,
                 )
                 print(f"No detailed {model_type} localization data available")
 
             # Save gene-level summary (prioritized targets)
             if not gene_summary_df.empty:
-                gene_summary_df.to_csv(model_summary_dir / "gene_level_summary.csv", index=False)
-                print(f"Saved {model_type} gene-level summary for {len(gene_summary_df)} genes")
+                gene_summary_df.to_csv(
+                    model_summary_dir / "gene_level_summary.csv", index=False
+                )
+                print(
+                    f"Saved {model_type} gene-level summary for {len(gene_summary_df)} genes"
+                )
             else:
                 # Create empty file
-                pd.DataFrame().to_csv(model_summary_dir / "gene_level_summary.csv", index=False)
+                pd.DataFrame().to_csv(
+                    model_summary_dir / "gene_level_summary.csv", index=False
+                )
                 print(f"No {model_type} gene-level summary data available")
 
             # Print brief summary of gene-level results for this model
             if not gene_summary_df.empty:
-                print(f"\n=== GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ===")
+                print(
+                    f"\n=== GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ==="
+                )
 
                 # Top genes by total variants with localization changes
                 top_genes = gene_summary_df.head(10)
-                print(f"Top 10 genes by variants with localization changes ({model_type} model):")
+                print(
+                    f"Top 10 genes by variants with localization changes ({model_type} model):"
+                )
                 for _, gene in top_genes.iterrows():
                     print(
                         f"  {gene['gene']}: {gene['total_variants_with_localization_change']} variants with loc changes "
@@ -1079,12 +1111,14 @@ class SummaryAnalyzer:
             available_models.append("Accurate")
         if "pairs_fast" in loc_results:
             available_models.append("Fast")
-        
+
         if not available_models:
             return [], []
-            
+
         # Use first available model for backward compatibility
-        return self.analyze_localizations_for_model(dataset, loc_results, protein_data, available_models[0])
+        return self.analyze_localizations_for_model(
+            dataset, loc_results, protein_data, available_models[0]
+        )
 
     def create_detailed_localization_analysis(self, dataset, loc_results, protein_data):
         """Backward compatibility wrapper - uses first available model."""
@@ -1093,23 +1127,29 @@ class SummaryAnalyzer:
             available_models.append("Accurate")
         if "pairs_fast" in loc_results:
             available_models.append("Fast")
-        
+
         if not available_models:
             return pd.DataFrame()
-            
-        # Use first available model for backward compatibility
-        return self.create_detailed_localization_analysis_for_model(dataset, loc_results, protein_data, available_models[0])
 
-    def create_gene_summary(self, dataset, loc_results, protein_data, pair_results=None):
+        # Use first available model for backward compatibility
+        return self.create_detailed_localization_analysis_for_model(
+            dataset, loc_results, protein_data, available_models[0]
+        )
+
+    def create_gene_summary(
+        self, dataset, loc_results, protein_data, pair_results=None
+    ):
         """Backward compatibility wrapper - uses first available model."""
         available_models = []
         if "pairs_accurate" in loc_results:
             available_models.append("Accurate")
         if "pairs_fast" in loc_results:
             available_models.append("Fast")
-        
+
         if not available_models:
             return pd.DataFrame()
-            
+
         # Use first available model for backward compatibility
-        return self.create_gene_summary_for_model(dataset, loc_results, protein_data, available_models[0], pair_results)
+        return self.create_gene_summary_for_model(
+            dataset, loc_results, protein_data, available_models[0], pair_results
+        )
