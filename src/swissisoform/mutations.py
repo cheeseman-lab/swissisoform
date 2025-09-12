@@ -1047,39 +1047,114 @@ class MutationHandler:
             'cosmic_samples_data': {'total_tested': 0, 'total_mutated': 0}
         }
     
-    def _standardize_hgvs(self, hgvs_str: str) -> str:
-        """Standardize HGVS notation by extracting the core variant description.
+    def _standardize_hgvsc(self, hgvsc_str: str) -> str:
+        """Standardize HGVS coding sequence notation.
         
         Args:
-            hgvs_str: Raw HGVS string from any source
+            hgvsc_str: Raw HGVS coding sequence string
             
         Returns:
-            Standardized HGVS string with just the variant description
+            Standardized HGVS coding sequence string
         """
-        if pd.isna(hgvs_str) or not isinstance(hgvs_str, str):
+        if pd.isna(hgvsc_str) or not isinstance(hgvsc_str, str):
             return ""
         
-        hgvs_str = hgvs_str.strip()
-        if not hgvs_str:
+        hgvsc_str = hgvsc_str.strip()
+        if not hgvsc_str:
             return ""
         
         # Handle ClinVar format: "NM_005228.5(EGFR):c.-216G>T" -> "c.-216G>T"
-        if ":" in hgvs_str:
-            parts = hgvs_str.split(":")
+        if ":" in hgvsc_str:
+            parts = hgvsc_str.split(":")
             if len(parts) >= 2:
                 # Take the part after the colon (the actual HGVS description)
-                hgvs_str = parts[-1].strip()
+                hgvsc_str = parts[-1].strip()
         
-        # Remove any leading/trailing whitespace and common prefixes
-        hgvs_str = hgvs_str.strip()
-        
-        # Handle protein descriptions that might have extra info after space
-        # "p.Gly5Val some_extra_info" -> "p.Gly5Val"
-        if hgvs_str.startswith("p.") and " " in hgvs_str:
-            hgvs_str = hgvs_str.split(" ")[0]
-        
-        return hgvs_str
+        return hgvsc_str
 
+    def _standardize_hgvsp(self, hgvsp_str: str, impact: str = "") -> str:
+        """Standardize HGVS protein notation.
+        
+        For synonymous variants, returns empty string since there's no protein change.
+        
+        Args:
+            hgvsp_str: Raw HGVS protein string
+            impact: Variant impact type to check for synonymous variants
+            
+        Returns:
+            Standardized HGVS protein string, or empty string for synonymous variants
+        """
+        if pd.isna(hgvsp_str) or not isinstance(hgvsp_str, str):
+            return ""
+        
+        # If this is a synonymous variant, there's no protein change
+        if impact and "synonymous" in impact.lower():
+            return ""
+        
+        hgvsp_str = hgvsp_str.strip()
+        if not hgvsp_str:
+            return ""
+        
+        # Handle ClinVar format: remove transcript prefix
+        if ":" in hgvsp_str:
+            parts = hgvsp_str.split(":")
+            if len(parts) >= 2:
+                hgvsp_str = parts[-1].strip()
+        
+        # Convert protein HGVS to short format if it starts with 'p.'
+        if hgvsp_str.startswith("p."):
+            return self._convert_protein_to_short_format(hgvsp_str)
+        
+        return hgvsp_str
+
+    def _convert_protein_to_short_format(self, protein_hgvs: str) -> str:
+        """Convert protein HGVS descriptions to short format.
+        
+        Converts 'p.Pro3His' to 'P3H' format.
+        
+        Args:
+            protein_hgvs: Protein HGVS string starting with 'p.'
+            
+        Returns:
+            Short format protein change description
+        """
+        if not protein_hgvs.startswith("p."):
+            return protein_hgvs
+        
+        # Remove 'p.' prefix
+        change = protein_hgvs[2:].strip()
+        
+        # Handle complex changes (frameshift, etc.) - return as-is
+        if any(term in change.lower() for term in ['fs', 'ter', 'ext', 'del', 'dup', 'ins']):
+            return change
+        
+        # Convert to short format
+        return self._convert_to_short_aa_format(change)
+
+    def _convert_to_short_aa_format(self, change: str) -> str:
+        """Convert amino acid change to short format."""
+        import re
+        
+        # Amino acid three-letter to one-letter mapping
+        aa_map = {
+            'Ala': 'A', 'Arg': 'R', 'Asn': 'N', 'Asp': 'D', 'Cys': 'C',
+            'Gln': 'Q', 'Glu': 'E', 'Gly': 'G', 'His': 'H', 'Ile': 'I',
+            'Leu': 'L', 'Lys': 'K', 'Met': 'M', 'Phe': 'F', 'Pro': 'P',
+            'Ser': 'S', 'Thr': 'T', 'Trp': 'W', 'Tyr': 'Y', 'Val': 'V',
+            'Ter': '*', 'Stop': '*'
+        }
+        
+        # Try three-letter format: Pro3His
+        match = re.match(r'([A-Za-z]{3})(\d+)([A-Za-z]{3})', change)
+        if match:
+            aa1, pos, aa2 = match.groups()
+            aa1_short = aa_map.get(aa1, aa1)
+            aa2_short = aa_map.get(aa2, aa2)
+            return f"{aa1_short}{pos}{aa2_short}"
+        
+        # If already in single-letter format or doesn't match, return as-is
+        return change
+    
     def standardize_mutation_data(self, variants_df: pd.DataFrame, source: str) -> pd.DataFrame:
         """Standardize mutation data from different sources into a consistent format.
         
@@ -1124,8 +1199,8 @@ class MutationHandler:
             "alternate": variants_df["alternate"],
             "source": "gnomAD",
             "impact": variants_df["consequence"].apply(self._standardize_impact_category),
-            "hgvsc": variants_df["hgvsc"].apply(self._standardize_hgvs),
-            "hgvsp": variants_df["hgvsp"].apply(self._standardize_hgvs),
+            "hgvsc": variants_df["hgvsc"].apply(self._standardize_hgvsc),
+            "hgvsp": variants_df["hgvsp"].apply(self._standardize_hgvsp),
             "allele_frequency": variants_df["allele_frequency"],
             "allele_count_hom": variants_df["allele_count_hom"],  
             "clinical_significance": None,
@@ -1140,8 +1215,8 @@ class MutationHandler:
             "alternate": variants_df["alt_allele"],
             "source": "ClinVar",
             "impact": variants_df["molecular_consequences"].apply(self._standardize_impact_category),
-            "hgvsc": variants_df["cdna_change"].apply(self._standardize_hgvs),
-            "hgvsp": variants_df["protein_change"].apply(self._standardize_hgvs),
+            "hgvsc": variants_df["cdna_change"].apply(self._standardize_hgvsc),
+            "hgvsp": variants_df["protein_change"].apply(self._standardize_hgvsp),
             "allele_frequency": None,
             "allele_count_hom": None,  
             "clinical_significance": variants_df["clinical_significance"],
@@ -1156,8 +1231,8 @@ class MutationHandler:
             "alternate": variants_df["alternate"],
             "source": "COSMIC",
             "impact": variants_df["consequence"].apply(self._standardize_cosmic_impact),
-            "hgvsc": variants_df["hgvs_coding"].apply(self._standardize_hgvs),
-            "hgvsp": variants_df["hgvs_protein"].apply(self._standardize_hgvs),
+            "hgvsc": variants_df["hgvs_coding"].apply(self._standardize_hgvsc),
+            "hgvsp": variants_df["hgvs_protein"].apply(self._standardize_hgvsp),
             "allele_frequency": pd.to_numeric(variants_df["gnomad_exomes_af"], errors='coerce'),
             "allele_count_hom": None,  # COSMIC doesn't have this field
             "clinical_significance": variants_df["clinvar_significance"],
