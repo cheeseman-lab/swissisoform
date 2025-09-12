@@ -545,174 +545,173 @@ class MutationHandler:
 
         return summary
 
-    async def get_cosmic_variants(self, gene_name: str) -> pd.DataFrame:
-        """Get COSMIC variants for a gene using the downloaded TSV database.
-        
-        Args:
-            gene_name: Gene symbol (e.g., 'BRCA1')
-            
-        Returns:
-            DataFrame of processed COSMIC variants
-        """
-        cache_key = f"cosmic_{gene_name}"
-        if cache_key in self.cached_data:
-            return self.cached_data[cache_key]
-        
-        try:
-            # Run gget.cosmic in executor since it's not async
-            loop = asyncio.get_event_loop()
-            cosmic_data = await loop.run_in_executor(
-                None, 
-                self._fetch_cosmic_sync, 
-                gene_name
-            )
-            
-            # Cache the result
-            self.cached_data[cache_key] = cosmic_data
-            return cosmic_data
-            
-        except Exception as e:
-            logger.error(f"Failed to fetch COSMIC data for {gene_name}: {str(e)}")
-            return pd.DataFrame()
-
-    def _fetch_cosmic_sync(self, gene_name: str) -> pd.DataFrame:
-        """Synchronous wrapper for gget.cosmic that queries the downloaded TSV"""
-        try:
-            # Find the COSMIC database file
-            cosmic_tsv_path = self._find_cosmic_database()
-            if not cosmic_tsv_path:
-                logger.warning("No COSMIC database found. Please download first using: gget.cosmic(searchterm=None, download_cosmic=True)")
-                return pd.DataFrame()
-                        
-            # Use gget to query the downloaded COSMIC database
-            cosmic_result = gget.cosmic(
-                searchterm=gene_name,
-                cosmic_tsv_path=cosmic_tsv_path,
-                limit=5000
-            )
-                       
-            if cosmic_result is None:
-                return pd.DataFrame()
-                
-            if cosmic_result.empty:
-                return pd.DataFrame()
-            
-            # Process the results
-            processed_result = self._process_cosmic_variants(cosmic_result)
-            
-            return processed_result
-            
-        except Exception as e:
-            logger.error(f"gget.cosmic failed: {str(e)}")
-            return pd.DataFrame()
-
-
-    def _find_cosmic_database(self) -> Optional[str]:
-        """Find COSMIC database file based on the actual file structure"""
+    def _find_cosmic_database(self) -> Dict[str, Optional[str]]:
+        """Find COSMIC Parquet files and return paths for different datasets"""
         import os
         from pathlib import Path
         
-        # Search paths based on your actual directory structure
         search_paths = [
-            "../data/mutation_data",  # Primary location
-            "data/mutation_data",     # Alternative relative path
-            ".",                      # Current directory
-            "../data/cosmic",         # Legacy location
+            "../data/mutation_data",
+            "data/mutation_data", 
+            ".",
+            "../data/cosmic",
             "data/cosmic",
         ]
+        
+        cosmic_files = {
+            'cancer_census': None,
+            'noncoding': None
+        }
         
         for search_path in search_paths:
             path = Path(search_path)
             if path.exists():
-                # Look for the nested COSMIC directory structure
-                # Pattern: CancerMutationCensus_AllData_Tsv_v*_GRCh*/CancerMutationCensus_AllData_v*_GRCh*.tsv
-                cosmic_dirs = list(path.glob("CancerMutationCensus_AllData_Tsv_v*_GRCh*"))
-                
-                for cosmic_dir in cosmic_dirs:
-                    if cosmic_dir.is_dir():
-                        # Look for the TSV file inside this directory
-                        tsv_files = list(cosmic_dir.glob("CancerMutationCensus_AllData_v*_GRCh*.tsv"))
+                # Look for Cancer Mutation Census Parquet files (prefer Parquet over TSV)
+                if not cosmic_files['cancer_census']:
+                    parquet_files = list(path.glob("*CancerMutationCensus_AllData*.parquet"))
+                    if parquet_files:
+                        cosmic_files['cancer_census'] = str(parquet_files[0])
+                        logger.info(f"Found COSMIC Cancer Census (Parquet): {parquet_files[0]}")
+                    else:
+                        # Fallback to TSV if no Parquet
+                        tsv_files = list(path.glob("*CancerMutationCensus_AllData*.tsv"))
                         if tsv_files:
-                            # Return the first (and likely only) TSV file found
-                            cosmic_file = tsv_files[0]
-                            logger.info(f"Found COSMIC database: {cosmic_file}")
-                            return str(cosmic_file)
+                            cosmic_files['cancer_census'] = str(tsv_files[0])
+                            logger.info(f"Found COSMIC Cancer Census (TSV): {tsv_files[0]}")
+                
+                # Look for NonCoding variants Parquet files (prefer Parquet over TSV)
+                if not cosmic_files['noncoding']:
+                    parquet_files = list(path.glob("*Cosmic_NonCodingVariants*.parquet"))
+                    if parquet_files:
+                        cosmic_files['noncoding'] = str(parquet_files[0])
+                        logger.info(f"Found COSMIC NonCoding variants (Parquet): {parquet_files[0]}")
+                    else:
+                        # Fallback to TSV if no Parquet
+                        tsv_files = list(path.glob("*Cosmic_NonCodingVariants*.tsv"))
+                        if tsv_files:
+                            cosmic_files['noncoding'] = str(tsv_files[0])
+                            logger.info(f"Found COSMIC NonCoding variants (TSV): {tsv_files[0]}")
         
-        # If not found, log what we searched to help debugging
-        logger.warning(f"No COSMIC database found. Searched paths: {search_paths}")
-        logger.warning("Expected structure: ../data/mutation_data/CancerMutationCensus_AllData_Tsv_v*_GRCh*/CancerMutationCensus_AllData_v*_GRCh*.tsv")
-        return None
+        return cosmic_files
 
-    def _process_cosmic_variants(self, cosmic_df: pd.DataFrame) -> pd.DataFrame:
-        """Process raw COSMIC data into standardized format using actual column names."""
-        if cosmic_df.empty:
-            return pd.DataFrame()
-                
-        processed_variants = []
-        
-        for _, variant in cosmic_df.iterrows():
-            # Extract position from genomic coordinate (GRCh37 or GRCh38)
-            position = self._extract_cosmic_position(variant)
-            if position is None:
-                continue  # Skip variants without clear genomic position
-                
-            variant_info = {
-                'position': position,
-                'cosmic_id': variant.get('GENOMIC_MUTATION_ID', variant.get('LEGACY_MUTATION_ID', '')),
-                'gene_name': variant.get('GENE_NAME', ''),
-                'accession_number': variant.get('ACCESSION_NUMBER', ''),
-                'mutation_description': variant.get('Mutation_CDS', ''),
-                'mutation_aa': variant.get('Mutation_AA', ''),
-                'mutation_type_cds': variant.get('Mutation_Description_CDS', ''),
-                'mutation_type_aa': variant.get('Mutation_Description_AA', ''),
-                'consequence': variant.get('Mutation_Description_AA', ''), 
-                'oncogene_tsg': variant.get('ONC_TSG', ''),
-                'cgc_tier': variant.get('CGC_TIER', ''),
-                'chromosome': self._extract_cosmic_chromosome(variant),
-                'hgvs_genomic_grch37': variant.get('Mutation_genome_position_GRCh37', ''),
-                'hgvs_genomic_grch38': variant.get('Mutation_genome_position_GRCh38', ''),
-                'hgvs_coding': variant.get('Mutation_CDS', ''),
-                'hgvs_protein': variant.get('Mutation_AA', ''),
-                'aa_mut_start': variant.get('AA_MUT_START', ''),
-                'aa_mut_stop': variant.get('AA_MUT_STOP', ''),
-                'shared_aa': variant.get('SHARED_AA', ''),
-                'genomic_wt_allele': variant.get('GENOMIC_WT_ALLELE_SEQ', ''),
-                'genomic_mut_allele': variant.get('GENOMIC_MUT_ALLELE_SEQ', ''),
-                'aa_wt_allele': variant.get('AA_WT_ALLELE_SEQ', ''),
-                'aa_mut_allele': variant.get('AA_MUT_ALLELE_SEQ', ''),
-                'ontology_code': variant.get('ONTOLOGY_MUTATION_CODE', ''),
-                'cosmic_samples_tested': variant.get('COSMIC_SAMPLE_TESTED', ''),
-                'cosmic_samples_mutated': variant.get('COSMIC_SAMPLE_MUTATED', ''),
-                'disease': variant.get('DISEASE', ''),
-                'wgs_disease': variant.get('WGS_DISEASE', ''),
-                'clinvar_significance': variant.get('CLINVAR_CLNSIG', ''),
-                'clinvar_trait': variant.get('CLINVAR_TRAIT', ''),
-                'gerp_score': variant.get('GERP++_RS', ''),
-                'sift_score': variant.get('MIN_SIFT_SCORE', ''),
-                'sift_prediction': variant.get('MIN_SIFT_PRED', ''),
-                'mutation_significance_tier': variant.get('MUTATION_SIGNIFICANCE_TIER', ''),
-                'dnds_disease_qval': variant.get('DNDS_DISEASE_QVAL_SIG', ''),
-                # gnomAD frequencies from COSMIC
-                'gnomad_exomes_af': variant.get('GNOMAD_EXOMES_AF', ''),
-                'gnomad_genomes_af': variant.get('GNOMAD_GENOMES_AF', ''),
-                # Use genomic alleles (more reliable than parsing descriptions)
-                'reference': variant.get('GENOMIC_WT_ALLELE_SEQ', ''),
-                'alternate': variant.get('GENOMIC_MUT_ALLELE_SEQ', ''),
-                # URL for reference
-                'mutation_url': variant.get('MUTATION_URL', '')
-            }
+    def _fetch_cosmic_sync(self, gene_name: str) -> pd.DataFrame:
+        """Synchronous wrapper that combines both COSMIC datasets using fast Parquet/TSV reading"""
+        try:
+            cosmic_files = self._find_cosmic_database()
+            combined_results = []
             
-            processed_variants.append(variant_info)
+            # Process Cancer Mutation Census
+            if cosmic_files['cancer_census']:
+                try:
+                    logger.info(f"Querying Cancer Mutation Census for {gene_name}")
+                    file_path = cosmic_files['cancer_census']
+                    
+                    if file_path.endswith('.parquet'):
+                        # Fast Parquet query
+                        import pyarrow.parquet as pq
+                        import pyarrow.compute as pc
+                        
+                        table = pq.read_table(file_path)
+                        # Filter by gene name
+                        mask = pc.match_substring(
+                            pc.utf8_upper(table['GENE_NAME']), 
+                            gene_name.upper()
+                        )
+                        filtered_table = table.filter(mask)
+                        cancer_result = filtered_table.to_pandas()
+                    else:
+                        # TSV fallback with chunked reading for large files
+                        cancer_result = self._query_tsv_by_gene(file_path, gene_name, 'GENE_NAME')
+                    
+                    if cancer_result is not None and not cancer_result.empty:
+                        # Add dataset identifier
+                        cancer_result['cosmic_dataset'] = 'cancer_census'
+                        combined_results.append(cancer_result)
+                        logger.info(f"Found {len(cancer_result)} variants in Cancer Census")
+                        
+                except Exception as e:
+                    logger.warning(f"Cancer Mutation Census query failed: {str(e)}")
+            
+            # Process NonCoding variants
+            if cosmic_files['noncoding']:
+                try:
+                    logger.info(f"Querying NonCoding variants for {gene_name}")
+                    file_path = cosmic_files['noncoding']
+                    
+                    if file_path.endswith('.parquet'):
+                        # Fast Parquet query
+                        import pyarrow.parquet as pq
+                        import pyarrow.compute as pc
+                        
+                        table = pq.read_table(file_path)
+                        # Filter by gene symbol
+                        mask = pc.match_substring(
+                            pc.utf8_upper(table['GENE_SYMBOL']), 
+                            gene_name.upper()
+                        )
+                        filtered_table = table.filter(mask)
+                        noncoding_result = filtered_table.to_pandas()
+                    else:
+                        # TSV fallback with chunked reading
+                        noncoding_result = self._query_tsv_by_gene(file_path, gene_name, 'GENE_SYMBOL')
+                    
+                    if noncoding_result is not None and not noncoding_result.empty:
+                        # Add dataset identifier
+                        noncoding_result['cosmic_dataset'] = 'noncoding'
+                        combined_results.append(noncoding_result)
+                        logger.info(f"Found {len(noncoding_result)} variants in NonCoding dataset")
+                        
+                except Exception as e:
+                    logger.warning(f"NonCoding variants query failed: {str(e)}")
+            
+            # Combine results
+            if combined_results:
+                # Concatenate all datasets
+                combined_df = pd.concat(combined_results, ignore_index=True, sort=False)
+                logger.info(f"Combined {len(combined_df)} total COSMIC variants for {gene_name}")
+                
+                # Process the combined dataset
+                return self._process_cosmic_variants(combined_df)
+            else:
+                logger.warning(f"No COSMIC data found for {gene_name}")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"COSMIC data fetch failed: {str(e)}")
+            return pd.DataFrame()
+
+    def _query_tsv_by_gene(self, file_path: str, gene_name: str, gene_column: str) -> pd.DataFrame:
+        """Query TSV file by gene name using chunked reading for memory efficiency"""
+        import pandas as pd
         
-        result_df = pd.DataFrame(processed_variants)
-        if len(result_df) == 0 and len(cosmic_df) > 0:
-            logger.warning(f"No variants processed from {len(cosmic_df)} input variants - check position extraction")
-        else:
-            logger.info(f"Processed {len(result_df)} COSMIC variants from {len(cosmic_df)} input variants")
-        return result_df
+        results = []
+        chunk_size = 10000
+        
+        try:
+            for chunk in pd.read_csv(file_path, sep='\t', chunksize=chunk_size, low_memory=False):
+                if gene_column in chunk.columns:
+                    gene_filter = chunk[gene_column].str.contains(gene_name, case=False, na=False)
+                    matches = chunk[gene_filter]
+                    if not matches.empty:
+                        results.append(matches)
+            
+            if results:
+                return pd.concat(results, ignore_index=True)
+            else:
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error reading TSV file {file_path}: {str(e)}")
+            return pd.DataFrame()
 
     def _extract_cosmic_position(self, variant: pd.Series) -> Optional[int]:
+        """Extract genomic position from COSMIC variant data (both datasets)"""
         try:
+            # For NonCoding variants: use GENOME_START
+            if 'GENOME_START' in variant and pd.notna(variant.get('GENOME_START')):
+                return int(variant.get('GENOME_START'))
+            
+            # For Cancer Census: try the mutation position fields
             pos_fields = [
                 'Mutation_genome_position_GRCh38', 
                 'Mutation_genome_position_GRCh37', 
@@ -741,10 +740,15 @@ class MutationHandler:
             
         except Exception:
             return None
-        
+
     def _extract_cosmic_chromosome(self, variant: pd.Series) -> str:
-        """Extract chromosome from COSMIC variant data using actual column names"""
-        # Try GRCh38 first (preferred), then GRCh37
+        """Extract chromosome from COSMIC variant data (both datasets)"""
+        
+        # For NonCoding variants: direct chromosome column
+        if 'CHROMOSOME' in variant and pd.notna(variant.get('CHROMOSOME')):
+            return str(variant.get('CHROMOSOME'))
+        
+        # For Cancer Census: extract from position strings
         pos_fields = [
             'Mutation_genome_position_GRCh38', 
             'Mutation_genome_position_GRCh37', 
@@ -758,14 +762,168 @@ class MutationHandler:
         
         return ''
 
+    def _process_cosmic_variants(self, cosmic_df: pd.DataFrame) -> pd.DataFrame:
+        """Process raw COSMIC data into standardized format, handling both datasets"""
+        if cosmic_df.empty:
+            return pd.DataFrame()
+        
+        processed_variants = []
+        
+        for _, variant in cosmic_df.iterrows():
+            # Extract position from genomic coordinate (GRCh37 or GRCh38)
+            position = self._extract_cosmic_position(variant)
+            if position is None:
+                continue  # Skip variants without clear genomic position
+                
+            # Base variant info that works for both datasets
+            variant_info = {
+                'position': position,
+                'cosmic_id': variant.get('GENOMIC_MUTATION_ID', variant.get('LEGACY_MUTATION_ID', '')),
+                'gene_name': variant.get('GENE_NAME', variant.get('GENE_SYMBOL', '')),  # Handle both datasets
+                'accession_number': variant.get('ACCESSION_NUMBER', variant.get('TRANSCRIPT_ACCESSION', '')),
+                'chromosome': self._extract_cosmic_chromosome(variant),
+                'cosmic_dataset': variant.get('cosmic_dataset', 'unknown'),
+                
+                # Genomic coordinates - handle both formats
+                'hgvs_genomic_grch37': variant.get('Mutation genome position GRCh37', ''),
+                'hgvs_genomic_grch38': variant.get('Mutation genome position GRCh38', variant.get('HGVSG', '')),
+                
+                # Allele information - handle both column name formats
+                'genomic_wt_allele': variant.get('GENOMIC_WT_ALLELE_SEQ', variant.get('GENOMIC_WT_ALLELE', '')),
+                'genomic_mut_allele': variant.get('GENOMIC_MUT_ALLELE_SEQ', variant.get('GENOMIC_MUT_ALLELE', '')),
+                'reference': variant.get('GENOMIC_WT_ALLELE_SEQ', variant.get('GENOMIC_WT_ALLELE', '')),
+                'alternate': variant.get('GENOMIC_MUT_ALLELE_SEQ', variant.get('GENOMIC_MUT_ALLELE', '')),
+                
+                # Common annotations (mostly from Cancer Census)
+                'oncogene_tsg': variant.get('ONC_TSG', ''),
+                'cgc_tier': variant.get('CGC_TIER', ''),
+                'disease': variant.get('DISEASE', ''),
+                'clinvar_significance': variant.get('CLINVAR_CLNSIG', ''),
+                'clinvar_trait': variant.get('CLINVAR_TRAIT', ''),
+                
+                # Sample information - different column names between datasets
+                'sample_name': variant.get('SAMPLE_NAME', ''),
+                'cosmic_sample_id': variant.get('COSMIC_SAMPLE_ID', ''),
+                'zygosity': variant.get('ZYGOSITY', ''),
+                'somatic_status': variant.get('MUTATION_SOMATIC_STATUS', ''),
+                
+                # Study information
+                'cosmic_study_id': variant.get('COSMIC_STUDY_ID', ''),
+                'pubmed_pmid': variant.get('PUBMED_PMID', ''),
+                
+                # Frequency data (mainly in Cancer Census)
+                'gnomad_exomes_af': variant.get('GNOMAD_EXOMES_AF', ''),
+                'gnomad_genomes_af': variant.get('GNOMAD_GENOMES_AF', ''),
+                
+                # Functional scores (mainly in Cancer Census)
+                'gerp_score': variant.get('GERP++_RS', ''),
+                'sift_score': variant.get('MIN_SIFT_SCORE', ''),
+                'sift_prediction': variant.get('MIN_SIFT_PRED', ''),
+                
+                # URLs
+                'mutation_url': variant.get('MUTATION_URL', ''),
+            }
+            
+            # Dataset-specific fields
+            if variant.get('cosmic_dataset') == 'cancer_census':
+                # Cancer Census specific fields (using actual column names with underscores)
+                variant_info.update({
+                    'mutation_description': variant.get('Mutation_CDS', ''),
+                    'mutation_aa': variant.get('Mutation_AA', ''),
+                    'mutation_type_cds': variant.get('Mutation_Description_CDS', ''),
+                    'mutation_type_aa': variant.get('Mutation_Description_AA', ''),
+                    'consequence': variant.get('Mutation_Description_AA', ''),
+                    'hgvs_coding': variant.get('Mutation_CDS', ''),
+                    'hgvs_protein': variant.get('Mutation_AA', ''),
+                    'aa_mut_start': variant.get('AA_MUT_START', ''),
+                    'aa_mut_stop': variant.get('AA_MUT_STOP', ''),
+                    'shared_aa': variant.get('SHARED_AA', ''),
+                    'cosmic_samples_tested': variant.get('COSMIC_SAMPLE_TESTED', ''),
+                    'cosmic_samples_mutated': variant.get('COSMIC_SAMPLE_MUTATED', ''),
+                    'mutation_significance_tier': variant.get('MUTATION_SIGNIFICANCE_TIER', ''),
+                    'ontology_code': variant.get('ONTOLOGY_MUTATION_CODE', ''),
+                    'aa_wt_allele': variant.get('AA_WT_ALLELE_SEQ', ''),
+                    'aa_mut_allele': variant.get('AA_MUT_ALLELE_SEQ', ''),
+                    'dnds_disease_qval': variant.get('DNDS_DISEASE_QVAL', ''),
+                    'wgs_disease': variant.get('WGS_DISEASE', ''),
+                })
+            else:
+                # NonCoding variants - fill with empty values for consistency
+                variant_info.update({
+                    'mutation_description': '',
+                    'mutation_aa': '',
+                    'mutation_type_cds': '',
+                    'mutation_type_aa': 'noncoding',
+                    'consequence': 'noncoding_variant',
+                    'hgvs_coding': '',
+                    'hgvs_protein': '',
+                    'aa_mut_start': '',
+                    'aa_mut_stop': '',
+                    'shared_aa': '',
+                    'cosmic_samples_tested': '',
+                    'cosmic_samples_mutated': '',
+                    'mutation_significance_tier': '',
+                    'ontology_code': '',
+                    'aa_wt_allele': '',
+                    'aa_mut_allele': '',
+                    'dnds_disease_qval': '',
+                    'wgs_disease': '',
+                    # NonCoding specific fields
+                    'mutation_nc_id': variant.get('MUTATION_NC_ID', ''),
+                    'cosmic_phenotype_id': variant.get('COSMIC_PHENOTYPE_ID', ''),
+                    'genome_stop': variant.get('GENOME_STOP', ''),
+                })
+            
+            processed_variants.append(variant_info)
+        
+        result_df = pd.DataFrame(processed_variants)
+        logger.info(f"Processed {len(result_df)} combined COSMIC variants")
+        
+        # Add summary of datasets
+        if not result_df.empty:
+            dataset_counts = result_df['cosmic_dataset'].value_counts()
+            logger.info(f"Dataset breakdown: {dataset_counts.to_dict()}")
+        
+        return result_df
+    
+    async def get_cosmic_variants(self, gene_name: str) -> pd.DataFrame:
+        """Get COSMIC variants for a gene using the downloaded TSV/Parquet database.
+        
+        Args:
+            gene_name: Gene symbol (e.g., 'BRCA1')
+            
+        Returns:
+            DataFrame of processed COSMIC variants
+        """
+        cache_key = f"cosmic_{gene_name}"
+        if cache_key in self.cached_data:
+            return self.cached_data[cache_key]
+        
+        try:
+            # Run _fetch_cosmic_sync in executor since it's not async
+            loop = asyncio.get_event_loop()
+            cosmic_data = await loop.run_in_executor(
+                None, 
+                self._fetch_cosmic_sync, 
+                gene_name
+            )
+            
+            # Cache the result
+            self.cached_data[cache_key] = cosmic_data
+            return cosmic_data
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch COSMIC data for {gene_name}: {str(e)}")
+            return pd.DataFrame()
+
     def _standardize_cosmic_impact(self, cosmic_impact: str) -> str:
-        """Convert COSMIC mutation classifications to standardized impact terms using actual data"""
+        """Convert COSMIC mutation classifications to standardized impact terms"""
         if pd.isna(cosmic_impact) or not isinstance(cosmic_impact, str):
             return "unknown"
         
         cosmic_impact = cosmic_impact.lower().strip()
         
-        # Map COSMIC AA descriptions to standard terms
+        # Map COSMIC descriptions to standard terms
         if 'missense' in cosmic_impact:
             return 'missense variant'
         elif 'nonsense' in cosmic_impact or 'stop' in cosmic_impact:
@@ -783,6 +941,8 @@ class MutationHandler:
                 return 'inframe insertion'
             else:
                 return 'inframe variant'
+        elif 'noncoding' in cosmic_impact:
+            return 'noncoding variant'
         elif 'deletion' in cosmic_impact:
             return 'deletion'
         elif 'insertion' in cosmic_impact:
@@ -1065,7 +1225,7 @@ class MutationHandler:
                 elif source == "clinvar":
                     df = await self.get_clinvar_variants(gene_name)
                     standardized_df = self.standardize_mutation_data(df, source)
-                elif source == "cosmic":  # ADD THIS BLOCK
+                elif source == "cosmic":  
                     df = await self.get_cosmic_variants(gene_name)
                     standardized_df = self.standardize_mutation_data(df, source)
                 else:
