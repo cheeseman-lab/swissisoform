@@ -874,6 +874,71 @@ class MutationHandler:
             "study_count": 0,
         }
 
+    async def get_custom_variants(
+        self, parquet_path: str, gene_name: str = None
+    ) -> pd.DataFrame:
+        """Get variants from a custom user-provided parquet file.
+
+        Args:
+            parquet_path: Path to custom mutation parquet file
+            gene_name: Optional gene name to filter by
+
+        Returns:
+            DataFrame of custom variants (already in standardized format)
+        """
+        cache_key = f"custom_{parquet_path}_{gene_name}"
+        if cache_key in self.cached_data:
+            return self.cached_data[cache_key]
+
+        try:
+            # Load the parquet file
+            df = pd.read_parquet(parquet_path)
+
+            # Validate that it has the required columns
+            required_columns = [
+                "position",
+                "variant_id",
+                "reference",
+                "alternate",
+                "source",
+                "impact",
+                "hgvsc",
+                "hgvsp",
+                "allele_frequency",
+                "allele_count_hom",
+                "clinical_significance",
+            ]
+
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                logger.warning(
+                    f"Custom parquet file missing required columns: {missing_columns}"
+                )
+                # Add missing columns with default values
+                for col in missing_columns:
+                    if col in ["allele_frequency", "allele_count_hom"]:
+                        df[col] = None
+                    elif col == "source":
+                        df[col] = "Custom"
+                    else:
+                        df[col] = ""
+
+            # Filter by gene if specified
+            if gene_name and "gene_name" in df.columns:
+                df = df[df["gene_name"].str.upper() == gene_name.upper()]
+
+            # Ensure position is numeric
+            df["position"] = pd.to_numeric(df["position"], errors="coerce")
+
+            # Cache and return
+            self.cached_data[cache_key] = df
+            logger.info(f"Loaded {len(df)} custom variants from {parquet_path}")
+            return df
+
+        except Exception as e:
+            logger.error(f"Error loading custom parquet file {parquet_path}: {str(e)}")
+            return pd.DataFrame()
+
     def _standardize_hgvsc(self, hgvsc_str: str) -> str:
         """Standardize HGVS coding sequence notation.
 
@@ -1376,7 +1441,7 @@ class MutationHandler:
         gene_name: str,
         alt_features: Optional[pd.DataFrame] = None,
         sources: Optional[List[str]] = None,
-        aggregator_csv_path: Optional[str] = None,
+        custom_parquet_path: Optional[str] = None,
         verbose: bool = False,
     ) -> pd.DataFrame:
         """Get mutation data from specified sources in a format ready for visualization.
@@ -1385,7 +1450,7 @@ class MutationHandler:
             gene_name: Name of the gene
             alt_features: DataFrame containing alternative isoform features
             sources: List of mutation sources to query
-            aggregator_csv_path: Path to aggregator CSV file (unused in current implementation)
+            custom_parquet_path: Path to custom parquet file (if using 'custom' source)
             verbose: Whether to print detailed information
 
         Returns:
@@ -1412,6 +1477,31 @@ class MutationHandler:
 
             except Exception as e:
                 logger.error(f"Error fetching {source} data: {str(e)}")
+
+        # Add custom data if specified
+        if "custom" in sources and custom_parquet_path:
+            try:
+                custom_df = await self.get_custom_variants(
+                    custom_parquet_path, gene_name
+                )
+                if not custom_df.empty:
+                    # Apply standardization to custom data
+                    custom_df["impact"] = custom_df["impact"].apply(
+                        self._standardize_impact_category
+                    )
+                    custom_df["hgvsc"] = custom_df["hgvsc"].apply(
+                        self._standardize_hgvsc
+                    )
+                    custom_df["hgvsp"] = custom_df.apply(
+                        lambda row: self._standardize_hgvsp(
+                            row["hgvsp"], row["impact"]
+                        ),
+                        axis=1,
+                    )
+                    dfs_to_combine.append(custom_df)
+                    print(f"  Found {len(custom_df)} variants from custom")
+            except Exception as e:
+                logger.error(f"Error fetching custom data: {str(e)}")
 
         if not dfs_to_combine:
             if verbose:
@@ -1505,6 +1595,8 @@ class MutationHandler:
         visualize: bool = False,
         impact_types: Optional[Dict[str, List[str]]] = None,
         preferred_transcripts: Optional[Set[str]] = None,
+        custom_parquet_path: Optional[str] = None,
+        sources: Optional[List[str]] = None,
     ) -> Dict:
         """Comprehensive mutation analysis for a gene with transcript-truncation pairs.
 
@@ -1519,6 +1611,8 @@ class MutationHandler:
             visualize: Whether to generate visualizations
             impact_types: Dict mapping sources to impact types to filter by
             preferred_transcripts: Set of transcript IDs to prioritize
+            custom_parquet_path: Path to custom parquet file (if using 'custom' source)
+            sources: Data sources to pull mutations from
 
         Returns:
             Dictionary containing comprehensive analysis results
@@ -1639,12 +1733,15 @@ class MutationHandler:
             # Fetch raw mutations and filter them for each transcript-truncation pair
             print(f"  ├─ Fetching mutation data...", end="", flush=True)
 
-            # Get raw mutation data from ClinVar (we're not filtering yet)
+            # Determine sources to use
+            if sources is None:
+                sources = ["clinvar"]  # or whatever default you want
+
             all_mutations = await self.get_visualization_ready_mutations(
                 gene_name=gene_name,
-                alt_features=None,  # Don't filter by alt_features yet
-                sources=["clinvar"],
-                aggregator_csv_path=None,
+                alt_features=None,
+                sources=sources,
+                custom_parquet_path=custom_parquet_path,
             )
 
             if all_mutations is None or all_mutations.empty:
