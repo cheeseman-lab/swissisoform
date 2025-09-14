@@ -49,12 +49,10 @@ class AlternativeIsoform:
             names=["chrom", "start", "end", "name", "score", "strand"],
         )
 
-        # Parse the name field which contains gene information in format:
-        # GENE_ENSEMBL_TYPE_CODON_EFFICIENCY (e.g., TIMM10B_ENSG00000132286.11_Annotated_AUG_15.15592)
+        # Parse the name field
         def parse_name(name: str) -> Dict[str, str]:
             parts = name.split("_")
 
-            # Expected format: TIMM10B_ENSG00000132286.11_Annotated_AUG_15.15592
             if len(parts) >= 5 and parts[1].startswith("ENSG"):
                 return {
                     "gene_name": parts[0],
@@ -65,7 +63,6 @@ class AlternativeIsoform:
                     if parts[4].replace(".", "").isdigit()
                     else 0.0,
                 }
-            # Handle malformed names gracefully
             else:
                 return {
                     "gene_id": name,
@@ -87,8 +84,16 @@ class AlternativeIsoform:
         self.start_sites["start"] = self.start_sites["start"].astype(int)
         self.start_sites["end"] = self.start_sites["end"].astype(int)
 
-        # Calculate start sites
-        self.start_sites["start_position"] = self.start_sites["start"]
+        # Calculate start codon positions correctly based on strand
+        def get_start_position(row):
+            if row["strand"] == "+":
+                return row["start"]  # Start codon at 'start' coordinate for + strand
+            else:
+                return row["end"]  # Start codon at 'end' coordinate for - strand
+
+        self.start_sites["start_position"] = self.start_sites.apply(
+            get_start_position, axis=1
+        )
 
         self._debug_print(f"Loaded {len(self.start_sites)} start sites")
         self._debug_print(
@@ -110,20 +115,21 @@ class AlternativeIsoform:
         gene_sites = self.start_sites[self.start_sites["gene_name"] == gene_name].copy()
         return gene_sites.sort_values("start_position")
 
-    def calculate_truncation_regions(
+    def calculate_alternative_start_regions(
         self, gene_name: str, top_n_efficiency: Optional[int] = None
     ) -> pd.DataFrame:
-        """Calculate truncation/extension regions for a gene.
+        """Calculate truncation and extension regions for a gene.
 
+        This function handles both:
+        - Truncations: Regions removed when using downstream alternative starts
+        - Extensions: Regions added when using upstream alternative starts
         Args:
             gene_name: Name of the gene
             top_n_efficiency: If specified, only use top N most efficient alternative starts
-
         Returns:
-            DataFrame containing truncation regions with metadata
+            DataFrame containing regions with metadata for both truncations and extensions
         """
         gene_sites = self.get_gene_start_sites(gene_name)
-
         if gene_sites.empty:
             return pd.DataFrame()
 
@@ -136,10 +142,15 @@ class AlternativeIsoform:
         # Use the most efficient canonical start if multiple exist
         canonical_start = canonical_sites.loc[canonical_sites["efficiency"].idxmax()]
         strand = canonical_start["strand"]
-        canonical_pos = canonical_start["start"]
+
+        # FIXED: Use the correct start codon position (from start_position column)
+        canonical_pos = canonical_start[
+            "start_position"
+        ]  # This uses the corrected position
 
         self._debug_print(
-            f"Gene {gene_name}: canonical start at {canonical_pos} (strand {strand})"
+            f"Gene {gene_name}: canonical start at {canonical_pos} (strand {strand}) "
+            f"[BED: {canonical_start['start']}-{canonical_start['end']}]"
         )
 
         # Get alternative start sites (Truncated and Extended)
@@ -160,51 +171,89 @@ class AlternativeIsoform:
                 f"Filtered to top {top_n_efficiency} most efficient alternative starts"
             )
 
-        # Calculate truncation regions
-        truncation_regions = []
+        # Calculate regions for both truncations and extensions
+        regions = []
 
         for _, alt_site in alternative_sites.iterrows():
-            alt_pos = alt_site["start"]
+            bed_annotation = alt_site["start_type"]  # "Truncated" or "Extended"
 
-            # Then update the region calculations:
+            # FIXED: Use the correct start codon position (from start_position column)
+            alt_pos = alt_site["start_position"]  # This uses the corrected position
+
+            self._debug_print(
+                f"  Alternative start: {alt_pos} ({bed_annotation}) "
+                f"[BED: {alt_site['start']}-{alt_site['end']}]"
+            )
+
+            # Determine biological effect based on relative positions and strand
             if strand == "+":
                 if alt_pos > canonical_pos:
                     # Downstream alternative start = N-terminal truncation
                     region_start = canonical_pos
-                    region_end = alt_pos - 1  # BASE PAIR PRECEDING the truncated start
+                    region_end = alt_pos - 1
                     region_type = "truncation"
-                    region_length = (alt_pos - 1) - canonical_pos + 1
+                    biological_effect = "removes_N_terminal_sequence"
                 else:
                     # Upstream alternative start = N-terminal extension
                     region_start = alt_pos
-                    region_end = (
-                        canonical_pos - 1
-                    )  # BASE PAIR PRECEDING canonical start
+                    region_end = canonical_pos - 1
                     region_type = "extension"
-                    region_length = (canonical_pos - 1) - alt_pos + 1
+                    biological_effect = "adds_N_terminal_sequence"
+
             else:  # strand == "-"
                 if alt_pos < canonical_pos:
-                    # Upstream alternative start (on - strand) = N-terminal truncation
+                    # Lower genomic coordinate = downstream in transcript = truncation
+                    # For negative strand, end the region at the BED 'start' coordinate of canonical
                     region_start = alt_pos
-                    region_end = (
-                        canonical_pos - 1
-                    )  # BASE PAIR PRECEDING canonical start
+                    region_end = canonical_start[
+                        "start"
+                    ]  # Use BED start coordinate for the end
                     region_type = "truncation"
-                    region_length = (canonical_pos - 1) - alt_pos + 1
+                    biological_effect = "removes_N_terminal_sequence"
                 else:
-                    # Downstream alternative start (on - strand) = N-terminal extension
-                    region_start = canonical_pos
-                    region_end = alt_pos - 1  # BASE PAIR PRECEDING alternative start
+                    # Higher genomic coordinate = upstream in transcript = extension
+                    region_start = canonical_start[
+                        "start"
+                    ]  # Use BED start coordinate for the start
+                    region_end = alt_pos - 1
                     region_type = "extension"
-                    region_length = (alt_pos - 1) - canonical_pos + 1
+                    biological_effect = "adds_N_terminal_sequence"
 
-            truncation_regions.append(
+            region_length = region_end - region_start + 1
+
+            # Validate that BED annotation matches biological prediction
+            annotation_matches_biology = (
+                region_type == "truncation" and bed_annotation == "Truncated"
+            ) or (region_type == "extension" and bed_annotation == "Extended")
+
+            if not annotation_matches_biology:
+                self._debug_print(
+                    f"WARNING: BED annotation '{bed_annotation}' doesn't match "
+                    f"predicted biological effect '{region_type}' for {gene_name} "
+                    f"alt start at {alt_pos} (canonical at {canonical_pos}, strand {strand})"
+                )
+
+            # Skip invalid regions
+            if region_length <= 0:
+                self._debug_print(
+                    f"Warning: Invalid region length {region_length} for {alt_site['name']}"
+                )
+                continue
+
+            self._debug_print(
+                f"  -> {region_type}: {region_start}-{region_end} (length: {region_length})"
+            )
+
+            regions.append(
                 {
                     "chromosome": alt_site["chrom"],
                     "region_start": region_start,
                     "region_end": region_end,
-                    "region_type": region_type,
+                    "region_type": region_type,  # "truncation" or "extension"
                     "region_length": region_length,
+                    "biological_effect": biological_effect,
+                    "bed_annotation": bed_annotation,  # "Truncated" or "Extended" from BED
+                    "annotation_matches_biology": annotation_matches_biology,
                     "strand": strand,
                     "gene_name": gene_name,
                     "gene_id": alt_site["gene_id"],
@@ -214,26 +263,46 @@ class AlternativeIsoform:
                     "alternative_start_codon": alt_site["start_codon"],
                     "efficiency": alt_site["efficiency"],
                     "canonical_efficiency": canonical_start["efficiency"],
-                    # Create unique identifier for this truncation
-                    "truncation_id": f"{gene_name}_{region_type}_{alt_site['start_codon']}_{alt_pos}",
+                    # Create unique identifier
+                    "region_id": f"{gene_name}_{region_type}_{alt_site['start_codon']}_{alt_pos}",
                     "track_id": f"{gene_name}_{region_type}_{alt_pos}",
                 }
             )
 
-        return pd.DataFrame(truncation_regions)
+        result_df = pd.DataFrame(regions)
+
+        # Debug output
+        if not result_df.empty:
+            self._debug_print(f"Generated regions for {gene_name} (strand {strand}):")
+            for region_type in ["truncation", "extension"]:
+                type_regions = result_df[result_df["region_type"] == region_type]
+                if not type_regions.empty:
+                    self._debug_print(f"  {region_type.upper()}S:")
+                    for _, region in type_regions.iterrows():
+                        self._debug_print(
+                            f"    {region['region_start']}-{region['region_end']} "
+                            f"(length: {region['region_length']}, "
+                            f"alt_start: {region['alternative_start_pos']}, "
+                            f"BED: {region['bed_annotation']}, "
+                            f"matches: {region['annotation_matches_biology']})"
+                        )
+
+        return result_df
 
     def get_visualization_features(
         self,
         gene_name: str,
         top_n_efficiency: Optional[int] = None,
-        top_n_per_type: Optional[int] = None,
+        include_extensions: bool = True,
+        include_truncations: bool = True,
     ) -> pd.DataFrame:
-        """Get features formatted for visualization.
+        """Get features formatted for visualization, including both truncations and extensions.
 
         Args:
             gene_name: Name of the gene to get features for
-            top_n_efficiency: If specified, only use top N most efficient alternative starts (excludes Annotated)
-            top_n_per_type: If specified, use top N per start type (Annotated, Truncated, Extended independently)
+            top_n_efficiency: If specified, only use top N most efficient alternative starts
+            include_extensions: Whether to include extension regions
+            include_truncations: Whether to include truncation regions
 
         Returns:
             DataFrame: Features formatted for visualization
@@ -241,21 +310,29 @@ class AlternativeIsoform:
         if self.start_sites.empty:
             raise ValueError("No data loaded. Please load data first with load_bed().")
 
-        truncation_regions = self.calculate_truncation_regions(
-            gene_name, top_n_efficiency
-        )
+        # Use the renamed function
+        regions = self.calculate_alternative_start_regions(gene_name, top_n_efficiency)
 
-        if truncation_regions.empty:
+        if regions.empty:
+            return pd.DataFrame()
+
+        # Filter by region type if requested
+        if not include_extensions:
+            regions = regions[regions["region_type"] != "extension"]
+        if not include_truncations:
+            regions = regions[regions["region_type"] != "truncation"]
+
+        if regions.empty:
             return pd.DataFrame()
 
         # Convert to visualization format
         viz_features = []
 
-        for _, region in truncation_regions.iterrows():
+        for _, region in regions.iterrows():
             feature = {
                 "chromosome": region["chromosome"],
                 "source": "ribosome_profiling",
-                "feature_type": "alternative_start_region",
+                "feature_type": f"alternative_start_{region['region_type']}",  # "alternative_start_truncation" or "alternative_start_extension"
                 "start": region["region_start"],
                 "end": region["region_end"],
                 "score": region["efficiency"],
@@ -265,9 +342,12 @@ class AlternativeIsoform:
                 "transcript_id": region["track_id"],
                 "gene_name": region["gene_name"],
                 "start_codon": region["alternative_start_codon"],
-                "name": region["truncation_id"],
+                "name": region["region_id"],
                 "region_type": region["region_type"],
                 "region_length": region["region_length"],
+                "biological_effect": region["biological_effect"],
+                "bed_annotation": region["bed_annotation"],
+                "annotation_matches_biology": region["annotation_matches_biology"],
                 "efficiency": region["efficiency"],
                 "canonical_efficiency": region["canonical_efficiency"],
                 "efficiency_ratio": region["efficiency"]
