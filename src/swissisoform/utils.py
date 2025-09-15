@@ -733,9 +733,10 @@ def comprehensive_cleanup_bed_with_transcripts(
     transcript_info = {}  # transcript_id -> (gene_id, chrom, start_pos, end_pos, strand)
     gene_transcripts = defaultdict(list)  # gene_id -> [transcript_info]
 
+    # Build transcript position index from GTF start_codon features
     with open(gtf_path, "r") as f:
         for line in f:
-            if line.startswith("#") or "\ttranscript\t" not in line:
+            if line.startswith("#") or "\tstart_codon\t" not in line:
                 continue
 
             fields = line.strip().split("\t")
