@@ -74,8 +74,6 @@ echo "Running cleanup script..."
 python3 cleanup_files.py
 
 # Verify outputs
-# Replace the "Verifying cleanup outputs..." section with:
-
 echo "Verifying cleanup outputs..."
 
 # Check GTF file
@@ -86,26 +84,18 @@ else
     exit 1
 fi
 
-# Check cleaned BED file
-if [ -f "../data/ribosome_profiling/isoforms_cleaned.bed" ]; then
-    echo "✓ isoforms_cleaned.bed"
-else
-    echo "✗ isoforms_cleaned.bed"
-    exit 1
-fi
-
 # Check filtered BED file
-if [ -f "../data/ribosome_profiling/isoforms_filtered.bed" ]; then
-    echo "✓ isoforms_filtered.bed"
+if [ -f "../data/ribosome_profiling/isoforms_with_transcripts.bed" ]; then
+    echo "✓ isoforms_with_transcripts.bed"
 else
-    echo "✗ isoforms_filtered.bed"
+    echo "✗ isoforms_with_transcripts.bed"
     exit 1
 fi
 
 # Check gene list file and validate gene count
 if [ -f "../data/ribosome_profiling/isoforms_gene_list.txt" ]; then
     GENE_COUNT_TXT=$(wc -l < "../data/ribosome_profiling/isoforms_gene_list.txt")
-    GENE_COUNT_BED=$(cut -f4 "../data/ribosome_profiling/isoforms_filtered.bed" | cut -d'_' -f1 | sort | uniq | wc -l)
+    GENE_COUNT_BED=$(cut -f4 "../data/ribosome_profiling/isoforms_with_transcripts.bed" | cut -d'_' -f1 | sort | uniq | wc -l)
     
     if [ "$GENE_COUNT_TXT" -eq "$GENE_COUNT_BED" ]; then
         echo "✓ isoforms_gene_list.txt ($GENE_COUNT_TXT genes, matches BED file)"

@@ -37,22 +37,61 @@ class AlternativeIsoform:
             print(f"DEBUG: {message}")
 
     def load_bed(self, file_path: str) -> None:
-        """Load start sites data from BED format file.
+        """Load data from BED format file with flexible column support.
+
+        Supports both standard 6-column and enhanced 7-column formats:
+        - 6 columns: chrom, start, end, name, score, strand
+        - 7 columns: chrom, start, end, name, score, strand, transcript_id
 
         Args:
             file_path: Path to the BED file
         """
-        # Read BED format with standard columns
+        # Read BED format - auto-detect number of columns
+        with open(file_path, "r") as f:
+            first_line = f.readline().strip()
+            if not first_line:
+                raise ValueError("Empty BED file")
+
+            num_columns = len(first_line.split("\t"))
+
+        if num_columns == 6:
+            # Standard 6-column format
+            column_names = ["chrom", "start", "end", "name", "score", "strand"]
+            self._debug_print("Loading standard 6-column BED format")
+        elif num_columns == 7:
+            # Enhanced 7-column format with transcript_id
+            column_names = [
+                "chrom",
+                "start",
+                "end",
+                "name",
+                "score",
+                "strand",
+                "transcript_id",
+            ]
+            self._debug_print(
+                "Loading enhanced 7-column BED format with transcript IDs"
+            )
+        else:
+            raise ValueError(
+                f"Unsupported BED format: {num_columns} columns. Expected 6 or 7."
+            )
+
+        # Read the full file
         self.start_sites = pd.read_csv(
             file_path,
             sep="\t",
-            names=["chrom", "start", "end", "name", "score", "strand"],
+            names=column_names,
+            dtype=str,  # Read all as strings first to avoid parsing issues
         )
 
-        # Parse the name field
+        # Parse the name field which contains gene information
         def parse_name(name: str) -> Dict[str, str]:
-            parts = name.split("_")
+            # Handle cases where name might be numeric (shouldn't happen but safety check)
+            if not isinstance(name, str):
+                name = str(name)
 
+            parts = name.split("_")
             if len(parts) >= 5 and parts[1].startswith("ENSG"):
                 return {
                     "gene_name": parts[0],
@@ -96,9 +135,17 @@ class AlternativeIsoform:
         )
 
         self._debug_print(f"Loaded {len(self.start_sites)} start sites")
+        self._debug_print(f"Columns: {list(self.start_sites.columns)}")
         self._debug_print(
             f"Start types: {self.start_sites['start_type'].value_counts().to_dict()}"
         )
+
+        # Report transcript information if available
+        if "transcript_id" in self.start_sites.columns:
+            transcript_assignments = (self.start_sites["transcript_id"] != "NA").sum()
+            self._debug_print(
+                f"Transcript assignments: {transcript_assignments}/{len(self.start_sites)}"
+            )
 
     def check_data_quality(self) -> Dict:
         """Check data quality for loaded start sites.
