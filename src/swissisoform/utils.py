@@ -790,6 +790,7 @@ def comprehensive_cleanup_bed_with_transcripts(
         "invalid_gene": 0,
         "uorfs_filtered": 0,
         "valid_entries": 0,
+        "updated_gene_names": 0,
     }
 
     with open(input_bed_path, "r") as f:
@@ -836,6 +837,14 @@ def comprehensive_cleanup_bed_with_transcripts(
                 )
                 start_pos = start if strand == "+" else end
 
+                # Update gene name if needed
+                ref_gene_name = gene_name_mapping[gene_id]
+                updated_name = fields[3]
+                if name_info["gene_name"].upper() != ref_gene_name.upper():
+                    # Reconstruct the name with updated gene name
+                    updated_name = f"{ref_gene_name}_{name_info['gene_id']}_{name_info['start_type']}_{name_info['start_codon']}_{name_info['efficiency']}"
+                    stats["updated_gene_names"] = stats.get("updated_gene_names", 0) + 1
+
                 entry_info = {
                     "line_num": line_num,
                     "chrom": chrom,
@@ -844,11 +853,11 @@ def comprehensive_cleanup_bed_with_transcripts(
                     "strand": strand,
                     "start_pos": start_pos,
                     "gene_id": gene_id,
-                    "gene_name": name_info["gene_name"],
+                    "gene_name": ref_gene_name,  # Use the reference gene name
                     "start_type": name_info["start_type"],
                     "start_codon": name_info["start_codon"],
                     "efficiency": name_info["efficiency"],
-                    "original_name": fields[3],
+                    "original_name": updated_name,  # Use the updated name
                     "score": fields[4],
                 }
 
@@ -865,6 +874,7 @@ def comprehensive_cleanup_bed_with_transcripts(
         print(f"  ├─ Valid entries: {stats['valid_entries']}")
         print(f"  ├─ Invalid format: {stats['invalid_format']}")
         print(f"  ├─ Invalid genes: {stats['invalid_gene']}")
+        print(f"  ├─ Gene names updated: {stats['updated_gene_names']}")
         print(f"  └─ uORFs filtered: {stats['uorfs_filtered']}")
 
     # Add missing annotated starts
