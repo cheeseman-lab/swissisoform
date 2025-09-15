@@ -531,6 +531,9 @@ def update_gencode_gene_names(
 def parse_bed_line(line):
     """Parse a single BED file line to extract ENSEMBL ID and gene name.
 
+    Handles format: GENE_NAME_ENSEMBL_ID_TYPE_CODON_EFFICIENCY
+    Example: TM4SF1_ENSG00000169908.11_Annotated_AUG_13.62202605
+
     Args:
         line: BED file line to parse
     Returns:
@@ -539,12 +542,20 @@ def parse_bed_line(line):
     fields = line.strip().split("\t")
     if len(fields) < 4:
         return None
+
     name_parts = fields[3].split("_")
-    if len(name_parts) < 3:
+    if len(name_parts) < 4:  # Need at least GENE_ENSEMBL_TYPE_CODON
         return None
-    full_ensembl_id = name_parts[0]
-    ensembl_id = full_ensembl_id.split(".")[0]
-    gene_name = name_parts[1]
+
+    # Updated parsing for your format: GENE_NAME_ENSEMBL_ID_TYPE_CODON_EFFICIENCY
+    gene_name = name_parts[0]
+    full_ensembl_id = name_parts[1]
+    ensembl_id = full_ensembl_id.split(".")[0]  # Remove version number
+
+    # Validate it's an Ensembl ID
+    if not ensembl_id.startswith("ENSG"):
+        return None
+
     return {
         "ensembl_id": ensembl_id,
         "full_ensembl_id": full_ensembl_id,
@@ -552,6 +563,40 @@ def parse_bed_line(line):
         "fields": fields,
         "line": line.strip(),
     }
+
+
+def parse_alternative_start_name(name: str) -> Dict[str, str]:
+    """Parse alternative start site name field.
+
+    Handles format: GENE_NAME_ENSEMBL_ID_TYPE_CODON_EFFICIENCY
+    Example: TM4SF1_ENSG00000169908.11_Annotated_AUG_13.62202605
+
+    Args:
+        name: Name field from BED file
+
+    Returns:
+        Dictionary with parsed components
+    """
+    parts = name.split("_")
+
+    if len(parts) >= 5:
+        return {
+            "gene_name": parts[0],
+            "gene_id": parts[1],
+            "start_type": parts[2],  # Annotated, Truncated, Extended, uORF
+            "start_codon": parts[3],
+            "efficiency": float(parts[4])
+            if parts[4].replace(".", "").isdigit()
+            else 0.0,
+        }
+    else:
+        return {
+            "gene_id": name,
+            "gene_name": name,
+            "start_type": "Unknown",
+            "start_codon": "UNK",
+            "efficiency": 0.0,
+        }
 
 
 def extract_gene_mapping_from_gtf(
@@ -633,15 +678,21 @@ def extract_gene_mapping_from_gtf(
 def cleanup_bed(
     input_bed_path: Union[str, Path],
     output_bed_path: Union[str, Path],
-    gtf_path: Union[str, Path] = "../data/genome_data/gencode.v25.annotation.gtf",
+    gtf_path: Union[str, Path],
+    preferred_transcripts_path: Optional[Union[str, Path]] = None,
+    filter_uorfs: bool = True,
+    add_annotated_starts: bool = True,
     verbose: bool = True,
 ) -> Dict:
-    """Clean BED file: fix gene names, remove invalid entries and duplicates.
+    """Enhanced BED file cleanup with corrected parsing for your data format.
 
     Args:
         input_bed_path: Path to input BED file
         output_bed_path: Path to save cleaned BED file
-        gtf_path: Path to GTF annotation file for gene name mappings
+        gtf_path: Path to GTF annotation file
+        preferred_transcripts_path: Path to file with preferred transcript IDs
+        filter_uorfs: Whether to remove uORF entries
+        add_annotated_starts: Whether to add annotated start sites from GTF
         verbose: Print detailed cleanup summary
 
     Returns:
@@ -649,23 +700,93 @@ def cleanup_bed(
     """
     input_bed_path, output_bed_path = Path(input_bed_path), Path(output_bed_path)
 
-    # Get reference data from GTF instead of Ensembl Biomart
+    # Load preferred transcripts if provided
+    preferred_transcripts = set()
+    if preferred_transcripts_path and Path(preferred_transcripts_path).exists():
+        preferred_transcripts = load_preferred_transcripts(preferred_transcripts_path)
+        if verbose:
+            print(f"Loaded {len(preferred_transcripts)} preferred transcripts")
+
+    # Get gene name mappings from GTF
     if verbose:
         print(f"Extracting gene mapping from GTF: {gtf_path}")
-    reference_data = extract_gene_mapping_from_gtf(gtf_path)
-    if verbose:
-        print(f"Retrieved {len(reference_data)} gene name mappings")
+    gene_name_mapping = extract_gene_mapping_from_gtf(gtf_path)
 
-    # Process file (rest of function remains the same)
-    valid_entries, seen_positions = [], set()
+    # Extract transcript start sites from GTF (same as before)
+    transcript_start_sites = {}
+    gene_transcript_mapping = {}
+
+    if add_annotated_starts:
+        if verbose:
+            print("Extracting transcript start sites from GTF...")
+
+        with open(gtf_path, "r") as f:
+            for line in f:
+                if line.startswith("#"):
+                    continue
+
+                fields = line.strip().split("\t")
+                if len(fields) < 9 or fields[2] != "transcript":
+                    continue
+
+                # Parse attributes
+                attributes = fields[8]
+                attr_dict = {}
+                for attr in attributes.split(";"):
+                    attr = attr.strip()
+                    if not attr:
+                        continue
+                    parts = attr.split(" ", 1)
+                    if len(parts) == 2:
+                        key, value = parts
+                        attr_dict[key] = value.strip('"')
+
+                if "gene_id" in attr_dict and "transcript_id" in attr_dict:
+                    gene_id = attr_dict["gene_id"].split(".")[0]  # Remove version
+                    transcript_id = attr_dict["transcript_id"]
+                    transcript_start = int(fields[3])
+                    transcript_end = int(fields[4])
+                    strand = fields[6]
+                    chromosome = fields[0]
+
+                    transcript_info = {
+                        "transcript_id": transcript_id,
+                        "start": transcript_start,
+                        "end": transcript_end,
+                        "strand": strand,
+                        "chromosome": chromosome,
+                        "gene_id": gene_id,
+                    }
+
+                    if gene_id not in gene_transcript_mapping:
+                        gene_transcript_mapping[gene_id] = []
+                    gene_transcript_mapping[gene_id].append(transcript_info)
+
+        if verbose:
+            print(f"Extracted transcript info for {len(gene_transcript_mapping)} genes")
+
+    # Process BED file with corrected parsing
+    valid_entries = []
+    seen_positions = set()
+    added_annotated_starts = []
+
     stats = {
         "total": 0,
         "invalid_format": 0,
         "invalid_ensembl": 0,
         "duplicates": 0,
-        "updated": 0,
-        "valid": 0,
+        "uorfs_filtered": 0,
+        "updated_gene_names": 0,
+        "valid_alternatives": 0,
+        "annotated_starts_added": 0,
+        "genes_with_alternatives": set(),
+        "genes_missing_annotated": set(),
+        "parsing_errors": [],
     }
+
+    # First pass: collect existing entries
+    existing_entries = []
+    genes_with_existing_annotated = set()
 
     with open(input_bed_path, "r") as f:
         for line_num, line in enumerate(f, 1):
@@ -673,50 +794,233 @@ def cleanup_bed(
                 continue
             stats["total"] += 1
 
-            # Validate format and Ensembl ID
             parsed = parse_bed_line(line)
-            if not parsed or not parsed["ensembl_id"].startswith("ENSG"):
+            if not parsed:
                 stats["invalid_format"] += 1
+                if verbose and len(stats["parsing_errors"]) < 5:  # Show first 5 errors
+                    stats["parsing_errors"].append(
+                        f"Line {line_num}: {line.strip()[:100]}..."
+                    )
                 continue
-            if parsed["ensembl_id"] not in reference_data:
+
+            ensembl_id = parsed["ensembl_id"]
+            if not ensembl_id.startswith("ENSG"):
                 stats["invalid_ensembl"] += 1
                 continue
 
-            # Update gene name if needed
-            ref_gene_name = reference_data[parsed["ensembl_id"]]
-            fields = parsed["fields"].copy()
-            name_parts = fields[3].split("_")
-
-            if name_parts[1].upper() != ref_gene_name.upper():
-                name_parts[1] = ref_gene_name
-                fields[3] = "_".join(name_parts)
-                stats["updated"] += 1
-
-            # Check for duplicates
-            position_key = f"{parsed['ensembl_id']}_{fields[0]}_{fields[1]}_{fields[2]}"
-            if position_key in seen_positions:
-                stats["duplicates"] += 1
+            if ensembl_id not in gene_name_mapping:
+                stats["invalid_ensembl"] += 1
                 continue
 
-            # Add valid entry
-            seen_positions.add(position_key)
-            valid_entries.append("\t".join(fields))
-            stats["valid"] += 1
+            # Parse the name field using the corrected parser
+            name_info = parse_alternative_start_name(parsed["fields"][3])
+            start_type = name_info["start_type"]
+
+            # Filter uORFs if requested
+            if filter_uorfs and start_type == "uORF":
+                stats["uorfs_filtered"] += 1
+                continue
+
+            # Track genes with annotated starts
+            if start_type == "Annotated":
+                genes_with_existing_annotated.add(ensembl_id)
+
+            # Track genes with alternatives
+            if start_type in ["Truncated", "Extended"]:
+                stats["genes_with_alternatives"].add(ensembl_id)
+
+            existing_entries.append((parsed, name_info, line.strip()))
+
+    # Second pass: process existing entries and add annotated starts
+    processed_genes = set()
+
+    for parsed, name_info, original_line in existing_entries:
+        ensembl_id = parsed["ensembl_id"]
+        fields = parsed["fields"].copy()
+
+        # Update gene name if needed
+        ref_gene_name = gene_name_mapping[ensembl_id]
+        if name_info["gene_name"].upper() != ref_gene_name.upper():
+            # Reconstruct the name with updated gene name
+            new_name = f"{ref_gene_name}_{name_info['gene_id']}_{name_info['start_type']}_{name_info['start_codon']}_{name_info['efficiency']}"
+            fields[3] = new_name
+            stats["updated_gene_names"] += 1
+
+        # Check for duplicates
+        position_key = f"{ensembl_id}_{fields[0]}_{fields[1]}_{fields[2]}"
+        if position_key in seen_positions:
+            stats["duplicates"] += 1
+            continue
+
+        seen_positions.add(position_key)
+        valid_entries.append("\t".join(fields))
+        stats["valid_alternatives"] += 1
+
+        # Add annotated start for this gene if needed (same logic as before)
+        if (
+            add_annotated_starts
+            and ensembl_id not in genes_with_existing_annotated
+            and ensembl_id not in processed_genes
+            and ensembl_id in gene_transcript_mapping
+        ):
+            # [Same annotated start addition logic as before]
+            gene_transcripts = gene_transcript_mapping[ensembl_id]
+            selected_transcript = None
+
+            if preferred_transcripts:
+                for transcript_info in gene_transcripts:
+                    transcript_id = transcript_info["transcript_id"]
+                    if transcript_id in preferred_transcripts:
+                        selected_transcript = transcript_info
+                        break
+                    base_id = transcript_id.split(".")[0]
+                    if any(base_id in pref for pref in preferred_transcripts):
+                        selected_transcript = transcript_info
+                        break
+
+            if selected_transcript is None and gene_transcripts:
+                selected_transcript = gene_transcripts[0]
+
+            if selected_transcript:
+                chrom = selected_transcript["chromosome"]
+                strand = selected_transcript["strand"]
+
+                if strand == "+":
+                    start_pos = selected_transcript["start"]
+                    bed_start = start_pos
+                    bed_end = start_pos + 2
+                else:
+                    start_pos = selected_transcript["end"]
+                    bed_start = start_pos - 2
+                    bed_end = start_pos
+
+                gene_name = gene_name_mapping[ensembl_id]
+                annotated_name = f"{gene_name}_{ensembl_id}_Annotated_AUG_0.0"
+                annotated_entry = (
+                    f"{chrom}\t{bed_start}\t{bed_end}\t{annotated_name}\t0\t{strand}"
+                )
+
+                position_key = f"{ensembl_id}_{chrom}_{bed_start}_{bed_end}"
+                if position_key not in seen_positions:
+                    valid_entries.append(annotated_entry)
+                    seen_positions.add(position_key)
+                    added_annotated_starts.append(gene_name)
+                    stats["annotated_starts_added"] += 1
+
+                processed_genes.add(ensembl_id)
 
     # Write output
     output_bed_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_bed_path, "w") as f_out:
         f_out.write("\n".join(valid_entries))
 
+    # Print summary
     if verbose:
-        print(f"\nCleanup Summary:")
-        print(f"  Total entries: {stats['total']}")
+        print(f"\nEnhanced BED Cleanup Summary:")
+        print(f"  ├─ Total entries processed: {stats['total']}")
+
+        if stats["parsing_errors"]:
+            print(f"  ├─ Parsing errors (first 5):")
+            for error in stats["parsing_errors"][:5]:
+                print(f"  │  └─ {error}")
+
         print(
-            f"  Invalid entries removed: {stats['invalid_format'] + stats['invalid_ensembl']}"
+            f"  ├─ Invalid entries removed: {stats['invalid_format'] + stats['invalid_ensembl']}"
         )
-        print(f"  Duplicates removed: {stats['duplicates']}")
-        print(f"  Gene names updated: {stats['updated']}")
-        print(f"  Valid entries in final file: {stats['valid']}")
+        if filter_uorfs:
+            print(f"  ├─ uORF entries filtered: {stats['uorfs_filtered']}")
+        print(f"  ├─ Duplicates removed: {stats['duplicates']}")
+        print(f"  ├─ Gene names updated: {stats['updated_gene_names']}")
+        print(f"  ├─ Valid alternative entries: {stats['valid_alternatives']}")
+
+        if add_annotated_starts:
+            print(f"  ├─ Annotated starts added: {stats['annotated_starts_added']}")
+
+        print(f"  ├─ Genes with alternatives: {len(stats['genes_with_alternatives'])}")
+        print(f"  └─ Final entries in cleaned file: {len(valid_entries)}")
+
+    # Convert sets to lists for JSON serialization
+    stats["genes_with_alternatives"] = list(stats["genes_with_alternatives"])
+    stats["genes_missing_annotated"] = list(stats["genes_missing_annotated"])
+    stats["added_annotated_starts"] = added_annotated_starts
+
+    return stats
+
+
+def filter_genes_with_alternatives_only(
+    input_bed_path: Union[str, Path],
+    output_bed_path: Union[str, Path],
+    verbose: bool = True,
+) -> Dict:
+    """Filter BED file to only include genes that have both Annotated and alternative starts.
+
+    Args:
+        input_bed_path: Path to input BED file
+        output_bed_path: Path to save filtered BED file
+        verbose: Print summary
+
+    Returns:
+        Dictionary with filtering statistics
+    """
+    input_bed_path, output_bed_path = Path(input_bed_path), Path(output_bed_path)
+
+    # First pass: identify genes with each type of start
+    genes_with_annotated = set()
+    genes_with_alternatives = set()
+    all_entries = []
+
+    with open(input_bed_path, "r") as f:
+        for line in f:
+            if not line.strip():
+                continue
+
+            parsed = parse_bed_line(line)
+            if not parsed:
+                continue
+
+            name_parts = parsed["fields"][3].split("_")
+            if len(name_parts) >= 3:
+                ensembl_id = parsed["ensembl_id"]
+                start_type = name_parts[2]
+
+                if start_type == "Annotated":
+                    genes_with_annotated.add(ensembl_id)
+                elif start_type in ["Truncated", "Extended"]:
+                    genes_with_alternatives.add(ensembl_id)
+
+                all_entries.append((ensembl_id, start_type, line.strip()))
+
+    # Find genes with both annotated and alternative starts
+    complete_genes = genes_with_annotated.intersection(genes_with_alternatives)
+
+    # Second pass: keep only entries for complete genes
+    filtered_entries = []
+    for ensembl_id, start_type, line in all_entries:
+        if ensembl_id in complete_genes:
+            filtered_entries.append(line)
+
+    # Write filtered output
+    output_bed_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_bed_path, "w") as f_out:
+        f_out.write("\n".join(filtered_entries))
+
+    stats = {
+        "total_genes_input": len(genes_with_annotated.union(genes_with_alternatives)),
+        "genes_with_annotated": len(genes_with_annotated),
+        "genes_with_alternatives": len(genes_with_alternatives),
+        "complete_genes": len(complete_genes),
+        "total_entries_input": len(all_entries),
+        "total_entries_output": len(filtered_entries),
+    }
+
+    if verbose:
+        print(f"\nGene Filtering Summary:")
+        print(f"  ├─ Total genes in input: {stats['total_genes_input']}")
+        print(f"  ├─ Genes with Annotated starts: {stats['genes_with_annotated']}")
+        print(f"  ├─ Genes with alternative starts: {stats['genes_with_alternatives']}")
+        print(f"  ├─ Complete genes (both types): {stats['complete_genes']}")
+        print(f"  ├─ Entries input: {stats['total_entries_input']}")
+        print(f"  └─ Entries output: {stats['total_entries_output']}")
 
     return stats
 
@@ -794,3 +1098,168 @@ def subset_gene_list(
     subsetted_genes = [gene for gene in full_gene_list if gene in subset_set]
     print(f"Subsetted to {len(subsetted_genes)} genes from {len(full_gene_list)} total")
     return subsetted_genes
+
+
+def generate_empirical_preferred_transcripts(
+    ribosome_bed_path: Union[str, Path],
+    original_transcripts_path: Union[str, Path],
+    gtf_path: Union[str, Path],
+    output_path: Union[str, Path],
+) -> None:
+    """Generate preferred transcripts based on ribosome profiling data.
+
+    For each gene in the ribosome profiling data, finds the GTF transcript that
+    best matches the highest efficiency annotated start position. Only includes
+    genes present in the ribosome profiling dataset.
+
+    Args:
+        ribosome_bed_path: Path to ribosome profiling BED file
+        original_transcripts_path: Path to original preferred transcripts
+        gtf_path: Path to GTF annotation file
+        output_path: Path to save updated preferred transcripts
+    """
+    # Get genes from ribosome profiling data
+    riboprof_genes = set()
+    with open(ribosome_bed_path, "r") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            fields = line.strip().split("\t")
+            if len(fields) >= 4:
+                name_info = parse_alternative_start_name(fields[3])
+                gene_id = name_info["gene_id"].split(".")[0]
+                riboprof_genes.add(gene_id)
+
+    # Extract best annotated starts from ribosome profiling (only for genes with annotated starts)
+    best_starts = {}  # gene_id -> (chrom, position, strand, efficiency)
+
+    with open(ribosome_bed_path, "r") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            fields = line.strip().split("\t")
+            if len(fields) < 6:
+                continue
+
+            chrom, start, end, name, score, strand = fields[:6]
+            name_info = parse_alternative_start_name(name)
+
+            if name_info["start_type"] != "Annotated":
+                continue
+
+            gene_id = name_info["gene_id"].split(".")[0]
+            efficiency = name_info["efficiency"]
+            start_pos = int(start) if strand == "+" else int(end)
+
+            if gene_id not in best_starts or efficiency > best_starts[gene_id][3]:
+                best_starts[gene_id] = (chrom, start_pos, strand, efficiency)
+
+    # Load original transcript mappings (transcript -> gene)
+    original_transcripts = set()
+    with open(original_transcripts_path, "r") as f:
+        original_transcripts = {line.strip() for line in f if line.strip()}
+
+    transcript_to_gene = {}  # transcript_id -> gene_id
+    gene_to_original_transcript = {}  # gene_id -> transcript_id
+
+    # Map original transcripts to genes
+    with open(gtf_path, "r") as f:
+        for line in f:
+            if line.startswith("#") or "\ttranscript\t" not in line:
+                continue
+
+            gene_match = re.search(r'gene_id "([^"]+)"', line)
+            transcript_match = re.search(r'transcript_id "([^"]+)"', line)
+
+            if gene_match and transcript_match:
+                gene_id = gene_match.group(1).split(".")[0]
+                transcript_id = transcript_match.group(1)
+                transcript_to_gene[transcript_id] = gene_id
+
+                if transcript_id in original_transcripts:
+                    gene_to_original_transcript[gene_id] = transcript_id
+
+    # Find best matching transcripts for empirical starts
+    empirical_matches = {}  # gene_id -> transcript_id
+
+    with open(gtf_path, "r") as f:
+        for line in f:
+            if line.startswith("#") or "\ttranscript\t" not in line:
+                continue
+
+            fields = line.strip().split("\t")
+            chrom, start, end, strand = (
+                fields[0],
+                int(fields[3]),
+                int(fields[4]),
+                fields[6],
+            )
+
+            gene_match = re.search(r'gene_id "([^"]+)"', fields[8])
+            transcript_match = re.search(r'transcript_id "([^"]+)"', fields[8])
+
+            if not (gene_match and transcript_match):
+                continue
+
+            gene_id = gene_match.group(1).split(".")[0]
+            transcript_id = transcript_match.group(1)
+
+            if gene_id in best_starts:
+                emp_chrom, emp_pos, emp_strand, _ = best_starts[gene_id]
+                transcript_pos = start if strand == "+" else end
+
+                if chrom == emp_chrom and strand == emp_strand:
+                    distance = abs(transcript_pos - emp_pos)
+                    if (
+                        gene_id not in empirical_matches
+                        or distance < empirical_matches[gene_id][1]
+                    ):
+                        empirical_matches[gene_id] = (transcript_id, distance)
+
+    # Build final transcript list: one transcript per gene in ribosome profiling data
+    final_transcripts = set()
+    genes_changed = 0
+    genes_kept_original = 0
+    genes_no_transcript = 0
+
+    for gene_id in riboprof_genes:
+        chosen_transcript = None
+
+        # Priority 1: Use empirical match if available
+        if gene_id in empirical_matches:
+            chosen_transcript = empirical_matches[gene_id][0]
+
+            # Check if this differs from original
+            if gene_id in gene_to_original_transcript:
+                if chosen_transcript != gene_to_original_transcript[gene_id]:
+                    genes_changed += 1
+                else:
+                    genes_kept_original += 1
+            else:
+                genes_changed += 1  # New transcript for gene not in original list
+
+        # Priority 2: Use original transcript if gene has one
+        elif gene_id in gene_to_original_transcript:
+            chosen_transcript = gene_to_original_transcript[gene_id]
+            genes_kept_original += 1
+
+        # Priority 3: No transcript available
+        else:
+            genes_no_transcript += 1
+
+        if chosen_transcript:
+            final_transcripts.add(chosen_transcript)
+
+    # Write output
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w") as f:
+        for transcript_id in sorted(final_transcripts):
+            f.write(f"{transcript_id}\n")
+
+    print(
+        f"Updated preferred transcripts for {len(riboprof_genes)} genes from ribosome profiling data:"
+    )
+    print(f"  ├─ Transcripts changed based on empirical data: {genes_changed}")
+    print(f"  ├─ Transcripts kept from original list: {genes_kept_original}")
+    print(f"  ├─ Genes without available transcripts: {genes_no_transcript}")
+    print(f"  └─ Final transcript count: {len(final_transcripts)}")

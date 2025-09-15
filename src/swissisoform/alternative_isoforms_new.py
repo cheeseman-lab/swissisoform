@@ -100,6 +100,144 @@ class AlternativeIsoform:
             f"Start types: {self.start_sites['start_type'].value_counts().to_dict()}"
         )
 
+    def check_data_quality(self) -> Dict:
+        """Check data quality for loaded start sites.
+
+        Returns:
+            Dictionary with data quality statistics
+        """
+        if self.start_sites.empty:
+            raise ValueError("No data loaded. Please load data first with load_bed().")
+
+        # Get all unique genes
+        all_genes = self.start_sites["gene_name"].unique()
+        total_genes = len(all_genes)
+
+        # Track genes with issues
+        multiple_annotated = []
+        missing_annotated = []
+
+        print("Checking data quality...")
+        print("=" * 50)
+
+        # Check each gene
+        for gene_name in all_genes:
+            gene_sites = self.start_sites[self.start_sites["gene_name"] == gene_name]
+            annotated_sites = gene_sites[gene_sites["start_type"] == "Annotated"]
+
+            if len(annotated_sites) > 1:
+                multiple_annotated.append(
+                    {
+                        "gene": gene_name,
+                        "count": len(annotated_sites),
+                        "positions": annotated_sites["start_position"].tolist(),
+                        "efficiencies": annotated_sites["efficiency"].tolist(),
+                    }
+                )
+            elif len(annotated_sites) == 0:
+                missing_annotated.append(gene_name)
+
+        # Calculate percentages
+        multiple_annotated_count = len(multiple_annotated)
+        missing_annotated_count = len(missing_annotated)
+
+        multiple_percent = (multiple_annotated_count / total_genes) * 100
+        missing_percent = (missing_annotated_count / total_genes) * 100
+
+        # Print summary
+        print(f"Total genes: {total_genes}")
+        print(
+            f"Genes with multiple Annotated starts: {multiple_annotated_count} ({multiple_percent:.1f}%)"
+        )
+        print(
+            f"Genes missing Annotated start: {missing_annotated_count} ({missing_percent:.1f}%)"
+        )
+        print()
+
+        # Show examples of problematic genes
+        if multiple_annotated:
+            print("GENES WITH MULTIPLE ANNOTATED STARTS:")
+            print("-" * 40)
+            for gene_info in multiple_annotated[:10]:  # Show first 10
+                gene = gene_info["gene"]
+                positions = gene_info["positions"]
+                efficiencies = gene_info["efficiencies"]
+                print(f"{gene}: {len(positions)} Annotated starts")
+                for pos, eff in zip(positions, efficiencies):
+                    print(f"  Position {pos}, efficiency {eff:.3f}")
+
+            if len(multiple_annotated) > 10:
+                print(f"... and {len(multiple_annotated) - 10} more genes")
+            print()
+
+        if missing_annotated:
+            print("GENES MISSING ANNOTATED START:")
+            print("-" * 32)
+            for gene in missing_annotated[:10]:  # Show first 10
+                gene_sites = self.start_sites[self.start_sites["gene_name"] == gene]
+                available_types = gene_sites["start_type"].unique()
+                print(f"{gene}: has {list(available_types)}")
+
+            if len(missing_annotated) > 10:
+                print(f"... and {len(missing_annotated) - 10} more genes")
+            print()
+
+        # Additional statistics
+        start_type_counts = self.start_sites["start_type"].value_counts()
+        print("START TYPE DISTRIBUTION:")
+        print("-" * 23)
+        for start_type, count in start_type_counts.items():
+            percentage = (count / len(self.start_sites)) * 100
+            print(f"{start_type}: {count} ({percentage:.1f}%)")
+        print()
+
+        # Check for very distant Annotated starts within genes
+        distant_annotated = []
+        for gene_info in multiple_annotated:
+            positions = gene_info["positions"]
+            if len(positions) >= 2:
+                min_pos = min(positions)
+                max_pos = max(positions)
+                distance = max_pos - min_pos
+                if distance > 10000:  # More than 10kb apart
+                    distant_annotated.append(
+                        {
+                            "gene": gene_info["gene"],
+                            "distance": distance,
+                            "positions": positions,
+                        }
+                    )
+
+        if distant_annotated:
+            print("GENES WITH VERY DISTANT ANNOTATED STARTS (>10kb):")
+            print("-" * 45)
+            for gene_info in distant_annotated:
+                gene = gene_info["gene"]
+                distance = gene_info["distance"]
+                positions = gene_info["positions"]
+                print(f"{gene}: {distance:,} bp apart (positions: {positions})")
+            print()
+
+        # Return structured data
+        return {
+            "total_genes": total_genes,
+            "multiple_annotated": {
+                "count": multiple_annotated_count,
+                "percentage": multiple_percent,
+                "genes": multiple_annotated,
+            },
+            "missing_annotated": {
+                "count": missing_annotated_count,
+                "percentage": missing_percent,
+                "genes": missing_annotated,
+            },
+            "distant_annotated": {
+                "count": len(distant_annotated),
+                "genes": distant_annotated,
+            },
+            "start_type_distribution": start_type_counts.to_dict(),
+        }
+
     def get_gene_start_sites(self, gene_name: str) -> pd.DataFrame:
         """Get all start sites for a specific gene.
 
@@ -123,9 +261,11 @@ class AlternativeIsoform:
         This function handles both:
         - Truncations: Regions removed when using downstream alternative starts
         - Extensions: Regions added when using upstream alternative starts
+
         Args:
             gene_name: Name of the gene
-            top_n_efficiency: If specified, only use top N most efficient alternative starts
+            top_n_efficiency: If specified, keep top N most efficient per TYPE (Truncated/Extended separately)
+
         Returns:
             DataFrame containing regions with metadata for both truncations and extensions
         """
@@ -136,21 +276,20 @@ class AlternativeIsoform:
         # Find canonical (Annotated) start site
         canonical_sites = gene_sites[gene_sites["start_type"] == "Annotated"]
         if canonical_sites.empty:
-            self._debug_print(f"Warning: No Annotated start site found for {gene_name}")
-            return pd.DataFrame()
+            self._debug_print(
+                f"WARNING: No Annotated start site found for {gene_name}. Skipping gene."
+            )
+            return pd.DataFrame()  # Return empty DataFrame if no canonical start
 
-        # Use the most efficient canonical start if multiple exist
+        # Always use the highest efficiency Annotated start by default
         canonical_start = canonical_sites.loc[canonical_sites["efficiency"].idxmax()]
         strand = canonical_start["strand"]
-
-        # FIXED: Use the correct start codon position (from start_position column)
-        canonical_pos = canonical_start[
-            "start_position"
-        ]  # This uses the corrected position
+        canonical_pos = canonical_start["start_position"]
 
         self._debug_print(
             f"Gene {gene_name}: canonical start at {canonical_pos} (strand {strand}) "
-            f"[BED: {canonical_start['start']}-{canonical_start['end']}]"
+            f"[BED: {canonical_start['start']}-{canonical_start['end']}] "
+            f"efficiency: {canonical_start['efficiency']:.3f}"
         )
 
         # Get alternative start sites (Truncated and Extended)
@@ -162,27 +301,45 @@ class AlternativeIsoform:
             self._debug_print(f"No alternative start sites found for {gene_name}")
             return pd.DataFrame()
 
-        # Apply efficiency filtering if requested
-        if top_n_efficiency is not None and len(alternative_sites) > top_n_efficiency:
-            alternative_sites = alternative_sites.nlargest(
-                top_n_efficiency, "efficiency"
-            )
-            self._debug_print(
-                f"Filtered to top {top_n_efficiency} most efficient alternative starts"
-            )
+        # Apply efficiency filtering PER TYPE if requested
+        if top_n_efficiency is not None:
+            filtered_alternatives = []
+
+            for start_type in ["Truncated", "Extended"]:
+                type_sites = alternative_sites[
+                    alternative_sites["start_type"] == start_type
+                ]
+                if not type_sites.empty:
+                    # Get top N for this specific type
+                    top_sites = type_sites.nlargest(top_n_efficiency, "efficiency")
+                    filtered_alternatives.append(top_sites)
+                    self._debug_print(
+                        f"Filtered to top {min(top_n_efficiency, len(type_sites))} "
+                        f"{start_type} starts (from {len(type_sites)} total)"
+                    )
+
+            if filtered_alternatives:
+                alternative_sites = pd.concat(filtered_alternatives, ignore_index=True)
+            else:
+                alternative_sites = pd.DataFrame()  # No alternatives after filtering
+
+            if alternative_sites.empty:
+                self._debug_print(
+                    f"No alternative start sites remaining after efficiency filtering"
+                )
+                return pd.DataFrame()
 
         # Calculate regions for both truncations and extensions
         regions = []
 
         for _, alt_site in alternative_sites.iterrows():
             bed_annotation = alt_site["start_type"]  # "Truncated" or "Extended"
-
-            # FIXED: Use the correct start codon position (from start_position column)
-            alt_pos = alt_site["start_position"]  # This uses the corrected position
+            alt_pos = alt_site["start_position"]
 
             self._debug_print(
                 f"  Alternative start: {alt_pos} ({bed_annotation}) "
-                f"[BED: {alt_site['start']}-{alt_site['end']}]"
+                f"[BED: {alt_site['start']}-{alt_site['end']}] "
+                f"efficiency: {alt_site['efficiency']:.3f}"
             )
 
             # Determine biological effect based on relative positions and strand
@@ -203,7 +360,6 @@ class AlternativeIsoform:
             else:  # strand == "-"
                 if alt_pos < canonical_pos:
                     # Lower genomic coordinate = downstream in transcript = truncation
-                    # For negative strand, end the region at the BED 'start' coordinate of canonical
                     region_start = alt_pos
                     region_end = canonical_start[
                         "start"
@@ -277,22 +433,27 @@ class AlternativeIsoform:
             for region_type in ["truncation", "extension"]:
                 type_regions = result_df[result_df["region_type"] == region_type]
                 if not type_regions.empty:
-                    self._debug_print(f"  {region_type.upper()}S:")
+                    self._debug_print(
+                        f"  {region_type.upper()}S ({len(type_regions)}):"
+                    )
                     for _, region in type_regions.iterrows():
                         self._debug_print(
                             f"    {region['region_start']}-{region['region_end']} "
                             f"(length: {region['region_length']}, "
                             f"alt_start: {region['alternative_start_pos']}, "
+                            f"efficiency: {region['efficiency']:.3f}, "
                             f"BED: {region['bed_annotation']}, "
                             f"matches: {region['annotation_matches_biology']})"
                         )
+        else:
+            self._debug_print(f"No valid regions generated for {gene_name}")
 
         return result_df
 
     def get_visualization_features(
         self,
         gene_name: str,
-        top_n_efficiency: Optional[int] = None,
+        top_n_per_type: Optional[int] = None,
         include_extensions: bool = True,
         include_truncations: bool = True,
     ) -> pd.DataFrame:
@@ -300,7 +461,7 @@ class AlternativeIsoform:
 
         Args:
             gene_name: Name of the gene to get features for
-            top_n_efficiency: If specified, only use top N most efficient alternative starts
+            top_n_per_type: If specified, keep top N most efficient per TYPE (Truncated/Extended separately)
             include_extensions: Whether to include extension regions
             include_truncations: Whether to include truncation regions
 
@@ -310,8 +471,8 @@ class AlternativeIsoform:
         if self.start_sites.empty:
             raise ValueError("No data loaded. Please load data first with load_bed().")
 
-        # Use the renamed function
-        regions = self.calculate_alternative_start_regions(gene_name, top_n_efficiency)
+        # Use the updated function with per-type filtering
+        regions = self.calculate_alternative_start_regions(gene_name, top_n_per_type)
 
         if regions.empty:
             return pd.DataFrame()
@@ -332,7 +493,7 @@ class AlternativeIsoform:
             feature = {
                 "chromosome": region["chromosome"],
                 "source": "ribosome_profiling",
-                "feature_type": f"alternative_start_{region['region_type']}",  # "alternative_start_truncation" or "alternative_start_extension"
+                "feature_type": f"alternative_start_{region['region_type']}",
                 "start": region["region_start"],
                 "end": region["region_end"],
                 "score": region["efficiency"],

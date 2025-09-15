@@ -7,14 +7,23 @@ It updates the gene names in the GTF file to match the latest version of the GTF
 It also cleans up the BED files to update gene names and remove duplicates.
 """
 
-from swissisoform.alternative_isoforms import AlternativeIsoform
-from swissisoform.utils import cleanup_bed, update_gencode_gene_names, subset_gene_list
+from swissisoform.alternative_isoforms_new import AlternativeIsoform
+from swissisoform.utils import (
+    update_gencode_gene_names,
+    cleanup_bed,
+    filter_genes_with_alternatives_only,
+    subset_gene_list,
+    generate_empirical_preferred_transcripts,
+)
 
 # GTF: update gene names
 input_gtf = "../data/genome_data/gencode.v25.annotation.gtf"
 output_gtf = "../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
 reference_gtf = "../data/genome_data/gencode.v47.annotation.gtf"
+preferred_transcripts = "../data/genome_data/hela_top_transcript.txt"
+updated_preferred_transcripts = "../data/genome_data/hela_updated_top_transcript.txt"
 
+# Update gene names
 update_gencode_gene_names(
     input_gtf_path=input_gtf,
     output_gtf_path=output_gtf,
@@ -23,24 +32,42 @@ update_gencode_gene_names(
 )
 
 # All truncations: bed cleanup
-input_bed = "../data/ribosome_profiling/truncations.bed"
-output_bed = "../data/ribosome_profiling/truncations_cleaned.bed"
+input_bed = "../data/ribosome_profiling/Ly_2024b_TableS2_formatted.bed"
+cleaned_bed = "../data/ribosome_profiling/isoforms_cleaned.bed"
+filtered_bed = "../data/ribosome_profiling/isoforms_filtered.bed"
 
-cleanup_bed(input_bed, output_bed, gtf_path=output_gtf, verbose=True)
+# Cleanup input bed file
+cleanup_bed(
+    input_bed,
+    cleaned_bed,
+    output_gtf,
+    preferred_transcripts,
+    filter_uorfs=True,
+    add_annotated_starts=True,
+    verbose=True,
+)
+
+# Filter to complete genes
+filter_genes_with_alternatives_only(cleaned_bed, filtered_bed, verbose=True)
 
 alt_isoforms = AlternativeIsoform()
-alt_isoforms.load_bed("../data/ribosome_profiling/truncations_cleaned.bed")
+alt_isoforms.load_bed("../data/ribosome_profiling/isoforms_filtered.bed")
 gene_list = alt_isoforms.get_gene_list()
 
-with open("../data/ribosome_profiling/gene_list.txt", "w") as f:
+with open("../data/ribosome_profiling/isoforms_gene_list.txt", "w") as f:
     for gene in gene_list:
         f.write(gene + "\n")
 
 
 reduced_gene_list = subset_gene_list(
-    gene_list_path="../data/ribosome_profiling/gene_list.txt"
+    gene_list_path="../data/ribosome_profiling/isoforms_gene_list.txt"
 )
 
-with open("../data/ribosome_profiling/gene_list_reduced.txt", "w") as f:
+with open("../data/ribosome_profiling/isoforms_gene_list_reduced.txt", "w") as f:
     for gene in reduced_gene_list:
         f.write(gene + "\n")
+
+# Update preferred transcripts
+generate_empirical_preferred_transcripts(
+    filtered_bed, preferred_transcripts, output_gtf, updated_preferred_transcripts
+)

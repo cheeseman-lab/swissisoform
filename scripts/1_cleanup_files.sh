@@ -21,7 +21,7 @@ required_genome_files=(
 )
 
 required_riboprof_files=(
-    "$RIBOPROF_DIR/truncations.bed"
+    "$RIBOPROF_DIR/Ly_2024b_TableS2_formatted.bed"
 )
 
 echo ""
@@ -74,46 +74,87 @@ echo "Running cleanup script..."
 python3 cleanup_files.py
 
 # Verify outputs
-echo ""
+# Replace the "Verifying cleanup outputs..." section with:
+
 echo "Verifying cleanup outputs..."
 
-expected_outputs=(
-    "$GENOME_DIR/gencode.v25.annotation.ensembl_cleaned.gtf"
-    "$RIBOPROF_DIR/truncations_cleaned.bed"
-    "$RIBOPROF_DIR/gene_list.txt"
-    "$RIBOPROF_DIR/gene_list_reduced.txt"
-)
-
-all_outputs_present=true
-for file in "${expected_outputs[@]}"; do
-    if [ -f "$file" ]; then
-        if [[ "$file" == *.txt ]]; then
-            count=$(wc -l < "$file")
-            echo "✓ $(basename $file) ($count genes)"
-        else
-            echo "✓ $(basename $file)"
-        fi
-    else
-        echo "✗ $(basename $file) missing"
-        all_outputs_present=false
-    fi
-done
-
-if [ "$all_outputs_present" = true ]; then
-    echo ""
-    echo "🎉 File cleanup completed successfully!"
-    echo ""
-    echo "Generated files:"
-    echo "  ├─ Cleaned GTF annotation"
-    echo "  ├─ Cleaned BED files (full and selected truncations)"
-    echo "  └─ Gene lists for analysis"
-    echo ""
-    echo "Next step:"
-    echo "  Run: sbatch 2_analyze_mutations.sh"
-    echo "  Run: sbatch 3_generate_proteins.sh"
+# Check GTF file
+if [ -f "../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf" ]; then
+    echo "✓ gencode.v25.annotation.ensembl_cleaned.gtf"
 else
-    echo ""
-    echo "❌ Cleanup failed. Some output files are missing."
-    echo "Check the cleanup_files.py script for errors."
+    echo "✗ gencode.v25.annotation.ensembl_cleaned.gtf"
     exit 1
 fi
+
+# Check cleaned BED file
+if [ -f "../data/ribosome_profiling/isoforms_cleaned.bed" ]; then
+    echo "✓ isoforms_cleaned.bed"
+else
+    echo "✗ isoforms_cleaned.bed"
+    exit 1
+fi
+
+# Check filtered BED file
+if [ -f "../data/ribosome_profiling/isoforms_filtered.bed" ]; then
+    echo "✓ isoforms_filtered.bed"
+else
+    echo "✗ isoforms_filtered.bed"
+    exit 1
+fi
+
+# Check gene list file and validate gene count
+if [ -f "../data/ribosome_profiling/isoforms_gene_list.txt" ]; then
+    GENE_COUNT_TXT=$(wc -l < "../data/ribosome_profiling/isoforms_gene_list.txt")
+    GENE_COUNT_BED=$(cut -f4 "../data/ribosome_profiling/isoforms_filtered.bed" | cut -d'_' -f1 | sort | uniq | wc -l)
+    
+    if [ "$GENE_COUNT_TXT" -eq "$GENE_COUNT_BED" ]; then
+        echo "✓ isoforms_gene_list.txt ($GENE_COUNT_TXT genes, matches BED file)"
+    else
+        echo "✗ isoforms_gene_list.txt ($GENE_COUNT_TXT genes, but BED has $GENE_COUNT_BED genes)"
+        echo "  Gene count mismatch detected - check AlternativeIsoform.get_gene_list() method"
+        exit 1
+    fi
+else
+    echo "✗ isoforms_gene_list.txt"
+    exit 1
+fi
+
+# Check reduced gene list
+if [ -f "../data/ribosome_profiling/isoforms_gene_list_reduced.txt" ]; then
+    REDUCED_COUNT=$(wc -l < "../data/ribosome_profiling/isoforms_gene_list_reduced.txt")
+    echo "✓ isoforms_gene_list_reduced.txt ($REDUCED_COUNT genes)"
+    
+    if [ "$REDUCED_COUNT" -eq 0 ]; then
+        echo "  WARNING: No genes found in reduced list - predefined genes may not exist in dataset"
+        echo "  Consider updating the subset_gene_list() function with genes from your actual dataset"
+    fi
+else
+    echo "✗ isoforms_gene_list_reduced.txt"
+    exit 1
+fi
+
+echo "🎉 File cleanup completed successfully!"
+echo "Generated files:"
+echo "  ├─ Cleaned GTF annotation"
+echo "  ├─ Cleaned and filtered BED files"
+echo "  └─ Gene lists for analysis"
+
+# Add diagnostic info
+echo ""
+echo "Summary:"
+echo "  ├─ Total genes with alternatives: $GENE_COUNT_BED"
+echo "  ├─ Genes in reduced list: $REDUCED_COUNT"
+if [ "$REDUCED_COUNT" -gt 0 ]; then
+    echo "  └─ Ready for analysis"
+else
+    echo "  └─ WARNING: No genes available for reduced analysis"
+    echo ""
+    echo "Suggested next steps:"
+    echo "  1. Check which genes are available: head -20 ../data/ribosome_profiling/isoforms_gene_list.txt"
+    echo "  2. Update subset_gene_list() with genes from your dataset"
+fi
+
+echo ""
+echo "Next step:"
+echo "  Run: sbatch 2_analyze_mutations.sh"
+echo "  Run: sbatch 3_generate_proteins.sh"
