@@ -615,7 +615,7 @@ class AlternativeIsoform:
                 "strand": region["strand"],
                 "frame": ".",
                 "gene_id": region["gene_id"],
-                "transcript_id": region["track_id"],
+                "transcript_id": region["transcript_id"],
                 "gene_name": region["gene_name"],
                 "start_codon": region["alternative_start_codon"],
                 "name": region["region_id"],
