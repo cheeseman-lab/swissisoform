@@ -1623,6 +1623,83 @@ class AlternativeProteinGenerator:
 
         return dataset
 
+    # ===== VALIDATION METHODS =====
+
+    async def predict_consequence_by_translation(
+        self, transcript_id: str, genomic_pos: int, ref_allele: str, alt_allele: str
+    ) -> str:
+        """Predict the functional consequence of a mutation by applying it to the transcript and analyzing the resulting protein change.
+
+        Args:
+            transcript_id (str): Transcript identifier to analyze.
+            genomic_pos (int): Genomic position of the mutation.
+            ref_allele (str): Reference allele at the mutation position.
+            alt_allele (str): Alternate allele to introduce at the mutation position.
+
+        Returns:
+            str: Predicted consequence type (e.g., 'missense variant', 'nonsense variant', 'frameshift variant', 'synonymous variant', or 'unknown').
+        """
+        try:
+            # Get canonical protein
+            canonical_result = self.extract_canonical_protein(transcript_id)
+            if not canonical_result:
+                return "unknown"
+
+            # Apply mutation to get mutated protein
+            mutated_result = self._apply_mutation_to_sequence(
+                transcript_id, genomic_pos, ref_allele, alt_allele, "canonical"
+            )
+
+            if not mutated_result:
+                return "synonymous variant"  # No protein change
+
+            # Classify the type of change
+            return self.classify_protein_change(
+                canonical_result["protein"],
+                mutated_result["protein"],
+                canonical_result["coding_sequence"],
+                mutated_result["coding_sequence"],
+            )
+
+        except Exception as e:
+            return "unknown"
+
+    def classify_protein_change(
+        self, orig_protein: str, mut_protein: str, orig_cds: str, mut_cds: str
+    ) -> str:
+        """Classify the type of protein sequence change resulting from a mutation.
+
+        Args:
+            orig_protein (str): Original protein sequence before mutation.
+            mut_protein (str): Mutated protein sequence after mutation.
+            orig_cds (str): Original coding DNA sequence.
+            mut_cds (str): Mutated coding DNA sequence.
+
+        Returns:
+            str: Consequence type (e.g., 'synonymous variant', 'missense variant', 'nonsense variant', 'frameshift variant', 'inframe deletion', 'inframe insertion').
+        """
+        # No protein change
+        if mut_protein == orig_protein:
+            return "synonymous variant"
+
+        # Check for premature stop codon
+        if "*" in mut_protein and "*" not in orig_protein[: len(mut_protein)]:
+            return "nonsense variant"
+
+        # Check for length changes
+        if len(mut_protein) != len(orig_protein):
+            cds_length_change = len(mut_cds) - len(orig_cds)
+            if cds_length_change % 3 != 0:
+                return "frameshift variant"
+            else:
+                if len(mut_protein) < len(orig_protein):
+                    return "inframe deletion"
+                else:
+                    return "inframe insertion"
+
+        # Same length, different sequence = missense
+        return "missense variant"
+
     # ===== HELPER METHODS =====
 
     def _save_sequences(

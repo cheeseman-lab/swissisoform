@@ -27,9 +27,9 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     required_files=(
         "$GENOME_DIR/GRCh38.p7.genome.fa"
         "$GENOME_DIR/gencode.v25.annotation.ensembl_cleaned.gtf"
-        "$RIBOPROF_DIR/truncations_cleaned.bed"
-        "$RIBOPROF_DIR/gene_list.txt"
-        "$RIBOPROF_DIR/gene_list_reduced.txt"
+        "$RIBOPROF_DIR/isoforms_with_transcripts.bed"
+        "$RIBOPROF_DIR/isoforms_gene_list.txt"
+        "$RIBOPROF_DIR/isoforms_gene_list_reduced.txt"
     )
 
     echo ""
@@ -68,14 +68,14 @@ conda activate swissisoform || {
 # Define common paths
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
 ANNOTATION_PATH="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
-TRUNCATIONS_PATH="../data/ribosome_profiling/truncations_cleaned.bed"
+TRUNCATIONS_PATH="../data/ribosome_profiling/isoforms_with_transcripts.bed"
 
 # Run the appropriate task based on array task ID
 case $SLURM_ARRAY_TASK_ID in
     1)
         # Task 1: Reduced dataset with visualization
         echo "Array Task 1: Starting reduced mutations analysis at $(date)"
-        python3 analyze_mutations.py "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/mutations" \
+        python3 analyze_mutations.py "../data/ribosome_profiling/isoforms_gene_list_reduced.txt" "../results/reduced/mutations" \
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
@@ -87,13 +87,12 @@ case $SLURM_ARRAY_TASK_ID in
     2)
         # Task 2: Full dataset
         echo "Array Task 2: Starting full mutations analysis at $(date)"
-        python3 analyze_mutations.py "../data/ribosome_profiling/gene_list.txt" "../results/full/mutations" \
+        python3 analyze_mutations.py "../data/ribosome_profiling/isoforms_gene_list.txt" "../results/full/mutations" \
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
           --sources "clinvar" \
           --impact-types "missense variant" "nonsense variant" "frameshift variant" "5 prime UTR variant" \
-          --visualize
         echo "Array Task 2: Completed full mutations analysis at $(date)"
         ;;
     *)

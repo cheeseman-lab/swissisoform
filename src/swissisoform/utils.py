@@ -1128,6 +1128,7 @@ def load_preferred_transcripts(file_path: str) -> set:
 def subset_gene_list(
     gene_list_path: Union[str, Path],
     subset_genes: List[str] = [
+        # Truncations of interest
         "AKR7A2",
         "ALDH9A1",
         "C15orf40",
@@ -1146,10 +1147,13 @@ def subset_gene_list(
         "NTHL1",
         "PCBD2",
         "PNPO",
-        "PPA2",
         "REXO2",
         "TRNT1",
         "UXS1",
+        # Extensions of interest
+        "PTEN",
+        "FTL",
+        "MAPK14",
     ],
 ) -> List[str]:
     """Subset a gene list to only include specified genes.

@@ -155,7 +155,7 @@ async def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Analyze mutations in alternative isoform truncation regions"
+        description="Analyze mutations in alternative isoform regions"
     )
     parser.add_argument("gene_list", help="Path to file containing gene names")
     parser.add_argument("output_dir", help="Directory to save output files")
@@ -171,7 +171,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--bed",
-        default="../data/ribosome_profiling/full_truncations_JL_cleaned.bed",
+        default="../data/ribosome_profiling/isoforms_with_transcripts.bed",
         help="Path to alternative isoform BED file",
     )
     parser.add_argument(

@@ -1621,6 +1621,64 @@ class MutationHandler:
                 print("No mutations found in any feature")
             return pd.DataFrame()
 
+    async def _validate_mutation_consequences(
+        self, mutations_df: pd.DataFrame, transcript_id: str, protein_generator
+    ) -> pd.DataFrame:
+        """Validate mutation consequences using translation-based prediction.
+
+        Args:
+            mutations_df (pd.DataFrame): DataFrame containing mutation records to validate.
+            transcript_id (str): Transcript identifier to use for consequence prediction.
+            protein_generator: An object with a predict_consequence_by_translation method for consequence validation.
+
+        Returns:
+            pd.DataFrame: DataFrame with validated consequences and comparison to reported impact.
+        """
+        validated_mutations = []
+
+        print(f"  │  │  ├─ Validating {len(mutations_df)} mutation consequences...")
+
+        for _, mutation in mutations_df.iterrows():
+            try:
+                # Get mutation details
+                genomic_pos = int(mutation["position"])
+                ref_allele = str(mutation["reference"]).upper()
+                alt_allele = str(mutation["alternate"]).upper()
+                reported_consequence = mutation.get("impact", "unknown")
+
+                # Use protein_generator to predict consequence
+                validated_consequence = (
+                    await protein_generator.predict_consequence_by_translation(
+                        transcript_id, genomic_pos, ref_allele, alt_allele
+                    )
+                )
+
+                # Create validated mutation record
+                validated_mutation = mutation.copy()
+                validated_mutation["validated_consequence"] = validated_consequence
+                validated_mutation["consequence_matches"] = (
+                    validated_consequence == reported_consequence
+                )
+                validated_mutation["reported_consequence"] = reported_consequence
+
+                validated_mutations.append(validated_mutation)
+
+            except Exception as e:
+                # If validation fails, keep original consequence
+                validated_mutation = mutation.copy()
+                validated_mutation["validated_consequence"] = mutation.get(
+                    "impact", "unknown"
+                )
+                validated_mutation["consequence_matches"] = None
+                validated_mutation["reported_consequence"] = mutation.get(
+                    "impact", "unknown"
+                )
+                validated_mutation["validation_error"] = str(e)
+
+                validated_mutations.append(validated_mutation)
+
+        return pd.DataFrame(validated_mutations)
+
     async def analyze_gene_mutations_comprehensive(
         self,
         gene_name: str,
@@ -1632,25 +1690,27 @@ class MutationHandler:
         custom_parquet_path: Optional[str] = None,
         sources: Optional[List[str]] = None,
         top_n_per_type_per_transcript: Optional[int] = 1,
+        validate_consequences: bool = True,
     ) -> Dict:
-        """Comprehensive mutation analysis for a gene with transcript-truncation pairs.
+        """Comprehensive mutation analysis for a gene with transcript-alternative feature pairs.
 
-        This method performs the same analysis as the process_gene function in
-        analyze_truncations.py but within the MutationHandler class.
+        This method performs mutation analysis for alternative start sites including
+        both truncations and extensions with optional consequence validation.
 
         Args:
-            gene_name (str): Name of the gene to analyze.
-            genome_handler (GenomeHandler): Initialized GenomeHandler instance.
-            alt_isoform_handler (AlternativeIsoform): Initialized AlternativeIsoform instance.
-            output_dir (str): Directory to save output files.
-            visualize (bool): Whether to generate visualizations.
-            impact_types (Optional[Dict[str, List[str]]]): Dict mapping sources to impact types to filter by.
-            custom_parquet_path (Optional[str]): Path to custom parquet file (if using 'custom' source).
-            sources (Optional[List[str]]): Data sources to pull mutations from.
-            top_n_per_type_per_transcript (Optional[int]): Top N features per type per transcript.
+            gene_name: Name of the gene to analyze
+            genome_handler: Initialized GenomeHandler instance
+            alt_isoform_handler: Initialized AlternativeIsoform instance
+            output_dir: Directory to save output files
+            visualize: Whether to generate visualizations
+            impact_types: Dict mapping sources to impact types to filter by
+            custom_parquet_path: Path to custom parquet file (if using 'custom' source)
+            sources: Data sources to pull mutations from
+            top_n_per_type_per_transcript: Top N features per type per transcript
+            validate_consequences: Whether to validate consequences via translation
 
         Returns:
-            Dict: Dictionary containing comprehensive analysis results.
+            Dictionary containing comprehensive analysis results
         """
         try:
             # Get alternative isoform features
@@ -1708,25 +1768,25 @@ class MutationHandler:
                 f"\r  ├─ Using {len(transcript_info)} transcripts from BED file assignments"
             )
 
-            # Create transcript-truncation pairs directly from BED file assignments
+            # Create transcript-alternative feature pairs directly from BED file assignments
             print(
-                f"  ├─ Creating transcript-truncation pairs from BED assignments...",
+                f"  ├─ Creating transcript-feature pairs from BED assignments...",
                 end="",
                 flush=True,
             )
-            transcript_truncation_pairs = []
+            transcript_feature_pairs = []
 
             # Process each alternative feature (which already has transcript assignment)
-            for idx, truncation in alt_features.iterrows():
-                truncation_transcript_id = truncation["transcript_id"]
+            for idx, feature in alt_features.iterrows():
+                feature_transcript_id = feature["transcript_id"]
 
                 # Skip if no transcript assignment
-                if truncation_transcript_id == "NA":
+                if feature_transcript_id == "NA":
                     continue
 
                 # Get transcript info for this specific transcript
                 transcript_match = transcript_info[
-                    transcript_info["transcript_id"] == truncation_transcript_id
+                    transcript_info["transcript_id"] == feature_transcript_id
                 ]
 
                 if transcript_match.empty:
@@ -1739,37 +1799,33 @@ class MutationHandler:
                 transcript_chromosome = transcript["chromosome"]
                 transcript_strand = transcript["strand"]
 
-                trunc_start = truncation["start"]
-                trunc_end = truncation["end"]
-                trunc_chrom = truncation["chromosome"]
+                feature_start = feature["start"]
+                feature_end = feature["end"]
+                feature_chrom = feature["chromosome"]
+                feature_type = feature.get("region_type", "unknown")
 
-                # Create truncation ID
-                truncation_id = f"trunc_{idx}"
-                if "start_codon" in truncation and not pd.isna(
-                    truncation["start_codon"]
-                ):
-                    truncation_id = (
-                        f"trunc_{truncation['start_codon']}_{trunc_start}_{trunc_end}"
-                    )
+                # Create feature ID
+                feature_id = f"{feature_type}_{idx}"
+                if "start_codon" in feature and not pd.isna(feature["start_codon"]):
+                    feature_id = f"{feature_type}_{feature['start_codon']}_{feature_start}_{feature_end}"
 
-                # Create the transcript-truncation pair (no overlap check needed - BED file already assigns)
-                transcript_truncation_pairs.append(
+                # Create the transcript-feature pair
+                transcript_feature_pairs.append(
                     {
-                        "transcript_id": truncation_transcript_id,
-                        "truncation_id": truncation_id,
-                        "truncation_idx": idx,
+                        "transcript_id": feature_transcript_id,
+                        "feature_id": feature_id,
+                        "feature_idx": idx,
+                        "feature_type": feature_type,
                         "transcript_start": transcript_start,
                         "transcript_end": transcript_end,
                         "transcript_strand": transcript_strand,
-                        "truncation_start": trunc_start,
-                        "truncation_end": trunc_end,
+                        "feature_start": feature_start,
+                        "feature_end": feature_end,
                     }
                 )
 
-            if not transcript_truncation_pairs:
-                print(
-                    f"\r  ├─ No valid transcript-truncation pairs from BED assignments"
-                )
+            if not transcript_feature_pairs:
+                print(f"\r  ├─ No valid transcript-feature pairs from BED assignments")
                 return {
                     "gene_name": gene_name,
                     "status": "no_valid_pairs",
@@ -1777,7 +1833,7 @@ class MutationHandler:
                 }
 
             print(
-                f"\r  ├─ Created {len(transcript_truncation_pairs)} transcript-truncation pairs from BED assignments"
+                f"\r  ├─ Created {len(transcript_feature_pairs)} transcript-feature pairs from BED assignments"
             )
 
             # Get the list of desired impact types for each source
@@ -1786,12 +1842,12 @@ class MutationHandler:
                 for source, impacts in impact_types.items():
                     desired_impact_types.extend(impacts)
 
-            # Fetch raw mutations and filter them for each transcript-truncation pair
+            # Fetch raw mutations and filter them for each transcript-feature pair
             print(f"  ├─ Fetching mutation data...", end="", flush=True)
 
             # Determine sources to use
             if sources is None:
-                sources = ["clinvar"]  # or whatever default you want
+                sources = ["clinvar"]
 
             all_mutations = await self.get_visualization_ready_mutations(
                 gene_name=gene_name,
@@ -1828,20 +1884,34 @@ class MutationHandler:
                                 [all_mutations, filtered_mutations]
                             )
 
-            # Container for all transcript-truncation analysis results
+            # Initialize validation components if needed
+            protein_generator = None
+            if validate_consequences and not all_mutations.empty:
+                print(f"  ├─ Initializing consequence validation...")
+                from swissisoform.translation import AlternativeProteinGenerator
+
+                protein_generator = AlternativeProteinGenerator(
+                    genome_handler=genome_handler,
+                    alt_isoform_handler=alt_isoform_handler,
+                    output_dir=output_dir,
+                    debug=False,
+                )
+
+            # Container for all transcript-feature analysis results
             pair_results = []
 
-            # Process each transcript-truncation pair
-            print(f"  ├─ Analyzing mutations for each transcript-truncation pair...")
+            # Process each transcript-feature pair
+            print(f"  ├─ Analyzing mutations for each transcript-feature pair...")
 
-            for pair_idx, pair in enumerate(transcript_truncation_pairs, 1):
+            for pair_idx, pair in enumerate(transcript_feature_pairs, 1):
                 transcript_id = pair["transcript_id"]
-                truncation_id = pair["truncation_id"]
-                truncation_idx = pair["truncation_idx"]
+                feature_id = pair["feature_id"]
+                feature_idx = pair["feature_idx"]
+                feature_type = pair["feature_type"]
 
-                # Get truncation start and end positions
-                trunc_start = pair["truncation_start"]
-                trunc_end = pair["truncation_end"]
+                # Get feature start and end positions
+                feature_start = pair["feature_start"]
+                feature_end = pair["feature_end"]
 
                 # Initialize default counts for all desired impact types
                 mutation_categories = {}
@@ -1851,35 +1921,49 @@ class MutationHandler:
                     category_key = f"mutations_{impact_type.replace(' ', '_').lower()}"
                     mutation_categories[category_key] = 0
 
-                    # Also create empty columns for ClinVar IDs for each impact type
-                    impact_key = f"clinvar_ids_{impact_type.replace(' ', '_').lower()}"
+                    # Also create empty columns for variant IDs for each impact type
+                    impact_key = f"variant_ids_{impact_type.replace(' ', '_').lower()}"
                     mutation_categories[impact_key] = ""
 
-                # Create a truncation-specific filter for mutations
+                # Create a feature-specific filter for mutations
                 if not all_mutations.empty:
-                    # Filter mutations to only those in this truncation region
+                    # Filter mutations to only those in this feature region
                     pair_mutations = all_mutations[
-                        (all_mutations["position"] >= trunc_start)
-                        & (all_mutations["position"] <= trunc_end)
+                        (all_mutations["position"] >= feature_start)
+                        & (all_mutations["position"] <= feature_end)
                     ].copy()
 
                     pair_mutation_count = len(pair_mutations)
 
                     if pair_mutation_count > 0:
                         print(
-                            f"  │  ├─ {transcript_id} × {truncation_id}: {pair_mutation_count} mutations"
+                            f"  │  ├─ {transcript_id} × {feature_id} ({feature_type}): {pair_mutation_count} mutations"
                         )
 
-                        clinvar_ids = []
+                        # Validate consequences if requested
+                        if validate_consequences and protein_generator:
+                            validated_mutations = (
+                                await self._validate_mutation_consequences(
+                                    pair_mutations, transcript_id, protein_generator
+                                )
+                            )
+                            pair_mutations = validated_mutations
 
-                        # Count by impact category
-                        for impact in pair_mutations["impact"].unique():
+                        variant_ids = []
+
+                        # Count by impact category (using validated consequences if available)
+                        impact_column = (
+                            "validated_consequence"
+                            if validate_consequences
+                            else "impact"
+                        )
+                        for impact in pair_mutations[impact_column].unique():
                             if pd.isna(impact):
                                 continue
 
                             # Get mutations for this impact
                             impact_mutations = pair_mutations[
-                                pair_mutations["impact"] == impact
+                                pair_mutations[impact_column] == impact
                             ]
                             category_count = len(impact_mutations)
 
@@ -1889,7 +1973,7 @@ class MutationHandler:
                             )
                             mutation_categories[category_key] = category_count
 
-                            # Store ClinVar IDs for this impact type
+                            # Store variant IDs for this impact type
                             if "variant_id" in impact_mutations.columns:
                                 impact_ids = (
                                     impact_mutations["variant_id"]
@@ -1906,44 +1990,59 @@ class MutationHandler:
 
                                 # Add to the category-specific IDs
                                 if impact_ids:
-                                    impact_key = f"clinvar_ids_{impact.replace(' ', '_').lower()}"
+                                    impact_key = f"variant_ids_{impact.replace(' ', '_').lower()}"
                                     mutation_categories[impact_key] = ",".join(
                                         impact_ids
                                     )
 
-                        # Collect all ClinVar IDs for this truncation region
+                        # Collect all variant IDs for this feature region
                         if "variant_id" in pair_mutations.columns:
-                            clinvar_ids = (
+                            variant_ids = (
                                 pair_mutations["variant_id"].dropna().unique().tolist()
                             )
-                            clinvar_ids = [
-                                str(id).strip() for id in clinvar_ids if str(id).strip()
+                            variant_ids = [
+                                str(id).strip() for id in variant_ids if str(id).strip()
                             ]
 
                         # Add results for this pair with detailed mutation categories
-                        pair_results.append(
-                            {
-                                "transcript_id": transcript_id,
-                                "truncation_id": truncation_id,
-                                "truncation_start": trunc_start,
-                                "truncation_end": trunc_end,
-                                "mutation_count_total": pair_mutation_count,
-                                "clinvar_variant_ids": ",".join(clinvar_ids)
-                                if clinvar_ids
-                                else "",
-                                **mutation_categories,
-                            }
-                        )
+                        pair_result = {
+                            "transcript_id": transcript_id,
+                            "feature_id": feature_id,
+                            "feature_type": feature_type,
+                            "feature_start": feature_start,
+                            "feature_end": feature_end,
+                            "mutation_count_total": pair_mutation_count,
+                            "variant_ids": ",".join(variant_ids) if variant_ids else "",
+                            **mutation_categories,
+                        }
+
+                        # Add validation metrics if consequences were validated
+                        if (
+                            validate_consequences
+                            and "consequence_matches" in pair_mutations.columns
+                        ):
+                            total_validated = (
+                                pair_mutations["consequence_matches"].notna().sum()
+                            )
+                            matches = pair_mutations["consequence_matches"].sum()
+                            pair_result["consequences_validated"] = total_validated
+                            pair_result["consequences_match_reported"] = matches
+                            pair_result["validation_accuracy"] = (
+                                matches / total_validated if total_validated > 0 else 0
+                            )
+
+                        pair_results.append(pair_result)
                     else:
                         # No mutations for this pair, still record it with zeros
                         pair_results.append(
                             {
                                 "transcript_id": transcript_id,
-                                "truncation_id": truncation_id,
-                                "truncation_start": trunc_start,
-                                "truncation_end": trunc_end,
+                                "feature_id": feature_id,
+                                "feature_type": feature_type,
+                                "feature_start": feature_start,
+                                "feature_end": feature_end,
                                 "mutation_count_total": 0,
-                                "clinvar_variant_ids": "",
+                                "variant_ids": "",
                                 **mutation_categories,  # Include zero counts for all categories
                             }
                         )
@@ -1952,11 +2051,12 @@ class MutationHandler:
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
-                            "truncation_id": truncation_id,
-                            "truncation_start": trunc_start,
-                            "truncation_end": trunc_end,
+                            "feature_id": feature_id,
+                            "feature_type": feature_type,
+                            "feature_start": feature_start,
+                            "feature_end": feature_end,
                             "mutation_count_total": 0,
-                            "clinvar_variant_ids": "",
+                            "variant_ids": "",
                             **mutation_categories,  # Include zero counts for all categories
                         }
                     )
@@ -1970,52 +2070,52 @@ class MutationHandler:
                 gene_dir.mkdir(parents=True, exist_ok=True)
 
                 print(
-                    f"  ├─ Generating visualizations for each transcript-truncation pair:"
+                    f"  ├─ Generating visualizations for each transcript-feature pair:"
                 )
 
-                for pair_idx, pair in enumerate(transcript_truncation_pairs, 1):
+                for pair_idx, pair in enumerate(transcript_feature_pairs, 1):
                     transcript_id = pair["transcript_id"]
-                    truncation_id = pair["truncation_id"]
-                    truncation_idx = pair["truncation_idx"]
+                    feature_id = pair["feature_id"]
+                    feature_idx = pair["feature_idx"]
 
-                    # Get the specific truncation for this pair
-                    if truncation_idx in alt_features.index:
-                        truncation_feature = alt_features.loc[[truncation_idx]].copy()
+                    # Get the specific feature for this pair
+                    if feature_idx in alt_features.index:
+                        feature_for_viz = alt_features.loc[[feature_idx]].copy()
                     else:
                         print(
-                            f"  │  ├─ Warning: Invalid truncation index {truncation_idx}, skipping visualization"
+                            f"  │  ├─ Warning: Invalid feature index {feature_idx}, skipping visualization"
                         )
                         continue
 
                     print(
-                        f"  │  ├─ Visualizing pair {pair_idx}/{len(transcript_truncation_pairs)}: {transcript_id} × {truncation_id}"
+                        f"  │  ├─ Visualizing pair {pair_idx}/{len(transcript_feature_pairs)}: {transcript_id} × {feature_id}"
                     )
 
-                    # Create directories organized by transcript and truncation
+                    # Create directories organized by transcript and feature
                     transcript_dir = gene_dir / transcript_id
                     transcript_dir.mkdir(exist_ok=True)
 
                     # Prepare output paths
-                    pair_base_filename = f"{transcript_id}_{truncation_id}"
+                    pair_base_filename = f"{transcript_id}_{feature_id}"
 
-                    # Filter mutations for this specific truncation
+                    # Filter mutations for this specific feature
                     if not all_mutations.empty:
-                        trunc_start = pair["truncation_start"]
-                        trunc_end = pair["truncation_end"]
+                        feature_start = pair["feature_start"]
+                        feature_end = pair["feature_end"]
 
                         pair_mutations = all_mutations[
-                            (all_mutations["position"] >= trunc_start)
-                            & (all_mutations["position"] <= trunc_end)
+                            (all_mutations["position"] >= feature_start)
+                            & (all_mutations["position"] <= feature_end)
                         ].copy()
 
-                        # Create the visualization using only this truncation feature
+                        # Create the visualization using only this feature
                         print(
                             f"  │  │  ├─ Creating view with {len(pair_mutations)} mutations"
                         )
                         visualizer.visualize_transcript(
                             gene_name=gene_name,
                             transcript_id=transcript_id,
-                            alt_features=truncation_feature,
+                            alt_features=feature_for_viz,
                             mutations_df=pair_mutations,
                             output_file=str(
                                 transcript_dir / f"{pair_base_filename}_filtered.pdf"
@@ -2026,7 +2126,7 @@ class MutationHandler:
                         visualizer.visualize_transcript_zoomed(
                             gene_name=gene_name,
                             transcript_id=transcript_id,
-                            alt_features=truncation_feature,
+                            alt_features=feature_for_viz,
                             mutations_df=pair_mutations,
                             output_file=str(
                                 transcript_dir
@@ -2047,10 +2147,11 @@ class MutationHandler:
                 "gene_name": gene_name,
                 "status": "success",
                 "total_transcripts": len(transcript_info),
-                "truncation_features": len(alt_features),
-                "transcript_truncation_pairs": len(transcript_truncation_pairs),
+                "alternative_features": len(alt_features),
+                "transcript_feature_pairs": len(transcript_feature_pairs),
                 "mutations_filtered": total_mutations,
                 "pair_results": pair_results,
+                "consequences_validated": validate_consequences,
                 "error": None,
             }
 

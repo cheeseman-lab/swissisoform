@@ -6,7 +6,7 @@ It updates the gene names in the GTF file to match the latest version of the GTF
 It performs comprehensive BED cleanup with transcript mapping.
 """
 
-from swissisoform.alternative_isoforms_new import AlternativeIsoform
+from swissisoform.alternative_isoforms import AlternativeIsoform
 from swissisoform.utils import (
     update_gencode_gene_names,
     comprehensive_cleanup_bed_with_transcripts,
