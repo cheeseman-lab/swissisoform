@@ -1595,7 +1595,6 @@ class MutationHandler:
         output_dir: str,
         visualize: bool = False,
         impact_types: Optional[Dict[str, List[str]]] = None,
-        preferred_transcripts: Optional[Set[str]] = None,
         custom_parquet_path: Optional[str] = None,
         sources: Optional[List[str]] = None,
     ) -> Dict:
@@ -1611,7 +1610,6 @@ class MutationHandler:
             output_dir: Directory to save output files
             visualize: Whether to generate visualizations
             impact_types: Dict mapping sources to impact types to filter by
-            preferred_transcripts: Set of transcript IDs to prioritize
             custom_parquet_path: Path to custom parquet file (if using 'custom' source)
             sources: Data sources to pull mutations from
 
@@ -1627,102 +1625,121 @@ class MutationHandler:
                 return {"gene_name": gene_name, "status": "no_features", "error": None}
             print(f"\r  ├─ Found {len(alt_features)} alternative features")
 
-            # Get transcript information
-            print(f"  ├─ Getting transcript information...", end="", flush=True)
+            # Get unique transcript IDs from the BED file (alt_features)
+            print(f"  ├─ Using transcript IDs from BED file...", end="", flush=True)
+            transcript_ids_from_bed = alt_features["transcript_id"].unique()
+            # Filter out any "NA" assignments
+            transcript_ids_from_bed = [
+                tid for tid in transcript_ids_from_bed if tid != "NA"
+            ]
+
+            if not transcript_ids_from_bed:
+                print(f"\r  ├─ No valid transcript assignments in BED file")
+                return {
+                    "gene_name": gene_name,
+                    "status": "no_transcript_assignments",
+                    "error": None,
+                }
+
+            # Get transcript info for only the transcripts specified in BED file
             transcript_info = genome_handler.get_transcript_ids(gene_name)
             if transcript_info.empty:
-                print(f"\r  ├─ No transcript info found")
+                print(f"\r  ├─ No transcript info found in genome")
                 return {
                     "gene_name": gene_name,
                     "status": "no_transcripts",
                     "error": None,
                 }
 
-            # Filter by preferred transcripts if provided
-            original_transcript_count = len(transcript_info)
-            if preferred_transcripts and not transcript_info.empty:
-                # First try exact matches
-                filtered = transcript_info[
-                    transcript_info["transcript_id"].isin(preferred_transcripts)
-                ]
+            # Filter to only transcripts that are in the BED file
+            transcript_info = transcript_info[
+                transcript_info["transcript_id"].isin(transcript_ids_from_bed)
+            ]
 
-                # If nothing matched and versions might be present, try matching base IDs
-                if filtered.empty and any("." in t for t in preferred_transcripts):
-                    base_preferred = {t.split(".")[0] for t in preferred_transcripts}
-                    filtered = transcript_info[
-                        transcript_info["transcript_id"]
-                        .str.split(".", expand=True)[0]
-                        .isin(base_preferred)
-                    ]
+            if transcript_info.empty:
+                print(
+                    f"\r  ├─ None of the BED transcript IDs found in genome annotation"
+                )
+                return {
+                    "gene_name": gene_name,
+                    "status": "no_matching_transcripts",
+                    "error": None,
+                }
 
-                # If we found matches, use the filtered set
-                if not filtered.empty:
-                    transcript_info = filtered
-                    print(
-                        f"\r  ├─ Filtered to {len(transcript_info)} preferred transcripts (out of {original_transcript_count})"
-                    )
-                else:
-                    print(
-                        f"\r  ├─ No preferred transcripts found for gene {gene_name}, using all {len(transcript_info)} transcripts"
-                    )
+            print(
+                f"\r  ├─ Using {len(transcript_info)} transcripts from BED file assignments"
+            )
 
-            # Create transcript-truncation pairs based on overlap
-            print(f"\r  ├─ Creating transcript-truncation pairs...", end="", flush=True)
+            # Create transcript-truncation pairs directly from BED file assignments
+            print(
+                f"  ├─ Creating transcript-truncation pairs from BED assignments...",
+                end="",
+                flush=True,
+            )
             transcript_truncation_pairs = []
 
-            for _, transcript in transcript_info.iterrows():
-                transcript_id = transcript["transcript_id"]
+            # Process each alternative feature (which already has transcript assignment)
+            for idx, truncation in alt_features.iterrows():
+                truncation_transcript_id = truncation["transcript_id"]
+
+                # Skip if no transcript assignment
+                if truncation_transcript_id == "NA":
+                    continue
+
+                # Get transcript info for this specific transcript
+                transcript_match = transcript_info[
+                    transcript_info["transcript_id"] == truncation_transcript_id
+                ]
+
+                if transcript_match.empty:
+                    # This transcript ID from BED wasn't found in genome annotation
+                    continue
+
+                transcript = transcript_match.iloc[0]
                 transcript_start = transcript["start"]
                 transcript_end = transcript["end"]
                 transcript_chromosome = transcript["chromosome"]
                 transcript_strand = transcript["strand"]
 
-                # Check each truncation feature for overlap with this transcript
-                for idx, truncation in alt_features.iterrows():
-                    trunc_start = truncation["start"]
-                    trunc_end = truncation["end"]
-                    trunc_chrom = truncation["chromosome"]
+                trunc_start = truncation["start"]
+                trunc_end = truncation["end"]
+                trunc_chrom = truncation["chromosome"]
 
-                    # Skip if chromosomes don't match
-                    if transcript_chromosome != trunc_chrom:
-                        continue
+                # Create truncation ID
+                truncation_id = f"trunc_{idx}"
+                if "start_codon" in truncation and not pd.isna(
+                    truncation["start_codon"]
+                ):
+                    truncation_id = (
+                        f"trunc_{truncation['start_codon']}_{trunc_start}_{trunc_end}"
+                    )
 
-                    # Check for overlap
-                    if not (
-                        transcript_end < trunc_start or transcript_start > trunc_end
-                    ):
-                        # Create an entry for this transcript-truncation pair
-                        truncation_id = f"trunc_{idx}"
-
-                        # If we have more identifiable information about the truncation, use it
-                        if "start_codon" in truncation and not pd.isna(
-                            truncation["start_codon"]
-                        ):
-                            truncation_id = f"trunc_{truncation['start_codon']}_{trunc_start}_{trunc_end}"
-
-                        transcript_truncation_pairs.append(
-                            {
-                                "transcript_id": transcript_id,
-                                "truncation_id": truncation_id,
-                                "truncation_idx": idx,
-                                "transcript_start": transcript_start,
-                                "transcript_end": transcript_end,
-                                "transcript_strand": transcript_strand,
-                                "truncation_start": trunc_start,
-                                "truncation_end": trunc_end,
-                            }
-                        )
+                # Create the transcript-truncation pair (no overlap check needed - BED file already assigns)
+                transcript_truncation_pairs.append(
+                    {
+                        "transcript_id": truncation_transcript_id,
+                        "truncation_id": truncation_id,
+                        "truncation_idx": idx,
+                        "transcript_start": transcript_start,
+                        "transcript_end": transcript_end,
+                        "transcript_strand": transcript_strand,
+                        "truncation_start": trunc_start,
+                        "truncation_end": trunc_end,
+                    }
+                )
 
             if not transcript_truncation_pairs:
-                print(f"\r  ├─ No transcripts overlap with truncation regions")
+                print(
+                    f"\r  ├─ No valid transcript-truncation pairs from BED assignments"
+                )
                 return {
                     "gene_name": gene_name,
-                    "status": "no_overlapping_transcripts",
+                    "status": "no_valid_pairs",
                     "error": None,
                 }
 
             print(
-                f"\r  ├─ Found {len(transcript_truncation_pairs)} transcript-truncation pairs across {len(transcript_info)} transcripts"
+                f"\r  ├─ Created {len(transcript_truncation_pairs)} transcript-truncation pairs from BED assignments"
             )
 
             # Get the list of desired impact types for each source
