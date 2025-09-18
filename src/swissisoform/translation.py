@@ -568,60 +568,247 @@ class AlternativeProteinGenerator:
 
     # ===== MUTATION INTEGRATION METHODS =====
 
-    def _parse_hgvs_to_alleles(self, hgvsc: str) -> Tuple[Optional[str], Optional[str]]:
-        """Parse HGVS coding notation to extract reference and alternate alleles."""
+    def _is_single_bp_substitution(self, hgvsc: str) -> bool:
+        """Check if HGVS represents a single BP substitution we want to process.
+
+        Args:
+            hgvsc: HGVS coding notation (e.g., c.76C>T, c.-25G>A)
+
+        Returns:
+            True if this is a single BP substitution pattern
+        """
         if not hgvsc or pd.isna(hgvsc) or str(hgvsc) == "nan":
-            return None, None
+            return False
 
         hgvsc = str(hgvsc).strip()
 
-        # Handle simple substitutions: c.76C>T, c.52C>T, etc.
-        if ">" in hgvsc:
-            try:
-                parts = hgvsc.split(">")
-                if len(parts) == 2:
-                    left_part = parts[0].strip()
-                    alt_allele = parts[1].strip()
+        # Match single BP substitution patterns: c.76C>T, c.-25G>A, etc.
+        # Accepts: c.123A>T, c.-45G>C
+        # Rejects: c.76delA, c.76_77insG, c.76_78delATC, c.76A>TG
+        pattern = r"^c\.-?\d+[ATCG]>[ATCG]$"
 
-                    # Extract reference allele: c.76C -> C
-                    match = re.search(r"[ATCG]$", left_part, re.IGNORECASE)
-                    if match:
-                        ref_allele = match.group(0).upper()
-                        alt_allele = alt_allele.upper()
-                        return ref_allele, alt_allele
-            except Exception as e:
-                self._debug_print(f"Error parsing substitution HGVS '{hgvsc}': {e}")
-                return None, None
+        return bool(re.match(pattern, hgvsc, re.IGNORECASE))
 
-        # Handle deletions, insertions, etc. (for future expansion)
-        elif "del" in hgvsc.lower():
-            self._debug_print(f"Deletion mutations not yet supported: {hgvsc}")
-            return None, None
-        elif "ins" in hgvsc.lower():
-            self._debug_print(f"Insertion mutations not yet supported: {hgvsc}")
-            return None, None
+    def _validate_single_bp_variant(self, mutation_row: pd.Series) -> bool:
+        """Validate if this mutation represents a single BP change we want to process.
 
-        self._debug_print(f"Could not parse HGVS notation: {hgvsc}")
-        return None, None
+        Args:
+            mutation_row: Row from mutations DataFrame
 
-    def _apply_mutation_to_canonical_sequence(
-        self, transcript_id: str, genomic_pos: int, ref_allele: str, alt_allele: str
-    ) -> Optional[str]:
-        """Apply mutation to canonical coding sequence using validated genomic position."""
+        Returns:
+            True if this variant should be processed
+        """
+        impact = mutation_row.get("impact", "")
+        hgvsc = mutation_row.get("hgvsc", "")
+
+        # Only process specific impact types
+        valid_impacts = ["missense variant", "5 prime UTR variant"]
+        if impact not in valid_impacts:
+            return False
+
+        # Validate single BP substitution pattern
+        if not self._is_single_bp_substitution(hgvsc):
+            return False
+
+        # Additional validation: ensure we have required columns
+        required_cols = ["position", "reference", "alternate"]
+        for col in required_cols:
+            if col not in mutation_row or pd.isna(mutation_row[col]):
+                return False
+
+        return True
+
+    def _deduplicate_mutations(self, mutations: pd.DataFrame) -> pd.DataFrame:
+        """Remove duplicate variants based on genomic position and alleles.
+
+        Args:
+            mutations: DataFrame with mutations
+
+        Returns:
+            Deduplicated DataFrame
+        """
+        if mutations.empty:
+            return mutations
+
+        # Define uniqueness criteria - genomic coordinates
+        unique_cols = ["position", "reference", "alternate"]
+
+        # Keep first occurrence
+        deduplicated = mutations.drop_duplicates(subset=unique_cols, keep="first")
+
+        if len(deduplicated) < len(mutations):
+            dropped_count = len(mutations) - len(deduplicated)
+            self._debug_print(f"Removed {dropped_count} duplicate variants")
+
+        return deduplicated
+
+    def _apply_mutation_to_sequence(
+        self,
+        transcript_id: str,
+        genomic_pos: int,
+        ref_allele: str,
+        alt_allele: str,
+        sequence_type: str = "canonical",
+        extension_feature: Optional[pd.Series] = None,
+    ) -> Optional[Dict]:
+        """Apply mutation to canonical or extension sequence.
+
+        Args:
+            transcript_id: Transcript ID to process
+            genomic_pos: Genomic position of mutation
+            ref_allele: Reference allele (genomic coordinates)
+            alt_allele: Alternate allele (genomic coordinates)
+            sequence_type: "canonical" or "extension"
+            extension_feature: Required if sequence_type is "extension"
+
+        Returns:
+            Dict with mutated sequence info or None if mutation failed/synonymous
+        """
         self._debug_print(
-            f"Applying mutation {ref_allele}>{alt_allele} at position {genomic_pos}"
+            f"Applying mutation {ref_allele}>{alt_allele} at position {genomic_pos} to {sequence_type} sequence"
         )
 
-        # Get the original canonical protein result
-        canonical_result = self.extract_canonical_protein(transcript_id)
-        if not canonical_result:
-            self._debug_print(f"Could not extract canonical protein")
+        # Get the base sequence and metadata
+        if sequence_type == "extension":
+            if extension_feature is None:
+                self._debug_print("Extension feature required for extension mutations")
+                return None
+            base_result = self.extract_alternative_protein(
+                transcript_id, extension_feature
+            )
+            if not base_result:
+                self._debug_print("Could not extract base extension protein")
+                return None
+        else:
+            base_result = self.extract_canonical_protein(transcript_id)
+            if not base_result:
+                self._debug_print("Could not extract base canonical protein")
+                return None
+
+        original_coding_sequence = base_result["coding_sequence"]
+        original_protein = base_result["protein"]
+        strand = base_result["strand"]
+
+        # Get transcript data for validation and mapping
+        transcript_data = self.genome.get_transcript_features_with_sequence(
+            transcript_id
+        )
+        if not transcript_data:
             return None
 
-        original_coding_sequence = canonical_result["coding_sequence"]
-        strand = canonical_result["strand"]
+        chromosome = transcript_data["sequence"]["chromosome"]
 
-        # Get transcript features to map genomic position to coding sequence position
+        # Validate reference allele at genomic position (forward strand)
+        try:
+            actual_genomic_base = self.genome.get_sequence(
+                chromosome, genomic_pos, genomic_pos, "+"
+            )
+            actual_genomic_base = str(actual_genomic_base).upper()
+        except Exception as e:
+            self._debug_print(f"Could not get sequence at position {genomic_pos}: {e}")
+            return None
+
+        if actual_genomic_base != ref_allele.upper():
+            self._debug_print(
+                f"Reference mismatch at {genomic_pos}: expected {ref_allele}, found {actual_genomic_base}"
+            )
+            return None
+
+        # Map genomic position to coding sequence position
+        mutation_coding_pos = self._map_genomic_to_coding_position(
+            transcript_id,
+            genomic_pos,
+            original_coding_sequence,
+            sequence_type,
+            extension_feature,
+        )
+
+        if mutation_coding_pos is None:
+            self._debug_print(
+                f"Could not map genomic position {genomic_pos} to coding sequence"
+            )
+            return None
+
+        # Validate coding position bounds
+        if mutation_coding_pos >= len(original_coding_sequence):
+            self._debug_print(
+                f"Coding position {mutation_coding_pos} beyond sequence length {len(original_coding_sequence)}"
+            )
+            return None
+
+        # Convert genomic alleles to transcript orientation
+        complement_map = {"A": "T", "T": "A", "G": "C", "C": "G"}
+        if strand == "+":
+            transcript_ref = ref_allele.upper()
+            transcript_alt = alt_allele.upper()
+        else:
+            transcript_ref = complement_map.get(ref_allele.upper(), ref_allele.upper())
+            transcript_alt = complement_map.get(alt_allele.upper(), alt_allele.upper())
+
+        # Validate reference in coding sequence
+        current_base = original_coding_sequence[mutation_coding_pos].upper()
+        if current_base != transcript_ref:
+            self._debug_print(
+                f"Reference mismatch in coding sequence at pos {mutation_coding_pos}: "
+                f"expected {transcript_ref} (from genomic {ref_allele}), found {current_base}"
+            )
+            return None
+
+        # Apply mutation in transcript orientation
+        mutated_coding_sequence = (
+            original_coding_sequence[:mutation_coding_pos]
+            + transcript_alt
+            + original_coding_sequence[mutation_coding_pos + 1 :]
+        )
+
+        # Translate mutated sequence
+        if len(mutated_coding_sequence) >= 3:
+            remainder = len(mutated_coding_sequence) % 3
+            if remainder > 0:
+                mutated_coding_sequence = mutated_coding_sequence[:-remainder]
+            mutated_protein = str(Seq(mutated_coding_sequence).translate())
+        else:
+            mutated_protein = ""
+
+        # Check if protein actually changed (filter synonymous mutations)
+        if mutated_protein == original_protein:
+            self._debug_print(f"Synonymous mutation - protein unchanged")
+            return None
+
+        # Calculate amino acid difference
+        aa_change = self._calculate_aa_difference(original_protein, mutated_protein)
+
+        self._debug_print(
+            f"Applied mutation {ref_allele}>{alt_allele} -> {transcript_ref}>{transcript_alt} "
+            f"at coding position {mutation_coding_pos}, AA change: {aa_change}"
+        )
+
+        return {
+            "coding_sequence": mutated_coding_sequence,
+            "protein": mutated_protein,
+            "strand": strand,
+            "transcript_id": transcript_id,
+            "sequence_type": sequence_type,
+            "mutation_position": genomic_pos,
+            "mutation_ref": ref_allele,
+            "mutation_alt": alt_allele,
+            "coding_position": mutation_coding_pos,
+            "aa_change": aa_change,
+            "protein_changed": True,
+        }
+
+    def _map_genomic_to_coding_position(
+        self,
+        transcript_id: str,
+        genomic_pos: int,
+        coding_sequence: str,
+        sequence_type: str,
+        extension_feature: Optional[pd.Series] = None,
+    ) -> Optional[int]:
+        """Map genomic position to position within coding sequence.
+
+        Handles both canonical and extension sequences.
+        """
         features = self.genome.get_transcript_features(transcript_id)
         transcript_data = self.genome.get_transcript_features_with_sequence(
             transcript_id
@@ -630,127 +817,147 @@ class AlternativeProteinGenerator:
         if not transcript_data:
             return None
 
-        chromosome = transcript_data["sequence"]["chromosome"]
+        strand = transcript_data["sequence"]["strand"]
 
-        # Validate reference allele at genomic position
-        actual_base = self.genome.get_sequence(
-            chromosome, genomic_pos, genomic_pos, "+"
-        )
-        actual_base = str(actual_base).upper()
-
-        # Convert HGVS alleles to genomic coordinates for validation
-        if strand == "-":
-            complement_map = {"A": "T", "T": "A", "G": "C", "C": "G"}
-            genomic_ref_allele = complement_map.get(ref_allele, ref_allele)
-            genomic_alt_allele = complement_map.get(alt_allele, alt_allele)
-        else:
-            genomic_ref_allele = ref_allele
-            genomic_alt_allele = alt_allele
-
-        if actual_base != genomic_ref_allele.upper():
-            self._debug_print(
-                f"Reference mismatch at {genomic_pos}: expected {genomic_ref_allele}, found {actual_base}"
-            )
-            return None
-
-        # Map genomic position to coding sequence position
+        # Get start codon information
         start_codons = features[features["feature_type"] == "start_codon"]
         if start_codons.empty:
+            self._debug_print("No start codon found")
             return None
 
-        start_codon_start = start_codons.iloc[0]["start"]
-        cds_regions = features[features["feature_type"] == "CDS"].copy()
+        canonical_start_codon_start = start_codons.iloc[0]["start"]
+        canonical_start_codon_end = start_codons.iloc[0]["end"]
 
+        # For extension sequences, account for extension region
+        if sequence_type == "extension" and extension_feature is not None:
+            extension_start = extension_feature["start"]
+            extension_end = extension_feature["end"]
+
+            # Check if mutation is in extension region
+            if extension_start <= genomic_pos <= extension_end:
+                # Map position within extension region
+                if strand == "+":
+                    extension_region_start = extension_start
+                    extension_region_end = canonical_start_codon_start - 1
+                    if extension_region_start <= genomic_pos <= extension_region_end:
+                        return genomic_pos - extension_region_start
+                else:
+                    extension_region_start = canonical_start_codon_end + 1
+                    extension_region_end = extension_end
+                    if extension_region_start <= genomic_pos <= extension_region_end:
+                        return extension_region_end - genomic_pos
+
+        # For canonical region or extension mutations in CDS region
+        return self._map_genomic_to_cds_position(
+            transcript_id, genomic_pos, sequence_type, extension_feature
+        )
+
+    def _map_genomic_to_cds_position(
+        self,
+        transcript_id: str,
+        genomic_pos: int,
+        sequence_type: str,
+        extension_feature: Optional[pd.Series] = None,
+    ) -> Optional[int]:
+        """Map genomic position to CDS position, accounting for any extension offset."""
+        features = self.genome.get_transcript_features(transcript_id)
+        transcript_data = self.genome.get_transcript_features_with_sequence(
+            transcript_id
+        )
+
+        strand = transcript_data["sequence"]["strand"]
+
+        start_codons = features[features["feature_type"] == "start_codon"]
+        canonical_start_codon_start = start_codons.iloc[0]["start"]
+        canonical_start_codon_end = start_codons.iloc[0]["end"]
+
+        # Get CDS regions
+        cds_regions = features[features["feature_type"] == "CDS"].copy()
         if cds_regions.empty:
             return None
 
-        # Sort CDS regions
+        # Sort CDS regions according to transcript direction
         if strand == "+":
             cds_regions = cds_regions.sort_values("start")
         else:
             cds_regions = cds_regions.sort_values("start", ascending=False)
 
-        # Find which CDS contains our mutation and the position within the coding sequence
+        # Calculate offset for extension sequences
+        extension_offset = 0
+        if sequence_type == "extension" and extension_feature is not None:
+            extension_start = extension_feature["start"]
+            extension_end = extension_feature["end"]
+
+            if strand == "+":
+                extension_region_end = canonical_start_codon_start - 1
+                extension_offset = extension_region_end - extension_start + 1
+            else:
+                extension_region_start = canonical_start_codon_end + 1
+                extension_offset = extension_end - extension_region_start + 1
+
+        # Find position within CDS regions
         coding_pos = 0
-        found_position = False
 
         for _, cds in cds_regions.iterrows():
-            if cds["start"] <= genomic_pos <= cds["end"]:
-                # Found the CDS containing our mutation
+            cds_start = int(cds["start"])
+            cds_end = int(cds["end"])
+
+            # Check if mutation falls within this CDS
+            if cds_start <= genomic_pos <= cds_end:
                 if strand == "+":
-                    # For positive strand
-                    if (
-                        cds["start"] >= start_codon_start
-                    ):  # Only count CDS after start codon
-                        offset_in_cds = genomic_pos - cds["start"]
-                        final_coding_pos = coding_pos + offset_in_cds
-                        found_position = True
-                        break
+                    offset_in_cds = genomic_pos - cds_start
                 else:
-                    # For negative strand
-                    offset_from_end = cds["end"] - genomic_pos
-                    final_coding_pos = coding_pos + offset_from_end
-                    found_position = True
-                    break
+                    offset_in_cds = cds_end - genomic_pos
 
-            # Add length of this CDS to coding position counter
+                return extension_offset + coding_pos + offset_in_cds
+
+            # Add this CDS length to running total (only coding portions)
             if strand == "+":
-                if cds["end"] >= start_codon_start:
-                    if cds["start"] < start_codon_start:
-                        coding_pos += cds["end"] - start_codon_start + 1
+                if cds_end >= canonical_start_codon_start:
+                    if cds_start < canonical_start_codon_start:
+                        coding_pos += cds_end - canonical_start_codon_start + 1
                     else:
-                        coding_pos += cds["end"] - cds["start"] + 1
+                        coding_pos += cds_end - cds_start + 1
             else:
-                coding_pos += cds["end"] - cds["start"] + 1
+                if cds_start <= canonical_start_codon_end:
+                    if cds_end > canonical_start_codon_end:
+                        coding_pos += canonical_start_codon_end - cds_start + 1
+                    else:
+                        coding_pos += cds_end - cds_start + 1
 
-        if not found_position:
-            self._debug_print(
-                f"Could not map genomic position {genomic_pos} to coding sequence position"
-            )
-            return None
-
-        self._debug_print(
-            f"Mapped genomic position {genomic_pos} to coding position {final_coding_pos}"
-        )
-
-        # Apply the mutation to the coding sequence
-        if final_coding_pos >= len(original_coding_sequence):
-            self._debug_print(
-                f"Coding position {final_coding_pos} is beyond sequence length {len(original_coding_sequence)}"
-            )
-            return None
-
-        # Verify the reference matches what we expect in the coding sequence
-        current_base = original_coding_sequence[final_coding_pos]
-
-        if current_base.upper() != ref_allele.upper():
-            self._debug_print(
-                f"Reference mismatch in coding sequence at pos {final_coding_pos}: expected {ref_allele}, found {current_base}"
-            )
-            return None
-
-        # Apply the mutation
-        mutated_coding_sequence = (
-            original_coding_sequence[:final_coding_pos]
-            + alt_allele.upper()
-            + original_coding_sequence[final_coding_pos + 1 :]
-        )
-
-        self._debug_print(
-            f"Applied mutation {ref_allele}>{alt_allele} at coding position {final_coding_pos}"
-        )
-
-        return mutated_coding_sequence
+        return None
 
     async def _get_mutations_in_region(
-        self, gene_name: str, start: int, end: int, impact_types: List[str] = None
+        self,
+        gene_name: str,
+        start: int,
+        end: int,
+        sources: List[str] = None,
+        impact_types: List[str] = None,
     ) -> pd.DataFrame:
-        """Get mutations within a specific genomic region."""
+        """Get filtered, deduplicated single BP mutations within a specific genomic region.
+
+        Args:
+            gene_name: Gene name
+            start: Region start position
+            end: Region end position
+            sources: List of mutation sources to include (e.g., ["clinvar", "gnomad"])
+            impact_types: List of impact types to include
+
+        Returns:
+            Filtered and deduplicated DataFrame of mutations
+        """
         self._debug_print(f"Fetching mutations for {gene_name} in region {start}-{end}")
 
         if not self.mutation_handler:
             self._debug_print("No mutation handler available")
             return pd.DataFrame()
+
+        # Set defaults
+        if sources is None:
+            sources = ["clinvar"]
+        if impact_types is None:
+            impact_types = ["missense variant", "5 prime UTR variant"]
 
         # Create region features for mutation handler
         region_features = pd.DataFrame(
@@ -764,24 +971,36 @@ class AlternativeProteinGenerator:
             ]
         )
 
-        # Get mutations in this region
+        # Get mutations in this region from specified sources
         mutations = await self.mutation_handler.get_visualization_ready_mutations(
-            gene_name=gene_name, alt_features=region_features, sources=["clinvar"]
+            gene_name=gene_name, alt_features=region_features, sources=sources
         )
 
         if mutations is None or mutations.empty:
             self._debug_print(f"No mutations found in region")
             return pd.DataFrame()
 
-        # Filter to only missense variants for now
-        mutations = mutations[mutations["impact"] == "missense variant"].copy()
-        # Filter by impact types if specified (but only missense variants will remain)
-        if impact_types:
-            mutations = mutations[mutations["impact"].isin(impact_types)]
+        # Filter to user-specified impact types
+        mutations = mutations[mutations["impact"].isin(impact_types)].copy()
 
-        self._debug_print(
-            f"Class is only equipped to handle missense variants, temporarily."
-        )
+        if mutations.empty:
+            self._debug_print(
+                f"No mutations with specified impact types: {impact_types}"
+            )
+            return pd.DataFrame()
+
+        # Filter to only single BP changes using validation
+        valid_mask = mutations.apply(self._validate_single_bp_variant, axis=1)
+        mutations = mutations[valid_mask].copy()
+
+        if mutations.empty:
+            self._debug_print(f"No valid single BP variants found")
+            return pd.DataFrame()
+
+        # Deduplicate by genomic coordinates
+        mutations = self._deduplicate_mutations(mutations)
+
+        self._debug_print(f"Found {len(mutations)} unique single BP variants")
         return mutations
 
     def _calculate_aa_difference(
@@ -821,6 +1040,7 @@ class AlternativeProteinGenerator:
         self,
         gene_name: str,
         include_mutations: bool = True,
+        sources: List[str] = None,
         impact_types: List[str] = None,
     ) -> Optional[List[Dict]]:
         """Extract proteins for all alternative features with optional mutation integration.
@@ -828,14 +1048,20 @@ class AlternativeProteinGenerator:
         Args:
             gene_name: Name of the gene
             include_mutations: Whether to include mutation variants
+            sources: List of mutation sources to include (e.g., ["clinvar", "gnomad"])
             impact_types: Mutation impact types to include
-
         Returns:
             List of enhanced protein pair dictionaries
         """
         self._debug_print(
             f"Processing gene {gene_name} with mutations={include_mutations}"
         )
+
+        # Set defaults
+        if sources is None:
+            sources = ["clinvar"]
+        if impact_types is None:
+            impact_types = ["missense variant", "5 prime UTR variant"]
 
         # Get base pairs using the simplified logic
         base_pairs = self.extract_gene_proteins(gene_name)
@@ -844,7 +1070,6 @@ class AlternativeProteinGenerator:
             return None
 
         enhanced_pairs = []
-
         for pair in base_pairs:
             enhanced_pair = {
                 "gene_name": gene_name,
@@ -863,6 +1088,7 @@ class AlternativeProteinGenerator:
                     gene_name,
                     feature_info["start"],
                     feature_info["end"],
+                    sources,
                     impact_types,
                 )
 
@@ -871,51 +1097,63 @@ class AlternativeProteinGenerator:
                         f"Found {len(mutations)} mutations in alternative region"
                     )
 
-                    # Generate mutation variants applied to canonical sequence
+                    # Process each mutation
                     for _, mutation in mutations.iterrows():
                         try:
-                            # Parse mutation
+                            # Extract mutation data
                             genomic_pos = int(mutation["position"])
+                            ref_allele = str(mutation["reference"]).upper()
+                            alt_allele = str(mutation["alternate"]).upper()
+                            impact = mutation.get("impact", "")
                             hgvsc = str(mutation.get("hgvsc", ""))
                             hgvsp = str(mutation.get("hgvsp", ""))
 
-                            # Parse HGVS to get alleles
-                            ref_allele, alt_allele = self._parse_hgvs_to_alleles(hgvsc)
-                            if not ref_allele or not alt_allele:
-                                continue
+                            # Determine sequence type based on impact and region
+                            sequence_type = "canonical"
+                            extension_feature = None
 
-                            # Apply mutation to canonical sequence
-                            mutated_coding_sequence = (
-                                self._apply_mutation_to_canonical_sequence(
-                                    pair["transcript_id"],
-                                    genomic_pos,
-                                    ref_allele,
-                                    alt_allele,
-                                )
+                            if (
+                                impact == "5 prime UTR variant"
+                                and pair["region_type"] == "extension"
+                            ):
+                                sequence_type = "extension"
+                                extension_feature = pd.Series(feature_info)
+
+                            # Apply mutation using unified method
+                            mutation_result_data = self._apply_mutation_to_sequence(
+                                pair["transcript_id"],
+                                genomic_pos,
+                                ref_allele,
+                                alt_allele,
+                                sequence_type,
+                                extension_feature,
                             )
 
-                            if mutated_coding_sequence:
-                                # Translate mutated sequence
-                                if len(mutated_coding_sequence) >= 3:
-                                    mutated_protein = str(
-                                        Seq(mutated_coding_sequence).translate()
-                                    )
-                                else:
-                                    mutated_protein = ""
+                            if mutation_result_data:
+                                # The unified method already filtered out synonymous mutations
+                                # and calculated aa_change
+
+                                variant_type = f"{sequence_type}_mutated"
 
                                 mutation_result = {
-                                    "coding_sequence": mutated_coding_sequence,
-                                    "protein": mutated_protein,
+                                    "coding_sequence": mutation_result_data[
+                                        "coding_sequence"
+                                    ],
+                                    "protein": mutation_result_data["protein"],
                                     "transcript_id": pair["transcript_id"],
+                                    "variant_type": variant_type,
                                     "mutation": {
                                         "position": genomic_pos,
                                         "reference": ref_allele,
                                         "alternate": alt_allele,
                                         "hgvsc": hgvsc,
                                         "hgvsp": hgvsp,
-                                        "impact": mutation.get("impact", ""),
+                                        "impact": impact,
                                         "variant_id": mutation.get("variant_id", ""),
                                         "source": mutation.get("source", ""),
+                                        "calculated_aa_change": mutation_result_data.get(
+                                            "aa_change", ""
+                                        ),
                                     },
                                 }
 
@@ -923,12 +1161,18 @@ class AlternativeProteinGenerator:
                                     mutation_result
                                 )
                                 self._debug_print(
-                                    f"Successfully created mutation variant"
+                                    f"Successfully created {sequence_type} mutation variant with AA change: {mutation_result_data.get('aa_change', 'N/A')}"
+                                )
+                            else:
+                                self._debug_print(
+                                    f"Mutation at {genomic_pos} did not result in protein change (synonymous or failed)"
                                 )
 
                         except Exception as e:
                             self._debug_print(f"Error creating mutation variant: {e}")
                             continue
+                else:
+                    self._debug_print("No valid mutations found in this region")
 
             enhanced_pairs.append(enhanced_pair)
 

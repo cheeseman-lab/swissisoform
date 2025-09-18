@@ -538,6 +538,19 @@ class MutationHandler:
         variant_info["cdna_change"] = var_set.get("cdna_change", "")
         variant_info["canonical_spdi"] = var_set.get("canonical_spdi", "")
 
+        # Extract genomic alleles from canonical_spdi
+        canonical_spdi = var_set.get("canonical_spdi", "")
+        if canonical_spdi:
+            spdi_parts = canonical_spdi.split(":")
+            if len(spdi_parts) == 4:
+                # SPDI format: sequence:position:deletion:insertion
+                variant_info["ref_allele"] = spdi_parts[
+                    2
+                ]  # deletion (reference allele)
+                variant_info["alt_allele"] = spdi_parts[
+                    3
+                ]  # insertion (alternate allele)
+
         # Extract location from GRCh38
         locations = var_set.get("variation_loc", [])
         for loc in locations:
@@ -1199,24 +1212,12 @@ class MutationHandler:
             axis=1,
         )
 
-        # Extract ref/alt from HGVS since ClinVar doesn't provide them directly
-        def get_reference(row):
-            hgvs_ref, _ = self._extract_ref_alt_from_hgvs(row.get("cdna_change", ""))
-            return hgvs_ref
-
-        def get_alternate(row):
-            _, hgvs_alt = self._extract_ref_alt_from_hgvs(row.get("cdna_change", ""))
-            return hgvs_alt
-
-        variants_df["extracted_ref"] = variants_df.apply(get_reference, axis=1)
-        variants_df["extracted_alt"] = variants_df.apply(get_alternate, axis=1)
-
         return pd.DataFrame(
             {
                 "position": variants_df["start"],
                 "variant_id": variants_df["accession"],
-                "reference": variants_df["extracted_ref"],
-                "alternate": variants_df["extracted_alt"],
+                "reference": variants_df["ref_allele"],
+                "alternate": variants_df["alt_allele"],
                 "source": "ClinVar",
                 "impact": variants_df["standardized_impact"],
                 "hgvsc": variants_df["standardized_hgvsc"],
