@@ -3,8 +3,6 @@
 This module provides functionality for loading and processing alternative
 start sites from BED format files, calculating truncation/extension regions,
 and supporting efficiency-based filtering.
-
-Expects BED name fields in format: GENE_ENSEMBL_TYPE_CODON_EFFICIENCY
 """
 
 import pandas as pd
@@ -26,13 +24,21 @@ class AlternativeIsoform:
     - Generate features for visualization and downstream analysis
     """
 
-    def __init__(self, debug=False):
-        """Initialize an empty start sites handler."""
+    def __init__(self, debug: bool = False):
+        """Initialize an empty start sites handler.
+
+        Args:
+            debug (bool): If True, enables debug printing.
+        """
         self.start_sites = pd.DataFrame()
         self.debug = debug
 
-    def _debug_print(self, message: str):
-        """Print debug message if debug mode is enabled."""
+    def _debug_print(self, message: str) -> None:
+        """Print debug message if debug mode is enabled.
+
+        Args:
+            message (str): Message to print.
+        """
         if self.debug:
             print(f"DEBUG: {message}")
 
@@ -44,7 +50,10 @@ class AlternativeIsoform:
         - 7 columns: chrom, start, end, name, score, strand, transcript_id
 
         Args:
-            file_path: Path to the BED file
+            file_path (str): Path to the BED file.
+
+        Raises:
+            ValueError: If the BED file is empty or has an unsupported format.
         """
         # Read BED format - auto-detect number of columns
         with open(file_path, "r") as f:
@@ -151,7 +160,10 @@ class AlternativeIsoform:
         """Check data quality for loaded start sites.
 
         Returns:
-            Dictionary with data quality statistics
+            Dict: Dictionary with data quality statistics, including counts and lists of genes with multiple or missing annotated starts, distant annotated starts, and start type distribution.
+
+        Raises:
+            ValueError: If no data is loaded.
         """
         if self.start_sites.empty:
             raise ValueError("No data loaded. Please load data first with load_bed().")
@@ -289,10 +301,13 @@ class AlternativeIsoform:
         """Get all start sites for a specific gene.
 
         Args:
-            gene_name: Name of the gene
+            gene_name (str): Name of the gene.
 
         Returns:
-            DataFrame of start sites for the gene
+            pd.DataFrame: DataFrame of start sites for the gene, sorted by start position.
+
+        Raises:
+            ValueError: If no data is loaded.
         """
         if self.start_sites.empty:
             raise ValueError("No data loaded. Please load data first with load_bed().")
@@ -310,11 +325,11 @@ class AlternativeIsoform:
         - N alternative starts (truncated/extended for that transcript)
 
         Args:
-            gene_name: Name of the gene
-            top_n_per_type_per_transcript: If specified, keep top N most efficient per TYPE per transcript
+            gene_name (str): Name of the gene.
+            top_n_per_type_per_transcript (Optional[int]): If specified, keep top N most efficient per TYPE per transcript.
 
         Returns:
-            DataFrame containing regions with transcript-specific canonical starts
+            pd.DataFrame: DataFrame containing regions with transcript-specific canonical starts.
         """
         gene_sites = self.get_gene_start_sites(gene_name)
         if gene_sites.empty:
@@ -524,8 +539,11 @@ class AlternativeIsoform:
     def get_transcript_groups(self, gene_name: str) -> Dict[str, Dict]:
         """Get summary of transcript groups for a gene.
 
+        Args:
+            gene_name (str): Name of the gene.
+
         Returns:
-            Dictionary mapping transcript_id to group info
+            Dict[str, Dict]: Dictionary mapping transcript_id to group info, including counts and efficiency ranges.
         """
         gene_sites = self.get_gene_start_sites(gene_name)
 
@@ -573,13 +591,16 @@ class AlternativeIsoform:
         """Get features formatted for visualization, including both truncations and extensions.
 
         Args:
-            gene_name: Name of the gene to get features for
-            top_n_per_type_per_transcript: If specified, keep top N most efficient per TYPE (Truncated/Extended separately)
-            include_extensions: Whether to include extension regions
-            include_truncations: Whether to include truncation regions
+            gene_name (str): Name of the gene to get features for.
+            top_n_per_type_per_transcript (Optional[int]): If specified, keep top N most efficient per TYPE (Truncated/Extended separately).
+            include_extensions (bool): Whether to include extension regions.
+            include_truncations (bool): Whether to include truncation regions.
 
         Returns:
-            DataFrame: Features formatted for visualization
+            pd.DataFrame: Features formatted for visualization.
+
+        Raises:
+            ValueError: If no data is loaded.
         """
         if self.start_sites.empty:
             raise ValueError("No data loaded. Please load data first with load_bed().")
@@ -639,7 +660,10 @@ class AlternativeIsoform:
         """Get list of all genes in the dataset.
 
         Returns:
-            List of gene names
+            List[str]: List of gene names.
+
+        Raises:
+            ValueError: If no data is loaded.
         """
         if self.start_sites.empty:
             raise ValueError("No data loaded. Please load data first with load_bed().")
@@ -650,7 +674,10 @@ class AlternativeIsoform:
         """Get basic statistics about the loaded start sites.
 
         Returns:
-            Dictionary containing various statistics
+            Dict: Dictionary containing various statistics such as total start sites, unique genes, chromosomes, start types, start codons, and efficiency stats.
+
+        Raises:
+            ValueError: If no data is loaded.
         """
         if self.start_sites.empty:
             raise ValueError("No data loaded. Please load data first with load_bed().")
@@ -674,10 +701,19 @@ class AlternativeIsoform:
     def filter_by_efficiency(
         self,
         min_efficiency: Optional[float] = None,
-        top_n_per_gene: Optional[int] = None,  # Back to per gene
-        top_n_per_type: Optional[int] = None,  # Per type (Truncated/Extended) per gene
+        top_n_per_gene: Optional[int] = None,
+        top_n_per_type: Optional[int] = None,
     ) -> "AlternativeIsoform":
-        """Filter with gene-level efficiency logic."""
+        """Filter start sites with gene-level efficiency logic.
+
+        Args:
+            min_efficiency (Optional[float]): Minimum efficiency threshold to filter start sites.
+            top_n_per_gene (Optional[int]): Keep top N alternatives per gene (all annotated retained).
+            top_n_per_type (Optional[int]): Keep top N truncated and top N extended per gene.
+
+        Returns:
+            AlternativeIsoform: New instance containing filtered start sites.
+        """
         filtered_data = self.start_sites.copy()
 
         if min_efficiency is not None:

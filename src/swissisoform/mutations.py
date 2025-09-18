@@ -7,12 +7,11 @@ analyzing mutation data from various sources including gnomAD and ClinVar.
 from gql import gql, Client
 from gql.transport.aiohttp import AIOHTTPTransport
 import pandas as pd
-from typing import Dict, Optional, List, Any, Set
+from typing import Dict, Optional, List
 import requests
 import json
 import asyncio
 import logging
-from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -31,7 +30,10 @@ class MutationHandler:
         """Initialize the mutation handler with API endpoints.
 
         Args:
-            api_key: Optional API key for NCBI E-utilities
+            api_key (Optional[str]): Optional API key for NCBI E-utilities.
+
+        Returns:
+            None
         """
         self._setup_gnomad_client()
         self._setup_clinvar_endpoints(api_key)
@@ -39,14 +41,28 @@ class MutationHandler:
         self.cached_data = {}
 
     def _setup_gnomad_client(self):
-        """Initialize gnomAD GraphQL client."""
+        """Get processed variant data from gnomAD.
+
+        Args:
+            gene_name (str): Gene symbol to query.
+
+        Returns:
+            pd.DataFrame: DataFrame of gnomAD variants.
+        """
         transport = AIOHTTPTransport(url="https://gnomad.broadinstitute.org/api")
         self.gnomad_client = Client(
             transport=transport, fetch_schema_from_transport=True
         )
 
     def _setup_clinvar_endpoints(self, api_key: str):
-        """Initialize ClinVar endpoints and API key."""
+        """Set up ClinVar API endpoint URLs and store the API key.
+
+        Args:
+            api_key (str): API key for NCBI E-utilities.
+
+        Returns:
+            None
+        """
         self.clinvar_base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
         self.clinvar_endpoints = {
             "esearch": f"{self.clinvar_base}/esearch.fcgi",
@@ -57,7 +73,18 @@ class MutationHandler:
         self.api_key = api_key
 
     def _setup_mutation_categories(self):
-        """Initialize mutation impact categories mapping."""
+        """Fetch variant data from gnomAD API for a specific gene using GraphQL.
+
+        Args:
+            gene_name (str): Gene symbol (e.g., 'BRCA1').
+            reference_genome (str): Reference genome version (default: 'GRCh38').
+
+        Returns:
+            Dict: Processed gnomAD data for the gene.
+
+        Raises:
+            ConnectionError: If the API request fails.
+        """
         self.mutation_categories = {
             "missense": ["missense", "missense_variant", "missense variant"],
             "synonymous": ["synonymous", "synonymous_variant", "synonymous variant"],
@@ -255,12 +282,12 @@ class MutationHandler:
         """Process gnomAD variant data into a pandas DataFrame.
 
         Args:
-            data: Raw gnomAD API response
-            filter_field: Field to filter on (e.g., 'consequence')
-            filter_value: Value to filter for (e.g., '5_prime_UTR_variant')
+            data (Dict): Raw gnomAD API response.
+            filter_field (Optional[str]): Field to filter on.
+            filter_value (Optional[str]): Value to filter for.
 
         Returns:
-            DataFrame of processed variant data
+            pd.DataFrame: DataFrame of processed variant data.
         """
         if not self._validate_gnomad_data(data):
             return pd.DataFrame()
@@ -340,10 +367,10 @@ class MutationHandler:
         """Get all ClinVar variants for a gene.
 
         Args:
-            gene_name: Gene symbol (e.g., 'BRCA1')
+            gene_name (str): Gene symbol (e.g., 'BRCA1').
 
         Returns:
-            DataFrame of processed ClinVar variant data
+            pd.DataFrame: DataFrame of processed ClinVar variant data.
         """
         cache_key = f"clinvar_{gene_name}"
         if cache_key in self.cached_data:
@@ -572,10 +599,10 @@ class MutationHandler:
         """Get comprehensive summary statistics for ClinVar variants.
 
         Args:
-            gene_name: Gene symbol
+            gene_name (str): Gene symbol.
 
         Returns:
-            Dictionary of summary statistics
+            Dict: Dictionary of summary statistics.
         """
         variants_df = await self.get_clinvar_variants(gene_name)
 
@@ -698,10 +725,10 @@ class MutationHandler:
         """Get COSMIC variants for a gene using the downloaded TSV/Parquet database.
 
         Args:
-            gene_name: Gene symbol (e.g., 'BRCA1')
+            gene_name (str): Gene symbol (e.g., 'BRCA1').
 
         Returns:
-            DataFrame of processed COSMIC variants
+            pd.DataFrame: DataFrame of processed COSMIC variants.
         """
         cache_key = f"cosmic_{gene_name}"
         if cache_key in self.cached_data:
@@ -841,7 +868,14 @@ class MutationHandler:
         return filtered_table.to_pandas()
 
     async def get_cosmic_summary(self, gene_name: str) -> Dict:
-        """Get summary statistics for COSMIC variants."""
+        """Get summary statistics for COSMIC variants.
+
+        Args:
+            gene_name (str): Gene symbol.
+
+        Returns:
+            Dict: Dictionary of summary statistics.
+        """
         cosmic_df = await self.get_cosmic_variants(gene_name)
 
         if not cosmic_df.empty:
@@ -893,11 +927,11 @@ class MutationHandler:
         """Get variants from a custom user-provided parquet file.
 
         Args:
-            parquet_path: Path to custom mutation parquet file
-            gene_name: Optional gene name to filter by
+            parquet_path (str): Path to custom mutation parquet file.
+            gene_name (str, optional): Optional gene name to filter by.
 
         Returns:
-            DataFrame of custom variants (already in standardized format)
+            pd.DataFrame: DataFrame of custom variants (already in standardized format).
         """
         cache_key = f"custom_{parquet_path}_{gene_name}"
         if cache_key in self.cached_data:
@@ -1133,11 +1167,11 @@ class MutationHandler:
         """Standardize mutation data from different sources into a consistent format.
 
         Args:
-            variants_df: Raw variants DataFrame from any source
-            source: Source of the data ('gnomad', 'clinvar', or 'cosmic')
+            variants_df (pd.DataFrame): Raw variants DataFrame from any source.
+            source (str): Source of the data ('gnomad', 'clinvar', or 'cosmic').
 
         Returns:
-            Standardized mutation data
+            pd.DataFrame: Standardized mutation data.
         """
         if variants_df.empty:
             return self._get_empty_standardized_df()
@@ -1448,14 +1482,14 @@ class MutationHandler:
         """Get mutation data from specified sources in a format ready for visualization.
 
         Args:
-            gene_name: Name of the gene
-            alt_features: DataFrame containing alternative isoform features
-            sources: List of mutation sources to query
-            custom_parquet_path: Path to custom parquet file (if using 'custom' source)
-            verbose: Whether to print detailed information
+            gene_name (str): Name of the gene.
+            alt_features (Optional[pd.DataFrame]): DataFrame containing alternative isoform features.
+            sources (Optional[List[str]]): List of mutation sources to query.
+            custom_parquet_path (Optional[str]): Path to custom parquet file (if using 'custom' source).
+            verbose (bool): Whether to print detailed information.
 
         Returns:
-            DataFrame containing mutations ready for visualization
+            pd.DataFrame: DataFrame containing mutations ready for visualization.
         """
         if sources is None:
             sources = ["gnomad", "clinvar", "cosmic"]
@@ -1597,6 +1631,7 @@ class MutationHandler:
         impact_types: Optional[Dict[str, List[str]]] = None,
         custom_parquet_path: Optional[str] = None,
         sources: Optional[List[str]] = None,
+        top_n_per_type_per_transcript: Optional[int] = 1,
     ) -> Dict:
         """Comprehensive mutation analysis for a gene with transcript-truncation pairs.
 
@@ -1604,22 +1639,25 @@ class MutationHandler:
         analyze_truncations.py but within the MutationHandler class.
 
         Args:
-            gene_name: Name of the gene to analyze
-            genome_handler: Initialized GenomeHandler instance
-            alt_isoform_handler: Initialized AlternativeIsoform instance
-            output_dir: Directory to save output files
-            visualize: Whether to generate visualizations
-            impact_types: Dict mapping sources to impact types to filter by
-            custom_parquet_path: Path to custom parquet file (if using 'custom' source)
-            sources: Data sources to pull mutations from
+            gene_name (str): Name of the gene to analyze.
+            genome_handler (GenomeHandler): Initialized GenomeHandler instance.
+            alt_isoform_handler (AlternativeIsoform): Initialized AlternativeIsoform instance.
+            output_dir (str): Directory to save output files.
+            visualize (bool): Whether to generate visualizations.
+            impact_types (Optional[Dict[str, List[str]]]): Dict mapping sources to impact types to filter by.
+            custom_parquet_path (Optional[str]): Path to custom parquet file (if using 'custom' source).
+            sources (Optional[List[str]]): Data sources to pull mutations from.
+            top_n_per_type_per_transcript (Optional[int]): Top N features per type per transcript.
 
         Returns:
-            Dictionary containing comprehensive analysis results
+            Dict: Dictionary containing comprehensive analysis results.
         """
         try:
             # Get alternative isoform features
             print(f"  ├─ Getting alternative features...", end="", flush=True)
-            alt_features = alt_isoform_handler.get_visualization_features(gene_name)
+            alt_features = alt_isoform_handler.get_visualization_features(
+                gene_name, top_n_per_type_per_transcript
+            )
             if alt_features.empty:
                 print(f"\r  ├─ No alternative features found")
                 return {"gene_name": gene_name, "status": "no_features", "error": None}

@@ -1,10 +1,31 @@
 #!/usr/bin/env python3
 """Unified protein sequence generator with two modes: pairs and mutations.
 
-This script generates amino acid sequences from truncated transcript variants
+This script generates amino acid sequences from alternative transcript variants
 with two distinct modes:
-1. Pairs mode: Generate canonical + truncated protein sequence pairs
-2. Mutations mode: Generate canonical + truncated + mutated protein sequences
+
+Modes:
+    1. Pairs mode: Generate canonical + alternative protein sequence pairs.
+    2. Mutations mode: Generate canonical + alternative + mutated protein sequences.
+
+Arguments:
+    gene_list (str): Path to file containing gene names.
+    output_dir (str): Directory to save output files.
+    --genome (str): Path to genome FASTA file.
+    --annotation (str): Path to genome annotation GTF file.
+    --bed (str): Path to alternative isoform BED file.
+    --mutations (bool): Enable mutations mode.
+    --impact-types (List[str], optional): Mutation impact types to include (only used with --mutations).
+    --min-length (int): Minimum protein length to include.
+    --max-length (int): Maximum protein length to include.
+    --format (str): Output format: fasta, csv, or fasta,csv.
+    --top-n-per-type (int): Number of top alternative start sites to keep per type per transcript.
+
+Returns:
+    None
+
+Raises:
+    Exception: If any gene fails processing, error is printed and gene is skipped.
 """
 
 import asyncio
@@ -22,10 +43,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 from swissisoform.genome import GenomeHandler
 from swissisoform.alternative_isoforms import AlternativeIsoform
 from swissisoform.mutations import MutationHandler
-from swissisoform.translation import TruncatedProteinGenerator
+from swissisoform.translation import AlternativeProteinGenerator
 from swissisoform.utils import (
     parse_gene_list,
-    load_preferred_transcripts,
     print_translation_summary,
 )
 
@@ -42,27 +62,33 @@ async def main(
     genome_path: str,
     annotation_path: str,
     bed_path: str,
-    preferred_transcripts_path: Optional[str] = None,
     mutations_mode: bool = False,
     impact_types: List[str] = None,
     min_length: int = 10,
     max_length: int = 100000,
     output_format: str = "fasta,csv",
+    top_n_per_type: int = 1,
 ):
     """Main function to process genes for protein sequence generation.
 
     Args:
-        gene_list_path: Path to file containing gene names
-        output_dir: Directory to save output files
-        genome_path: Path to the genome FASTA file
-        annotation_path: Path to the genome annotation GTF file
-        bed_path: Path to the alternative isoform BED file
-        preferred_transcripts_path: Optional path to file with preferred transcript IDs
-        mutations_mode: If True, generate with mutations; if False, generate pairs only
-        impact_types: Mutation impact types to include (only used in mutations mode)
-        min_length: Minimum protein length to include
-        max_length: Maximum protein length to include
-        output_format: Format to save sequences ('fasta', 'csv', or 'fasta,csv')
+        gene_list_path (str): Path to file containing gene names.
+        output_dir (str): Directory to save output files.
+        genome_path (str): Path to the genome FASTA file.
+        annotation_path (str): Path to the genome annotation GTF file.
+        bed_path (str): Path to the alternative isoform BED file.
+        mutations_mode (bool): If True, generate with mutations; if False, generate pairs only.
+        impact_types (Optional[List[str]]): Mutation impact types to include (only used in mutations mode).
+        min_length (int): Minimum protein length to include.
+        max_length (int): Maximum protein length to include.
+        output_format (str): Format to save sequences ('fasta', 'csv', or 'fasta,csv').
+        top_n_per_type (int): Number of top alternative start sites to keep per type per transcript.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: If any gene fails processing, error is printed and gene is skipped.
     """
     start_time = datetime.now()
     print(
@@ -89,20 +115,13 @@ async def main(
         mutation_handler = MutationHandler()
 
     print("  └─ Initializing protein generator...")
-    protein_generator = TruncatedProteinGenerator(
+    protein_generator = AlternativeProteinGenerator(
         genome_handler=genome,
         alt_isoform_handler=alt_isoforms,
         output_dir=output_dir,
         mutation_handler=mutation_handler,
         debug=False,
     )
-
-    # Load preferred transcripts if provided
-    preferred_transcripts = None
-    if preferred_transcripts_path:
-        print(f"\nLoading preferred transcripts from {preferred_transcripts_path}")
-        preferred_transcripts = load_preferred_transcripts(preferred_transcripts_path)
-        print(f"Loaded {len(preferred_transcripts)} preferred transcript IDs")
 
     # Set default impact types if not provided and mutations are requested
     if mutations_mode and impact_types is None:
@@ -122,11 +141,6 @@ async def main(
         print(f"  ├─ Impact types: {impact_types}")
     print(f"  └─ Output format: {output_format}")
 
-    if preferred_transcripts:
-        print(
-            f"Using {len(preferred_transcripts)} preferred transcripts when available"
-        )
-
     # Process genes with progress reporting
     successful_genes = 0
     failed_genes = []
@@ -137,7 +151,8 @@ async def main(
         try:
             # Test if gene has any data before full processing
             test_pairs = protein_generator.extract_gene_proteins(
-                gene_name, preferred_transcripts
+                gene_name,
+                top_n_per_type,
             )
             if not test_pairs:
                 print(f"  └─ ❌ No transcript-truncation pairs found")
@@ -167,7 +182,6 @@ async def main(
         dataset = (
             await protein_generator.create_protein_sequence_dataset_with_mutations(
                 gene_list=gene_names,
-                preferred_transcripts=preferred_transcripts,
                 include_mutations=True,
                 impact_types=impact_types,
                 output_format=output_format,
@@ -178,7 +192,6 @@ async def main(
     else:
         dataset = protein_generator.create_protein_sequence_dataset_pairs(
             gene_list=gene_names,
-            preferred_transcripts=preferred_transcripts,
             output_format=output_format,
             min_length=min_length,
             max_length=max_length,
@@ -225,11 +238,6 @@ if __name__ == "__main__":
         help="Path to alternative isoform BED file",
     )
     parser.add_argument(
-        "--preferred-transcripts",
-        default="../data/genome_data/hela_top_transcript.txt",
-        help="Path to file containing preferred transcript IDs",
-    )
-    parser.add_argument(
         "--mutations",
         action="store_true",
         help="Enable mutations mode (generate canonical + truncated + mutated sequences)",
@@ -257,6 +265,12 @@ if __name__ == "__main__":
         default="fasta,csv",
         help="Output format: fasta, csv, or fasta,csv",
     )
+    parser.add_argument(
+        "--top-n-per-type",
+        type=int,
+        default=1,
+        help="Number of top alternative start sites to keep per type (Truncated/Extended) per transcript",
+    )
 
     args = parser.parse_args()
 
@@ -271,11 +285,11 @@ if __name__ == "__main__":
             genome_path=args.genome,
             annotation_path=args.annotation,
             bed_path=args.bed,
-            preferred_transcripts_path=args.preferred_transcripts,
             mutations_mode=args.mutations,
             impact_types=args.impact_types,
             min_length=args.min_length,
             max_length=args.max_length,
             output_format=args.format,
+            top_n_per_type=args.top_n_per_type,
         )
     )

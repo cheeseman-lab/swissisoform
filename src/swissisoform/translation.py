@@ -25,6 +25,13 @@ class AlternativeProteinGenerator:
     This class facilitates the generation of protein sequences stemming from
     alternative start sites (both truncations and extensions) for downstream
     analysis and modeling, with optional mutation integration capabilities.
+
+    Attributes:
+        genome (GenomeHandler): Genome sequence and annotation handler.
+        alt_isoforms (AlternativeIsoform): Alternative isoform handler.
+        output_dir (Path): Directory to save output files.
+        mutation_handler (Optional[MutationHandler]): Handler for mutation integration.
+        debug (bool): Enable debug mode for detailed output.
     """
 
     def __init__(
@@ -38,11 +45,14 @@ class AlternativeProteinGenerator:
         """Initialize the AlternativeProteinGenerator.
 
         Args:
-            genome_handler: Initialized GenomeHandler instance
-            alt_isoform_handler: Initialized AlternativeIsoform instance
-            output_dir: Directory to save output files
-            mutation_handler: Optional MutationHandler for mutation integration
-            debug: Enable debug mode for detailed output
+            genome_handler (GenomeHandler): Initialized GenomeHandler instance.
+            alt_isoform_handler (AlternativeIsoform): Initialized AlternativeIsoform instance.
+            output_dir (str): Directory to save output files.
+            mutation_handler (Optional[MutationHandler]): Optional MutationHandler for mutation integration.
+            debug (bool): Enable debug mode for detailed output.
+
+        Returns:
+            None
         """
         self.genome = genome_handler
         self.alt_isoforms = alt_isoform_handler
@@ -52,7 +62,14 @@ class AlternativeProteinGenerator:
         self.debug = debug
 
     def _debug_print(self, message: str):
-        """Print debug message if debug mode is enabled."""
+        """Print debug message if debug mode is enabled.
+
+        Args:
+            message (str): Message to print.
+
+        Returns:
+            None
+        """
         if self.debug:
             print(f"DEBUG: {message}")
 
@@ -60,10 +77,10 @@ class AlternativeProteinGenerator:
         """Extract canonical (full) protein sequence using start/stop codon annotations.
 
         Args:
-            transcript_id: Transcript ID to process
+            transcript_id (str): Transcript ID to process.
 
         Returns:
-            Dict with coding_sequence, protein, and metadata or None if failed
+            Optional[Dict]: Dictionary with coding_sequence, protein, and metadata, or None if failed.
         """
         # Get features and transcript data
         features = self.genome.get_transcript_features(transcript_id)
@@ -168,11 +185,11 @@ class AlternativeProteinGenerator:
         Handles both truncations and extensions based on region_type.
 
         Args:
-            transcript_id: Transcript ID to process
-            alternative_feature: Series from get_visualization_features() containing region info
+            transcript_id (str): Transcript ID to process.
+            alternative_feature (pd.Series): Series from get_visualization_features() containing region info.
 
         Returns:
-            Dict with coding_sequence, protein, and metadata or None if failed
+            Optional[Dict]: Dictionary with coding_sequence, protein, and metadata, or None if failed.
         """
         region_type = alternative_feature.get("region_type", "unknown")
 
@@ -192,18 +209,16 @@ class AlternativeProteinGenerator:
         """Extract full extended protein sequence using hybrid approach.
 
         For extensions:
-        1. Get raw genomic sequence from extension start to canonical start (5'UTR portion)
-        2. Get CDS sequence from canonical start to stop codon
-        3. Concatenate and translate
-
-        This avoids translating introns/3'UTR while including the extension region.
+        1. Get raw genomic sequence from extension start to canonical start (5'UTR portion).
+        2. Get CDS sequence from canonical start to stop codon.
+        3. Concatenate and translate.
 
         Args:
-            transcript_id: Transcript ID to process
-            extension_feature: Series with extension region information
+            transcript_id (str): Transcript ID to process.
+            extension_feature (pd.Series): Series with extension region information.
 
         Returns:
-            Dict with coding_sequence, protein, and metadata or None if failed
+            Optional[Dict]: Dictionary with coding_sequence, protein, and metadata, or None if failed.
         """
         # Get features and transcript data
         features = self.genome.get_transcript_features(transcript_id)
@@ -373,11 +388,11 @@ class AlternativeProteinGenerator:
         """Extract protein sequence starting from the base after truncation.
 
         Args:
-            transcript_id: Transcript ID to process
-            truncation_feature: Series with truncation region information
+            transcript_id (str): Transcript ID to process.
+            truncation_feature (pd.Series): Series with truncation region information.
 
         Returns:
-            Dict with coding_sequence, protein, and metadata or None if failed
+            Optional[Dict]: Dictionary with coding_sequence, protein, and metadata, or None if failed.
         """
         # Get features and transcript data
         features = self.genome.get_transcript_features(transcript_id)
@@ -500,19 +515,24 @@ class AlternativeProteinGenerator:
             "region_type": "truncation",
         }
 
-    def extract_gene_proteins(self, gene_name: str) -> Optional[List[Dict]]:
+    def extract_gene_proteins(
+        self, gene_name: str, top_n_per_type_per_transcript: Optional[int] = 1
+    ) -> Optional[List[Dict]]:
         """Extract canonical and alternative proteins for all features of a gene.
 
         Args:
-            gene_name: Name of the gene
+            gene_name (str): Name of the gene.
+            top_n_per_type_per_transcript (Optional[int]): Number of top features per type per transcript.
 
         Returns:
-            List of dicts with canonical and alternative results for each feature
+            Optional[List[Dict]]: List of dicts with canonical and alternative results for each feature, or None if failed.
         """
         self._debug_print(f"Processing gene: {gene_name}")
 
-        # Get alternative features - transcript IDs are already embedded
-        alt_features = self.alt_isoforms.get_visualization_features(gene_name)
+        # Get alternative features
+        alt_features = self.alt_isoforms.get_visualization_features(
+            gene_name, top_n_per_type_per_transcript
+        )
         if alt_features.empty:
             self._debug_print(f"No alternative features found for {gene_name}")
             return None
@@ -572,10 +592,10 @@ class AlternativeProteinGenerator:
         """Check if HGVS represents a single BP substitution we want to process.
 
         Args:
-            hgvsc: HGVS coding notation (e.g., c.76C>T, c.-25G>A)
+            hgvsc (str): HGVS coding notation (e.g., c.76C>T, c.-25G>A).
 
         Returns:
-            True if this is a single BP substitution pattern
+            bool: True if this is a single BP substitution pattern.
         """
         if not hgvsc or pd.isna(hgvsc) or str(hgvsc) == "nan":
             return False
@@ -593,10 +613,10 @@ class AlternativeProteinGenerator:
         """Validate if this mutation represents a single BP change we want to process.
 
         Args:
-            mutation_row: Row from mutations DataFrame
+            mutation_row (pd.Series): Row from mutations DataFrame.
 
         Returns:
-            True if this variant should be processed
+            bool: True if this variant should be processed.
         """
         impact = mutation_row.get("impact", "")
         hgvsc = mutation_row.get("hgvsc", "")
@@ -622,10 +642,10 @@ class AlternativeProteinGenerator:
         """Remove duplicate variants based on genomic position and alleles.
 
         Args:
-            mutations: DataFrame with mutations
+            mutations (pd.DataFrame): DataFrame with mutations.
 
         Returns:
-            Deduplicated DataFrame
+            pd.DataFrame: Deduplicated DataFrame.
         """
         if mutations.empty:
             return mutations
@@ -654,15 +674,15 @@ class AlternativeProteinGenerator:
         """Apply mutation to canonical or extension sequence.
 
         Args:
-            transcript_id: Transcript ID to process
-            genomic_pos: Genomic position of mutation
-            ref_allele: Reference allele (genomic coordinates)
-            alt_allele: Alternate allele (genomic coordinates)
-            sequence_type: "canonical" or "extension"
-            extension_feature: Required if sequence_type is "extension"
+            transcript_id (str): Transcript ID to process.
+            genomic_pos (int): Genomic position of mutation.
+            ref_allele (str): Reference allele (genomic coordinates).
+            alt_allele (str): Alternate allele (genomic coordinates).
+            sequence_type (str): "canonical" or "extension".
+            extension_feature (Optional[pd.Series]): Required if sequence_type is "extension".
 
         Returns:
-            Dict with mutated sequence info or None if mutation failed/synonymous
+            Optional[Dict]: Dict with mutated sequence info or None if mutation failed/synonymous.
         """
         self._debug_print(
             f"Applying mutation {ref_allele}>{alt_allele} at position {genomic_pos} to {sequence_type} sequence"
@@ -808,6 +828,16 @@ class AlternativeProteinGenerator:
         """Map genomic position to position within coding sequence.
 
         Handles both canonical and extension sequences.
+
+        Args:
+            transcript_id (str): Transcript ID.
+            genomic_pos (int): Genomic position.
+            coding_sequence (str): Coding sequence.
+            sequence_type (str): "canonical" or "extension".
+            extension_feature (Optional[pd.Series]): Extension feature if applicable.
+
+        Returns:
+            Optional[int]: Position within coding sequence, or None if not found.
         """
         features = self.genome.get_transcript_features(transcript_id)
         transcript_data = self.genome.get_transcript_features_with_sequence(
@@ -859,7 +889,17 @@ class AlternativeProteinGenerator:
         sequence_type: str,
         extension_feature: Optional[pd.Series] = None,
     ) -> Optional[int]:
-        """Map genomic position to CDS position, accounting for any extension offset."""
+        """Map genomic position to CDS position, accounting for any extension offset.
+
+        Args:
+            transcript_id (str): Transcript ID.
+            genomic_pos (int): Genomic position.
+            sequence_type (str): "canonical" or "extension".
+            extension_feature (Optional[pd.Series]): Extension feature if applicable.
+
+        Returns:
+            Optional[int]: Position within CDS, or None if not found.
+        """
         features = self.genome.get_transcript_features(transcript_id)
         transcript_data = self.genome.get_transcript_features_with_sequence(
             transcript_id
@@ -938,14 +978,14 @@ class AlternativeProteinGenerator:
         """Get filtered, deduplicated single BP mutations within a specific genomic region.
 
         Args:
-            gene_name: Gene name
-            start: Region start position
-            end: Region end position
-            sources: List of mutation sources to include (e.g., ["clinvar", "gnomad"])
-            impact_types: List of impact types to include
+            gene_name (str): Gene name.
+            start (int): Region start position.
+            end (int): Region end position.
+            sources (List[str], optional): List of mutation sources to include.
+            impact_types (List[str], optional): List of impact types to include.
 
         Returns:
-            Filtered and deduplicated DataFrame of mutations
+            pd.DataFrame: Filtered and deduplicated DataFrame of mutations.
         """
         self._debug_print(f"Fetching mutations for {gene_name} in region {start}-{end}")
 
@@ -1009,11 +1049,11 @@ class AlternativeProteinGenerator:
         """Calculate amino acid difference between two protein sequences.
 
         Args:
-            original_protein: Original protein sequence
-            mutated_protein: Mutated protein sequence
+            original_protein (str): Original protein sequence.
+            mutated_protein (str): Mutated protein sequence.
 
         Returns:
-            String in format "A123V" (original AA, position, new AA) or None if no single change
+            Optional[str]: String in format "A123V" (original AA, position, new AA) or None if no single change.
         """
         if len(original_protein) != len(mutated_protein):
             # Handle length differences (indels, frameshifts, etc.)
@@ -1046,12 +1086,13 @@ class AlternativeProteinGenerator:
         """Extract proteins for all alternative features with optional mutation integration.
 
         Args:
-            gene_name: Name of the gene
-            include_mutations: Whether to include mutation variants
-            sources: List of mutation sources to include (e.g., ["clinvar", "gnomad"])
-            impact_types: Mutation impact types to include
+            gene_name (str): Name of the gene.
+            include_mutations (bool): Whether to include mutation variants.
+            sources (List[str], optional): List of mutation sources to include.
+            impact_types (List[str], optional): Mutation impact types to include.
+
         Returns:
-            List of enhanced protein pair dictionaries
+            Optional[List[Dict]]: List of enhanced protein pair dictionaries, or None if failed.
         """
         self._debug_print(
             f"Processing gene {gene_name} with mutations={include_mutations}"
@@ -1189,13 +1230,12 @@ class AlternativeProteinGenerator:
         """Generate amino acid sequences for all alternative variants of a gene.
 
         Args:
-            gene_name: Name of the gene
-            output_format: Format to save sequences ('fasta', 'csv', or None for no save)
-            exclude_canonical: Whether to exclude canonical transcripts
+            gene_name (str): Name of the gene.
+            output_format (str): Format to save sequences ('fasta', 'csv', or None for no save).
+            exclude_canonical (bool): Whether to exclude canonical transcripts.
 
         Returns:
-            Dictionary with transcript IDs as keys, containing both canonical and
-            alternative protein sequences for each transcript
+            Dict[str, Dict[str, str]]: Dictionary with transcript IDs as keys, containing both canonical and alternative protein sequences for each transcript.
         """
         result = {}
 
@@ -1267,7 +1307,19 @@ class AlternativeProteinGenerator:
         min_length: int = 10,
         max_length: int = 100000,
     ) -> pd.DataFrame:
-        """Create a dataset of protein sequences with optional mutation integration."""
+        """Create a dataset of protein sequences with optional mutation integration.
+
+        Args:
+            gene_list (List[str]): List of gene names to process.
+            include_mutations (bool): Whether to include mutation variants.
+            impact_types (List[str], optional): Mutation impact types to include.
+            output_format (str): Format to save sequences ('fasta', 'csv', or both).
+            min_length (int): Minimum protein length to include.
+            max_length (int): Maximum protein length to include.
+
+        Returns:
+            pd.DataFrame: DataFrame with the dataset information.
+        """
         all_sequences = []
         successful_genes = 0
         skipped_genes = []
@@ -1477,13 +1529,13 @@ class AlternativeProteinGenerator:
         """Create a dataset of protein sequences from paired canonical and alternative transcripts.
 
         Args:
-            gene_list: List of gene names to process
-            output_format: Format to save sequences ('fasta', 'csv', or both)
-            min_length: Minimum protein length to include
-            max_length: Maximum protein length to include
+            gene_list (List[str]): List of gene names to process.
+            output_format (str): Format to save sequences ('fasta', 'csv', or both).
+            min_length (int): Minimum protein length to include.
+            max_length (int): Maximum protein length to include.
 
         Returns:
-            DataFrame with the dataset information
+            pd.DataFrame: DataFrame with the dataset information.
         """
         all_sequences = []
         total_pairs = 0
@@ -1580,7 +1632,17 @@ class AlternativeProteinGenerator:
         output_format: str = "fasta",
         exclude_canonical: bool = False,
     ) -> None:
-        """Save generated sequences to files."""
+        """Save generated sequences to files.
+
+        Args:
+            gene_name (str): Name of the gene.
+            sequences (Dict[str, Dict[str, str]]): Dictionary of sequences.
+            output_format (str): Output format ('fasta' or 'csv').
+            exclude_canonical (bool): Whether to exclude canonical sequences.
+
+        Returns:
+            None
+        """
         gene_dir = self.output_dir / gene_name
         gene_dir.mkdir(exist_ok=True)
 
@@ -1656,7 +1718,16 @@ class AlternativeProteinGenerator:
         include_mutations: bool = False,
         pairs_only: bool = False,
     ) -> None:
-        """Save dataset as FASTA file."""
+        """Save dataset as FASTA file.
+
+        Args:
+            dataset (pd.DataFrame): DataFrame of sequences.
+            include_mutations (bool): Whether to include mutation variants.
+            pairs_only (bool): Whether to save only canonical-alternative pairs.
+
+        Returns:
+            None
+        """
         records = []
 
         for _, row in dataset.iterrows():
@@ -1691,7 +1762,15 @@ class AlternativeProteinGenerator:
     def _save_dataset_csv(
         self, dataset: pd.DataFrame, include_mutations: bool = False
     ) -> None:
-        """Save dataset as CSV file."""
+        """Save dataset as CSV file.
+
+        Args:
+            dataset (pd.DataFrame): DataFrame of sequences.
+            include_mutations (bool): Whether to include mutation variants.
+
+        Returns:
+            None
+        """
         if include_mutations:
             output_file = self.output_dir / "protein_sequences_with_mutations.csv"
         else:
@@ -1707,7 +1786,18 @@ class AlternativeProteinGenerator:
         skipped_genes: List[str],
         include_mutations: bool = False,
     ) -> None:
-        """Print summary of dataset generation."""
+        """Print summary of dataset generation.
+
+        Args:
+            dataset (pd.DataFrame): DataFrame of sequences.
+            successful_genes (int): Number of successfully processed genes.
+            total_genes (int): Total number of genes.
+            skipped_genes (List[str]): List of skipped genes.
+            include_mutations (bool): Whether mutations were included.
+
+        Returns:
+            None
+        """
         print(f"\nProtein Sequence Generation Summary:")
         print(f"  ├─ Genes processed successfully: {successful_genes}/{total_genes}")
 

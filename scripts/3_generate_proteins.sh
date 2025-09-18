@@ -69,7 +69,6 @@ conda activate swissisoform || {
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
 ANNOTATION_PATH="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
 TRUNCATIONS_PATH="../data/ribosome_profiling/truncations_cleaned.bed"
-PREFERRED_TRANSCRIPTS="../data/genome_data/hela_top_transcript.txt"
 MIN_LENGTH=10
 MAX_LENGTH=100000
 FORMAT="fasta,csv"
@@ -83,7 +82,6 @@ case $SLURM_ARRAY_TASK_ID in
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
-          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
           --min-length "$MIN_LENGTH" \
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT"
@@ -96,12 +94,11 @@ case $SLURM_ARRAY_TASK_ID in
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
-          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
           --min-length "$MIN_LENGTH" \
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT" \
           --mutations \
-          --impact-types "missense variant"
+          --impact-types "missense variant" "5 prime UTR variant"
         echo "Array Task 2: Completed reduced mutations generation at $(date)"
         ;;
     3)
@@ -111,7 +108,6 @@ case $SLURM_ARRAY_TASK_ID in
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
-          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
           --min-length "$MIN_LENGTH" \
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT"
@@ -124,12 +120,11 @@ case $SLURM_ARRAY_TASK_ID in
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
-          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
           --min-length "$MIN_LENGTH" \
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT" \
           --mutations \
-          --impact-types "missense variant"
+          --impact-types "missense variant" "5 prime UTR variant"
         echo "Array Task 4: Completed full mutations generation at $(date)"
         ;;
     *)

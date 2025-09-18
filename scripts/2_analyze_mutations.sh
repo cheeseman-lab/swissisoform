@@ -69,7 +69,6 @@ conda activate swissisoform || {
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
 ANNOTATION_PATH="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
 TRUNCATIONS_PATH="../data/ribosome_profiling/truncations_cleaned.bed"
-PREFERRED_TRANSCRIPTS="../data/genome_data/hela_top_transcript.txt"
 
 # Run the appropriate task based on array task ID
 case $SLURM_ARRAY_TASK_ID in
@@ -80,9 +79,8 @@ case $SLURM_ARRAY_TASK_ID in
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
-          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
           --sources "clinvar" \
-          --impact-types "missense variant" "nonsense variant" "frameshift variant" \
+          --impact-types "missense variant" "nonsense variant" "frameshift variant" "5 prime UTR variant" \
           --visualize
         echo "Array Task 1: Completed reduced mutations analysis at $(date)"
         ;;
@@ -93,9 +91,9 @@ case $SLURM_ARRAY_TASK_ID in
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
-          --preferred-transcripts "$PREFERRED_TRANSCRIPTS" \
           --sources "clinvar" \
-          --impact-types "missense variant" "nonsense variant" "frameshift variant"
+          --impact-types "missense variant" "nonsense variant" "frameshift variant" "5 prime UTR variant" \
+          --visualize
         echo "Array Task 2: Completed full mutations analysis at $(date)"
         ;;
     *)

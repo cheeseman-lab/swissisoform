@@ -4,6 +4,23 @@
 This script batch processes a list of genes to identify mutations that occur
 within alternative isoform truncation sites. It generates detailed statistical
 analysis and visualizations of transcript-truncation pairs.
+
+Arguments:
+    gene_list (str): Path to file containing gene names.
+    output_dir (str): Directory to save output files.
+    --genome (str): Path to genome FASTA file.
+    --annotation (str): Path to genome annotation GTF file.
+    --bed (str): Path to alternative isoform BED file.
+    --visualize (bool): Generate visualizations for each gene.
+    --sources (List[str]): Mutation sources to query.
+    --impact-types (List[str]): Mutation impact types to include.
+    --top-n-per-type (int): Number of top alternative start sites to keep per type per transcript.
+
+Returns:
+    None
+
+Raises:
+    Exception: If any gene fails processing, error is printed and gene is skipped.
 """
 
 import asyncio
@@ -26,7 +43,6 @@ from swissisoform.utils import (
     save_gene_level_results,
     save_truncation_level_results,
     print_mutation_summary,
-    load_preferred_transcripts,
 )
 
 # Configure logger
@@ -42,23 +58,29 @@ async def main(
     genome_path: str,
     annotation_path: str,
     bed_path: str,
-    preferred_transcripts_path: Optional[str] = None,
     visualize: bool = False,
     sources: List[str] = None,
     impact_types: List[str] = None,
+    top_n_per_type: int = 1,
 ):
     """Main function to process genes for mutation analysis.
 
     Args:
-        gene_list_path: Path to file containing gene names
-        output_dir: Directory to save output files
-        genome_path: Path to the genome FASTA file
-        annotation_path: Path to the genome annotation GTF file
-        bed_path: Path to the alternative isoform BED file
-        preferred_transcripts_path: Optional path to file with preferred transcript IDs
-        visualize: Whether to generate visualizations
-        sources: List of mutation sources to query
-        impact_types: List of mutation impact types to include
+        gene_list_path (str): Path to file containing gene names.
+        output_dir (str): Directory to save output files.
+        genome_path (str): Path to the genome FASTA file.
+        annotation_path (str): Path to the genome annotation GTF file.
+        bed_path (str): Path to the alternative isoform BED file.
+        visualize (bool): Whether to generate visualizations.
+        sources (Optional[List[str]]): List of mutation sources to query.
+        impact_types (Optional[List[str]]): List of mutation impact types to include.
+        top_n_per_type (int): Number of top alternative start sites to keep per type per transcript.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: If any gene fails processing, error is printed and gene is skipped.
     """
     start_time = datetime.now()
     print(f"Starting mutation analysis at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -76,13 +98,6 @@ async def main(
     alt_isoforms.load_bed(bed_path)
     print("  └─ Initializing mutation handler...")
     mutation_handler = MutationHandler()
-
-    # Load preferred transcripts if provided
-    preferred_transcripts = None
-    if preferred_transcripts_path:
-        print(f"\nLoading preferred transcripts from {preferred_transcripts_path}")
-        preferred_transcripts = load_preferred_transcripts(preferred_transcripts_path)
-        print(f"Loaded {len(preferred_transcripts)} preferred transcript IDs")
 
     # Set default values and create impact_types dict for compatibility
     if sources is None:
@@ -103,8 +118,6 @@ async def main(
     print(f"  ├─ Sources: {', '.join(sources)}")
     print(f"  ├─ Impact types: {', '.join(impact_types)}")
     print(f"  ├─ Visualizations: {visualize}")
-    if preferred_transcripts:
-        print(f"  └─ Using {len(preferred_transcripts)} preferred transcripts")
 
     # Process all genes
     results = []
@@ -118,7 +131,8 @@ async def main(
             output_dir=output_dir,
             visualize=visualize,
             impact_types=impact_types_dict,
-            preferred_transcripts=preferred_transcripts,
+            sources=sources,
+            top_n_per_type_per_transcript=top_n_per_type,
         )
         results.append(result)
 
@@ -161,11 +175,6 @@ if __name__ == "__main__":
         help="Path to alternative isoform BED file",
     )
     parser.add_argument(
-        "--preferred-transcripts",
-        default="../data/genome_data/hela_top_transcript.txt",
-        help="Path to file containing preferred transcript IDs",
-    )
-    parser.add_argument(
         "--visualize", action="store_true", help="Generate visualizations for each gene"
     )
     parser.add_argument(
@@ -177,8 +186,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--impact-types",
         nargs="+",
-        default=["missense variant", "nonsense variant", "frameshift variant"],
+        default=[
+            "missense variant",
+            "nonsense variant",
+            "frameshift variant",
+            "5 prime UTR variant",
+        ],
         help="Mutation impact types to include (space-separated)",
+    )
+    parser.add_argument(
+        "--top-n-per-type",
+        type=int,
+        default=1,
+        help="Number of top alternative start sites to keep per type (Truncated/Extended) per transcript",
     )
 
     args = parser.parse_args()
@@ -194,9 +214,9 @@ if __name__ == "__main__":
             genome_path=args.genome,
             annotation_path=args.annotation,
             bed_path=args.bed,
-            preferred_transcripts_path=args.preferred_transcripts,
             visualize=args.visualize,
             sources=args.sources,
             impact_types=args.impact_types,
+            top_n_per_type=args.top_n_per_type,
         )
     )

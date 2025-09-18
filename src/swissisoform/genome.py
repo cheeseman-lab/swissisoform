@@ -7,23 +7,27 @@ and GTF annotation files.
 
 from Bio import SeqIO
 import pandas as pd
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 
 class GenomeHandler:
     """Handles access to genome sequence data and feature annotations.
 
     Attributes:
-        genome: Dictionary of sequence records keyed by chromosome
-        annotations: DataFrame containing genomic feature annotations
+        genome (Dict[str, SeqRecord]): Dictionary of sequence records keyed by chromosome.
+        annotations (pd.DataFrame): DataFrame containing genomic feature annotations.
+        gtf_path (Optional[str]): Path to the genome annotation GTF file.
     """
 
     def __init__(self, genome_path: str, gtf_path: Optional[str] = None):
         """Initialize the GenomeHandler with genome sequence and annotations.
 
         Args:
-            genome_path: Path to the genome FASTA file
-            gtf_path: Path to the genome annotation GTF file
+            genome_path (str): Path to the genome FASTA file.
+            gtf_path (Optional[str]): Path to the genome annotation GTF file.
+
+        Returns:
+            None
         """
         self.genome = SeqIO.to_dict(SeqIO.parse(genome_path, "fasta"))
         self.gtf_path = gtf_path
@@ -34,7 +38,10 @@ class GenomeHandler:
         """Load and parse GTF annotations into a pandas DataFrame.
 
         Args:
-            gtf_path: Path to the genome annotation GTF file
+            gtf_path (str): Path to the genome annotation GTF file.
+
+        Returns:
+            None
         """
         features_list = []
 
@@ -100,13 +107,13 @@ class GenomeHandler:
         """Find all features associated with a gene name.
 
         Args:
-            gene_name: Name of the gene
+            gene_name (str): Name of the gene.
 
         Returns:
-            DataFrame containing features associated with the gene
+            pd.DataFrame: DataFrame containing features associated with the gene.
 
         Raises:
-            ValueError: If no GTF file was loaded
+            ValueError: If no GTF file was loaded.
         """
         if not hasattr(self, "annotations"):
             raise ValueError("No GTF file loaded")
@@ -117,16 +124,16 @@ class GenomeHandler:
         """Get sequence for a genomic region.
 
         Args:
-            chrom: Chromosome name
-            start: Start position (1-based)
-            end: End position (inclusive)
-            strand: '+' for forward strand, '-' for reverse
+            chrom (str): Chromosome name.
+            start (int): Start position (1-based).
+            end (int): End position (inclusive).
+            strand (str): '+' for forward strand, '-' for reverse.
 
         Returns:
-            Nucleotide sequence for the specified region
+            str: Nucleotide sequence for the specified region.
 
         Raises:
-            ValueError: If chromosome not found in genome
+            ValueError: If chromosome not found in genome.
         """
         # Try to find chromosome in the genome, checking different prefix formats
         if chrom in self.genome:
@@ -145,13 +152,13 @@ class GenomeHandler:
         """Get all features associated with a transcript ID.
 
         Args:
-            transcript_id: Transcript ID
+            transcript_id (str): Transcript ID.
 
         Returns:
-            DataFrame containing features associated with the transcript
+            pd.DataFrame: DataFrame containing features associated with the transcript.
 
         Raises:
-            ValueError: If no GTF file was loaded
+            ValueError: If no GTF file was loaded.
         """
         if not hasattr(self, "annotations"):
             raise ValueError("No GTF file loaded")
@@ -162,10 +169,10 @@ class GenomeHandler:
         """Get basic statistics for a gene.
 
         Args:
-            gene_name: Name of the gene
+            gene_name (str): Name of the gene.
 
         Returns:
-            Dictionary of gene statistics or None if gene not found
+            Optional[Dict]: Dictionary of gene statistics or None if gene not found.
         """
         features = self.find_gene_features(gene_name)
         if features.empty:
@@ -188,15 +195,15 @@ class GenomeHandler:
         """Get all transcript IDs for a given gene name.
 
         Args:
-            gene_name: Name of the gene
-            standard_chroms_only: If True, only return transcripts on standard chromosomes
-                (chr1-22, chrX, chrY, chrM)
+            gene_name (str): Name of the gene.
+            standard_chroms_only (bool): If True, only return transcripts on standard chromosomes
+                (chr1-22, chrX, chrY, chrM).
 
         Returns:
-            DataFrame containing transcript information
+            pd.DataFrame: DataFrame containing transcript information.
 
         Raises:
-            ValueError: If no GTF file was loaded
+            ValueError: If no GTF file was loaded.
         """
         if not hasattr(self, "annotations"):
             raise ValueError("No GTF file loaded")
@@ -243,14 +250,14 @@ class GenomeHandler:
         """Get the full genomic sequence for a transcript.
 
         Args:
-            transcript_id: Transcript ID
+            transcript_id (str): Transcript ID.
 
         Returns:
-            Dictionary containing transcript sequence and associated metadata
+            Dict: Dictionary containing transcript sequence and associated metadata.
 
         Raises:
-            ValueError: If no GTF file was loaded
-            IndexError: If transcript not found
+            ValueError: If no GTF file was loaded.
+            IndexError: If transcript not found.
         """
         if not hasattr(self, "annotations"):
             raise ValueError("No GTF file loaded")
@@ -287,10 +294,10 @@ class GenomeHandler:
         """Get all features and sequence for a transcript.
 
         Args:
-            transcript_id: Transcript ID
+            transcript_id (str): Transcript ID.
 
         Returns:
-            Dictionary containing transcript features and sequence information
+            Dict: Dictionary containing transcript features and sequence information.
         """
         # Get transcript features
         features = self.get_transcript_features(transcript_id)
