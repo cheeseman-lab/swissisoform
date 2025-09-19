@@ -683,6 +683,7 @@ class AlternativeIsoform:
                 "frame": ".",
                 "gene_id": region["gene_id"],
                 "transcript_id": region["transcript_id"],
+                "refseq_transcript_id": region.get("refseq_transcript_id", "NA"),
                 "gene_name": region["gene_name"],
                 "start_codon": region["alternative_start_codon"],
                 "name": region["region_id"],

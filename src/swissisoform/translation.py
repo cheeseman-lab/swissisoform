@@ -1639,6 +1639,16 @@ class AlternativeProteinGenerator:
         Returns:
             str: Predicted consequence type (e.g., 'missense variant', 'nonsense variant', 'frameshift variant', 'synonymous variant', or 'unknown').
         """
+        # Only analyze single BP substitutions; ignore all other mutation types
+        hgvsc_pattern = f"c.{genomic_pos}{ref_allele}>{alt_allele}"
+        # Use helper to check if this is a single BP substitution
+        if not self._is_single_bp_substitution(hgvsc_pattern):
+            if self.debug:
+                print(
+                    f"        │  └─ Non-single BP mutation assumed as frameshift: {hgvsc_pattern}"
+                )
+            return "frameshift variant"
+
         if self.debug:
             print(
                 f"        ├─ Predicting consequence for {ref_allele}>{alt_allele} at {genomic_pos}"

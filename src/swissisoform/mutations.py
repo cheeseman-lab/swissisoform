@@ -86,9 +86,13 @@ class MutationHandler:
             ConnectionError: If the API request fails.
         """
         self.mutation_categories = {
-            "missense": ["missense", "missense_variant", "missense variant"],
-            "synonymous": ["synonymous", "synonymous_variant", "synonymous variant"],
+            # High impact first
             "nonsense": ["nonsense", "stop_gained", "stop gained", "nonsense_variant"],
+            "frameshift": ["frameshift", "frameshift_variant", "frameshift variant"],
+            "start_lost": ["start_lost", "start lost", "start_loss"],
+            "stop_lost": ["stop_lost", "stop lost"],
+            # Moderate impact
+            "missense": ["missense", "missense_variant", "missense variant"],
             "inframe_del": [
                 "inframe_deletion",
                 "inframe deletion",
@@ -96,32 +100,28 @@ class MutationHandler:
                 "inframe_indel",
             ],
             "inframe_ins": ["inframe_insertion", "inframe insertion", "inframe_ins"],
-            "frameshift": ["frameshift", "frameshift_variant", "frameshift variant"],
             "splice": [
                 "splice",
                 "splice_variant",
                 "splice_region_variant",
                 "splice_donor_variant",
                 "splice_acceptor_variant",
-                "splice donor variant",
-                "splice acceptor variant",
             ],
-            "start_lost": ["start_lost", "start lost", "start_loss"],
+            # Low impact last
+            "synonymous": ["synonymous", "synonymous_variant", "synonymous variant"],
             "utr_5prime": [
                 "5_prime_utr",
                 "5 prime utr",
                 "5_prime_utr_variant",
-                "5 prime UTR variant",
+                "5 prime utr variant",
             ],
             "utr_3prime": [
                 "3_prime_utr",
                 "3 prime utr",
                 "3_prime_utr_variant",
-                "3 prime UTR variant",
+                "3 prime utr variant",
             ],
             "intronic": ["intron_variant", "intron variant"],
-            "stop_gained": ["stop_gained", "stop gained"],
-            "stop_lost": ["stop_lost", "stop lost"],
         }
 
     async def get_gnomad_variants(self, gene_name: str) -> pd.DataFrame:
@@ -363,21 +363,24 @@ class MutationHandler:
                 variant_info[f"{pop_id}_ac_hom"] = pop.get("ac_hom")
                 variant_info[f"{pop_id}_ac_hemi"] = pop.get("ac_hemi")
 
-    async def get_clinvar_variants(self, gene_name: str) -> pd.DataFrame:
+    async def get_clinvar_variants(
+        self, gene_name: str, refseq_id: str = None
+    ) -> pd.DataFrame:
         """Get all ClinVar variants for a gene.
 
         Args:
             gene_name (str): Gene symbol (e.g., 'BRCA1').
+            refseq_id (Optional[str]): RefSeq transcript ID to filter ClinVar variants (transcript-level query).
 
         Returns:
             pd.DataFrame: DataFrame of processed ClinVar variant data.
         """
-        cache_key = f"clinvar_{gene_name}"
+        cache_key = f"clinvar_{gene_name}_{refseq_id or 'all'}"
         if cache_key in self.cached_data:
             return self.cached_data[cache_key]
 
         try:
-            variant_ids = await self._fetch_clinvar_variant_ids(gene_name)
+            variant_ids = await self._fetch_clinvar_variant_ids(gene_name, refseq_id)
             if not variant_ids:
                 return pd.DataFrame()
 
@@ -394,11 +397,18 @@ class MutationHandler:
             logger.error(f"Error fetching ClinVar data: {str(e)}")
             return pd.DataFrame()
 
-    async def _fetch_clinvar_variant_ids(self, gene_name: str) -> List[str]:
-        """Fetch ClinVar variant IDs for a gene."""
+    async def _fetch_clinvar_variant_ids(
+        self, gene_name: str, refseq_id: str = None
+    ) -> List[str]:
+        """Fetch ClinVar variant IDs for a gene, optionally filtered by RefSeq transcript."""
+        if refseq_id and refseq_id != "NA":
+            search_term = f"{gene_name}[gene] AND {refseq_id}[transcript]"
+        else:
+            search_term = f"{gene_name}[gene]"
+
         search_params = {
             "db": "clinvar",
-            "term": f"{gene_name}[gene]",
+            "term": search_term,
             "retmax": 5000,
             "retmode": "json",
             "tool": "swissisoform",
@@ -1476,6 +1486,7 @@ class MutationHandler:
         gene_name: str,
         alt_features: Optional[pd.DataFrame] = None,
         sources: Optional[List[str]] = None,
+        refseq_id: Optional[str] = None,
         custom_parquet_path: Optional[str] = None,
         verbose: bool = False,
     ) -> pd.DataFrame:
@@ -1485,6 +1496,7 @@ class MutationHandler:
             gene_name (str): Name of the gene.
             alt_features (Optional[pd.DataFrame]): DataFrame containing alternative isoform features.
             sources (Optional[List[str]]): List of mutation sources to query.
+            refseq_id (Optional[str]): RefSeq transcript ID to filter mutations (used for ClinVar and other sources supporting transcript-level queries).
             custom_parquet_path (Optional[str]): Path to custom parquet file (if using 'custom' source).
             verbose (bool): Whether to print detailed information.
 
@@ -1502,7 +1514,7 @@ class MutationHandler:
 
         for source in sources:
             try:
-                df = await self._fetch_source_data(source, gene_name)
+                df = await self._fetch_source_data(source, gene_name, refseq_id)
                 standardized_df = self.standardize_mutation_data(df, source)
 
                 if not standardized_df.empty:
@@ -1559,12 +1571,14 @@ class MutationHandler:
                 combined_df["relative_position"] = combined_df["position"] - min_pos
             return combined_df
 
-    async def _fetch_source_data(self, source: str, gene_name: str) -> pd.DataFrame:
+    async def _fetch_source_data(
+        self, source: str, gene_name: str, refseq_id: str = None
+    ) -> pd.DataFrame:
         """Fetch data from a specific source."""
         if source == "gnomad":
             return await self.get_gnomad_variants(gene_name)
         elif source == "clinvar":
-            return await self.get_clinvar_variants(gene_name)
+            return await self.get_clinvar_variants(gene_name, refseq_id)
         elif source == "cosmic":
             return await self.get_cosmic_variants(gene_name)
         else:
@@ -1887,6 +1901,11 @@ class MutationHandler:
                     # This transcript ID from BED wasn't found in genome annotation
                     continue
 
+                # Get refseq_id directly from feature if present
+                refseq_id = feature.get("refseq_transcript_id", None)
+                if refseq_id == "NA":
+                    refseq_id = None
+
                 transcript = transcript_match.iloc[0]
                 transcript_start = transcript["start"]
                 transcript_end = transcript["end"]
@@ -1907,6 +1926,7 @@ class MutationHandler:
                 transcript_feature_pairs.append(
                     {
                         "transcript_id": feature_transcript_id,
+                        "refseq_id": refseq_id,
                         "feature_id": feature_id,
                         "feature_idx": idx,
                         "feature_type": feature_type,
@@ -1943,12 +1963,21 @@ class MutationHandler:
             if sources is None:
                 sources = ["clinvar"]
 
-            all_mutations = await self.get_visualization_ready_mutations(
-                gene_name=gene_name,
-                alt_features=None,
-                sources=sources,
-                custom_parquet_path=custom_parquet_path,
-            )
+            # Fetch mutations for each transcript-feature pair using its refseq_id
+            all_mutations = pd.DataFrame()
+            for pair in transcript_feature_pairs:
+                pair_refseq_id = pair.get("refseq_id", None)
+                pair_mutations = await self.get_visualization_ready_mutations(
+                    gene_name=gene_name,
+                    alt_features=None,
+                    sources=sources,
+                    refseq_id=pair_refseq_id,
+                    custom_parquet_path=custom_parquet_path,
+                )
+                if pair_mutations is not None and not pair_mutations.empty:
+                    all_mutations = pd.concat(
+                        [all_mutations, pair_mutations], ignore_index=True
+                    )
 
             if all_mutations is None or all_mutations.empty:
                 print(f"\r  ├─ No mutations found for this gene")
@@ -2047,9 +2076,7 @@ class MutationHandler:
 
                         # Count by impact category (using validated consequences if available)
                         impact_column = (
-                            "validated_consequence"
-                            if validate_consequences
-                            else "impact"
+                            "impact_validated" if validate_consequences else "impact"
                         )
                         for impact in pair_mutations[impact_column].unique():
                             if pd.isna(impact):

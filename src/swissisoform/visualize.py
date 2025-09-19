@@ -36,6 +36,7 @@ class GenomeVisualizer:
             "start_codon": "#f27e20",  # annotated start site (as specified)
             "stop_codon": "#e74c3c",  # black (as specified)
             "truncation": "#412D78",  # purple (as specified)
+            "extension": "#2E8B57",  # green for extension
             "alternative_start": "#652d90",  # alternative (as specified)
         }
 
@@ -53,6 +54,7 @@ class GenomeVisualizer:
             "3 prime utr variant": "#FF5722",  # deep orange
             "other variant": "#9E9E9E",  # medium gray
             "unknown": "#000000",  # black (kept original)
+            "extension": "#2E8B57",  # green for extension
         }
 
         # Source-specific markers
@@ -112,6 +114,7 @@ class GenomeVisualizer:
             "Splice": ["splice variant"],
             "UTR": ["5 prime utr variant", "3 prime utr variant"],
             "Other": ["other variant", "unknown"],
+            "Extension": ["extension"],
         }
 
         legend_elements = []
@@ -373,11 +376,12 @@ class GenomeVisualizer:
                 )
                 ax.add_patch(rect)
 
-        # Plot alternative start sites - update in both visualization methods
+        # Plot alternative isoforms (truncation/extension) - update in both visualization methods
         if alt_features is not None and not alt_features.empty:
             for _, alt_feature in alt_features.iterrows():
                 alt_start = alt_feature["start"]
                 alt_end = alt_feature["end"]
+                region_type = alt_feature.get("region_type", "alternative")
 
                 # Get transcript strand
                 transcript_strand = "+"  # Default to positive strand
@@ -386,27 +390,26 @@ class GenomeVisualizer:
                     if not transcript_info.empty:
                         transcript_strand = transcript_info.iloc[0]["strand"]
 
-                # Draw a complete truncation bracket with corners (facing downward)
+                # Draw a bracket for truncation/extension
                 bracket_y = 0.2  # Position for the top of the bracket
                 bracket_height = 0.05  # Height of the bracket
 
-                # Create a custom bracket shape with corners (flipped to open downward)
                 bracket_vertices = [
-                    (alt_start, bracket_y),  # Top left corner
-                    (alt_start, bracket_y - bracket_height),  # Bottom left corner
-                    (alt_end, bracket_y - bracket_height),  # Bottom right corner
-                    (alt_end, bracket_y),  # Top right corner
+                    (alt_start, bracket_y),
+                    (alt_start, bracket_y - bracket_height),
+                    (alt_end, bracket_y - bracket_height),
+                    (alt_end, bracket_y),
                 ]
-
-                # Draw the bracket as a continuous line
                 xs, ys = zip(*bracket_vertices)
                 ax.plot(
                     xs,
                     ys,
-                    color=self.feature_colors["truncation"],
+                    color=self.feature_colors.get(
+                        region_type, self.feature_colors["alternative_start"]
+                    ),
                     linewidth=1.0,
-                    solid_capstyle="butt",  # Sharp corners
-                    label="Truncation",
+                    solid_capstyle="butt",
+                    label="Alternative Isoform",
                 )
 
                 # Alternative start marker positioning depends on strand
@@ -415,61 +418,57 @@ class GenomeVisualizer:
                 alt_start_ymin = black_bar_y - (alt_start_height / 2)
                 alt_start_ymax = black_bar_y + (alt_start_height / 2)
 
-                # Place alternative start marker based on strand direction
                 if transcript_strand == "+":
-                    # For positive strand, place at right side (end of truncation)
                     alt_start_pos = alt_end
                 else:
-                    # For negative strand, place at left side (start of truncation)
                     alt_start_pos = alt_start
 
-                # Draw the alternative start marker
                 ax.vlines(
                     x=alt_start_pos,
                     ymin=alt_start_ymin,
                     ymax=alt_start_ymax,
-                    color=self.feature_colors["alternative_start"],
+                    color=self.feature_colors.get(
+                        region_type, self.feature_colors["alternative_start"]
+                    ),
                     linewidth=3,
-                    label="Alternative start",
+                    label="Alternative Isoform",
                 )
 
-                # Place the start codon label
-                if "start_codon" in alt_feature:
-                    if transcript_strand == "+":
-                        # For positive strand, place the label at the right side
-                        label_x = alt_end
-                    else:
-                        # For negative strand, place the label at the left side
-                        label_x = alt_start
-
-                    plt.text(
-                        label_x,
-                        alt_start_ymax + 0.05,
-                        alt_feature["start_codon"],
-                        fontsize=8,
-                        rotation=45,
-                        ha="center",
-                    )
+                # Place the start codon label and region type
+                label_x = alt_end if transcript_strand == "+" else alt_start
+                label_text = alt_feature.get("start_codon", "")
+                if region_type:
+                    label_text = f"{region_type.capitalize()} {label_text}".strip()
+                plt.text(
+                    label_x,
+                    alt_start_ymax + 0.05,
+                    label_text,
+                    fontsize=8,
+                    rotation=45,
+                    ha="center",
+                )
 
         # Plot mutations if provided
         if mutations_df is not None and not mutations_df.empty:
-            # Create legend elements
+            # Use impact_validated if available
+            impact_col = (
+                "impact_validated"
+                if "impact_validated" in mutations_df.columns
+                else "impact"
+            )
             source_legend_elements = []
-            unique_impacts = mutations_df["impact"].unique()
+            unique_impacts = mutations_df[impact_col].unique()
             mutation_legend_elements = self._create_mutation_legend_groups(
                 unique_impacts
             )
 
-            # Set jitter parameters
-            jitter_amount = 0.02  # Adjust this to control spread
-            np.random.seed(42)  # For reproducibility
+            jitter_amount = 0.02
+            np.random.seed(42)
 
-            # Plot mutations by source with jitter
             for source, base_y_pos in self.mutation_track_positions.items():
                 source_data = mutations_df[mutations_df["source"] == source]
 
                 if not source_data.empty:
-                    # Add source to legend
                     source_legend_elements.append(
                         Line2D(
                             [0],
@@ -480,24 +479,24 @@ class GenomeVisualizer:
                             label=source,
                             markersize=6,
                         )
-                    )  # Smaller legend markers
+                    )
 
-                    # Generate jittered y-positions for this source
                     jittered_y = base_y_pos + np.random.uniform(
                         -jitter_amount, jitter_amount, len(source_data)
                     )
 
-                    # Plot mutations with jitter
                     for (_, mutation), y_pos in zip(source_data.iterrows(), jittered_y):
-                        color = self._get_mutation_color(mutation["impact"])
+                        color = self._get_mutation_color(
+                            mutation.get(impact_col, mutation.get("impact", "unknown"))
+                        )
                         ax.scatter(
                             mutation["position"],
                             y_pos,
                             marker=self.source_markers[source],
                             c=color,
-                            s=10,  # Smaller dots
+                            s=10,
                             alpha=1,
-                        )  # Slight transparency
+                        )
 
         # Create legends
         feature_legend_elements = [
@@ -534,22 +533,21 @@ class GenomeVisualizer:
         if alt_features is not None and not alt_features.empty:
             feature_legend_elements.extend(
                 [
-                    # Use a straight vertical line for alternative start in legend
                     Line2D(
                         [0],
                         [0],
                         marker="|",
-                        color=self.feature_colors["alternative_start"],
-                        label="Alternative start",
+                        color=self.feature_colors["extension"],
+                        label="Alternative Isoform",
                         markersize=12,
-                        markeredgewidth=3,  # Make width consistent with other codon markers
-                        linestyle="None",  # Only show the marker
+                        markeredgewidth=3,
+                        linestyle="None",
                     ),
                     Line2D(
                         [0],
                         [0],
                         color=self.feature_colors["truncation"],
-                        label="Truncation",
+                        label="Alternative Isoform",
                         linewidth=1.5,
                     ),
                 ]
@@ -763,40 +761,39 @@ class GenomeVisualizer:
                     linewidth=3,  # Same width as alternative start
                 )
 
-        # Plot alternative start sites - update in both visualization methods
+        # Plot alternative isoform regions (truncation/extension) with unified labeling
         if alt_features is not None and not alt_features.empty:
             for _, alt_feature in alt_features.iterrows():
                 alt_start = alt_feature["start"]
                 alt_end = alt_feature["end"]
+                region_type = alt_feature.get("region_type", "alternative")
 
                 # Get transcript strand
-                transcript_strand = "+"  # Default to positive strand
+                transcript_strand = "+"
                 if features is not None and not features.empty:
                     transcript_info = features[features["feature_type"] == "transcript"]
                     if not transcript_info.empty:
                         transcript_strand = transcript_info.iloc[0]["strand"]
 
-                # Draw a complete truncation bracket with corners (facing downward)
-                bracket_y = 0.2  # Position for the top of the bracket
-                bracket_height = 0.05  # Height of the bracket
-
-                # Create a custom bracket shape with corners (flipped to open downward)
+                # Draw a bracket for truncation/extension
+                bracket_y = 0.2
+                bracket_height = 0.05
                 bracket_vertices = [
-                    (alt_start, bracket_y),  # Top left corner
-                    (alt_start, bracket_y - bracket_height),  # Bottom left corner
-                    (alt_end, bracket_y - bracket_height),  # Bottom right corner
-                    (alt_end, bracket_y),  # Top right corner
+                    (alt_start, bracket_y),
+                    (alt_start, bracket_y - bracket_height),
+                    (alt_end, bracket_y - bracket_height),
+                    (alt_end, bracket_y),
                 ]
-
-                # Draw the bracket as a continuous line
                 xs, ys = zip(*bracket_vertices)
                 ax.plot(
                     xs,
                     ys,
-                    color=self.feature_colors["truncation"],
+                    color=self.feature_colors.get(
+                        region_type, self.feature_colors["alternative_start"]
+                    ),
                     linewidth=1.0,
-                    solid_capstyle="butt",  # Sharp corners
-                    label="Truncation",
+                    solid_capstyle="butt",
+                    label="Alternative Isoform",
                 )
 
                 # Alternative start marker positioning depends on strand
@@ -805,41 +802,35 @@ class GenomeVisualizer:
                 alt_start_ymin = black_bar_y - (alt_start_height / 2)
                 alt_start_ymax = black_bar_y + (alt_start_height / 2)
 
-                # Place alternative start marker based on strand direction
                 if transcript_strand == "+":
-                    # For positive strand, place at right side (end of truncation)
                     alt_start_pos = alt_end
                 else:
-                    # For negative strand, place at left side (start of truncation)
                     alt_start_pos = alt_start
 
-                # Draw the alternative start marker
                 ax.vlines(
                     x=alt_start_pos,
                     ymin=alt_start_ymin,
                     ymax=alt_start_ymax,
-                    color=self.feature_colors["alternative_start"],
+                    color=self.feature_colors.get(
+                        region_type, self.feature_colors["alternative_start"]
+                    ),
                     linewidth=3,
-                    label="Alternative start",
+                    label="Alternative Isoform",
                 )
 
-                # Place the start codon label
-                if "start_codon" in alt_feature:
-                    if transcript_strand == "+":
-                        # For positive strand, place the label at the right side
-                        label_x = alt_end
-                    else:
-                        # For negative strand, place the label at the left side
-                        label_x = alt_start
-
-                    plt.text(
-                        label_x,
-                        alt_start_ymax + 0.05,
-                        alt_feature["start_codon"],
-                        fontsize=8,
-                        rotation=45,
-                        ha="center",
-                    )
+                # Place the start codon label and region type
+                label_x = alt_end if transcript_strand == "+" else alt_start
+                label_text = alt_feature.get("start_codon", "")
+                if region_type:
+                    label_text = f"{region_type.capitalize()} {label_text}".strip()
+                plt.text(
+                    label_x,
+                    alt_start_ymax + 0.05,
+                    label_text,
+                    fontsize=8,
+                    rotation=45,
+                    ha="center",
+                )
 
         # Plot mutations if provided (only those in zoom region)
         if mutations_df is not None and not mutations_df.empty:
