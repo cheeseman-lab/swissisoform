@@ -1,6 +1,6 @@
 #!/bin/bash
 # 0_download_genome.sh
-# Downloads required reference genome and annotation files
+# Downloads required reference genome and annotation files including RefSeq GTF
 set -e  # Exit on any error
 
 echo "================================================"
@@ -49,8 +49,76 @@ else
     echo "✓ gencode.v47.annotation.gtf already exists"
 fi
 
+# Download RefSeq GTF annotations
+echo ""
+echo "================================================"
+echo "RefSeq GTF Download"
+echo "================================================"
+echo "Downloading RefSeq GTF annotations (GRCh38)..."
+
+# Try NCBI RefSeq GTF first (most comprehensive)
+if [ ! -f "GRCh38_latest_genomic.gtf" ]; then
+    echo "  ├─ Trying NCBI RefSeq GTF..."
+    if wget -O GRCh38_latest_genomic.gtf.gz \
+        "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_genomic.gtf.gz" 2>/dev/null; then
+        gunzip GRCh38_latest_genomic.gtf.gz
+        echo "  └─ ✓ Downloaded NCBI RefSeq GTF"
+    else
+        echo "  └─ ❌ NCBI RefSeq GTF download failed"
+    fi
+fi
+
+# Try UCSC RefSeq GTF as fallback
+if [ ! -f "GRCh38_latest_genomic.gtf" ] && [ ! -f "ncbiRefSeq.gtf" ]; then
+    echo "  ├─ Trying UCSC RefSeq GTF (fallback)..."
+    if wget -O ncbiRefSeq.gtf.gz \
+        "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/genes/ncbiRefSeq.gtf.gz" 2>/dev/null; then
+        gunzip ncbiRefSeq.gtf.gz
+        echo "  └─ ✓ Downloaded UCSC RefSeq GTF"
+    else
+        echo "  └─ ❌ UCSC RefSeq GTF download failed"
+    fi
+fi
+
+# Check if we got a RefSeq GTF
+refseq_gtf_available=false
+refseq_gtf_file=""
+
+if [ -f "GRCh38_latest_genomic.gtf" ]; then
+    refseq_gtf_available=true
+    refseq_gtf_file="GRCh38_latest_genomic.gtf"
+    echo "✓ RefSeq GTF available: $refseq_gtf_file"
+elif [ -f "ncbiRefSeq.gtf" ]; then
+    refseq_gtf_available=true
+    refseq_gtf_file="ncbiRefSeq.gtf"
+    echo "✓ RefSeq GTF available: $refseq_gtf_file"
+else
+    echo "⚠ No RefSeq GTF downloaded"
+    echo "  Pipeline will use BioMart for RefSeq mapping (slower, requires internet)"
+fi
+
+# Analyze RefSeq GTF if available
+if [ "$refseq_gtf_available" = true ]; then
+    echo ""
+    echo "Analyzing RefSeq GTF..."
+    
+    # Count transcripts and genes
+    transcript_count=$(grep -c "^[^#].*transcript" "$refseq_gtf_file" 2>/dev/null || echo "0")
+    gene_count=$(grep "^[^#].*gene" "$refseq_gtf_file" | wc -l 2>/dev/null || echo "0")
+    
+    echo "  ├─ Genes: $gene_count"
+    echo "  ├─ Transcripts: $transcript_count"
+    
+    # Show sample transcript IDs
+    echo "  └─ Sample RefSeq transcript IDs:"
+    grep -o 'transcript_id "[^"]*"' "$refseq_gtf_file" | head -5 | sed 's/transcript_id /     ├─ /' 2>/dev/null || echo "     └─ Could not extract sample IDs"
+fi
+
 # Download HeLa preferred transcripts (if available)
 echo ""
+echo "================================================"
+echo "Preferred Transcripts"
+echo "================================================"
 echo "Checking for HeLa preferred transcripts..."
 if [ ! -f "hela_top_transcript.txt" ]; then
     echo "⚠ hela_top_transcript.txt not found"
@@ -199,6 +267,17 @@ for file in "${required_files[@]}"; do
     fi
 done
 
+# Check RefSeq GTF
+echo ""
+echo "Checking RefSeq GTF..."
+if [ "$refseq_gtf_available" = true ]; then
+    size=$(du -h "$refseq_gtf_file" | cut -f1)
+    echo "✓ RefSeq GTF: $refseq_gtf_file ($size)"
+else
+    echo "⚠ No RefSeq GTF available"
+    echo "  Will use BioMart for RefSeq mapping (requires internet connection)"
+fi
+
 # Check COSMIC database
 echo ""
 echo "Checking COSMIC database..."
@@ -232,6 +311,13 @@ echo "================================================"
 if [ "$all_present" = true ]; then
     echo "🎉 Required genome files downloaded successfully!"
     
+    if [ "$refseq_gtf_available" = true ]; then
+        echo "🧬 RefSeq GTF available for direct RefSeq transcript mapping"
+        echo "⚡ Fast RefSeq mapping without internet dependency"
+    else
+        echo "🌐 RefSeq mapping will use BioMart (requires internet)"
+    fi
+    
     if [ "$cosmic_available" = true ]; then
         echo "📊 COSMIC Mutant Census database is ready for mutation analysis"
         echo "🔬 Available mutation sources: ClinVar, gnomAD, COSMIC"
@@ -244,7 +330,11 @@ if [ "$all_present" = true ]; then
     echo "Next steps:"
     echo "1. Place your ribosome profiling BED files in ../ribosome_profiling/"
     echo "2. Add preferred transcripts to hela_top_transcript.txt (optional)"
-    echo "3. Run: bash 1_cleanup_files.sh"
+    if [ "$refseq_gtf_available" = true ]; then
+        echo "3. Run: bash 1_cleanup_files.sh (will use RefSeq GTF for mapping)"
+    else
+        echo "3. Run: bash 1_cleanup_files.sh (will use BioMart for RefSeq mapping)"
+    fi
     
 else
     echo "❌ Some required files are missing. Please check the download errors above."

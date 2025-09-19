@@ -1093,6 +1093,271 @@ def comprehensive_cleanup_bed_with_transcripts(
     return final_stats
 
 
+def extract_ensembl_refseq_mapping_from_refseq_gtf_direct(
+    refseq_gtf_path: Union[str, Path], verbose: bool = True
+) -> tuple[Dict[str, str], Dict[str, List[str]], Dict[str, List[str]]]:
+    """Extract direct Ensembl to RefSeq mapping from RefSeq GTF cross-references.
+
+    Args:
+        refseq_gtf_path: Path to RefSeq GTF file
+        verbose: Print extraction progress
+
+    Returns:
+        Tuple of (ensembl_to_refseq_dict, refseq_to_ensembl_dict, gene_to_refseq_with_ensembl_dict)
+    """
+    import re
+    from collections import defaultdict
+
+    ensembl_to_refseq = {}
+    refseq_to_ensembl = defaultdict(list)
+    gene_to_refseq_with_ensembl = defaultdict(list)
+    mapped_transcripts = 0
+
+    with open(refseq_gtf_path, "r") as f:
+        for line in f:
+            # Skip comments and non-transcript lines
+            if line.startswith("#") or "\ttranscript\t" not in line:
+                continue
+
+            attributes = line.strip().split("\t")[8]
+
+            # Extract gene name, RefSeq transcript ID, and Ensembl cross-reference
+            gene_match = re.search(r'gene "([^"]+)"', attributes) or re.search(
+                r'gene_id "([^"]+)"', attributes
+            )
+            refseq_match = re.search(r'transcript_id "([^"]+)"', attributes)
+            ensembl_match = re.search(r'db_xref "Ensembl:([^"]+)"', attributes)
+
+            if refseq_match:
+                refseq_id = refseq_match.group(1)
+                gene_name = gene_match.group(1) if gene_match else "Unknown"
+
+                # Only keep RefSeq transcript IDs (NM_, NR_, XM_, XR_)
+                if refseq_id.startswith(("NM_", "NR_", "XM_", "XR_")):
+                    # If this RefSeq transcript has an Ensembl cross-reference
+                    if ensembl_match:
+                        ensembl_id = ensembl_match.group(1)
+
+                        # Store direct mappings
+                        ensembl_to_refseq[ensembl_id] = refseq_id
+                        base_ensembl = ensembl_id.split(".")[0]
+                        ensembl_to_refseq[base_ensembl] = refseq_id
+
+                        # Store reverse mapping
+                        refseq_to_ensembl[refseq_id].append(ensembl_id)
+
+                        # Store gene-level mapping
+                        gene_to_refseq_with_ensembl[gene_name].append(refseq_id)
+
+                        mapped_transcripts += 1
+
+    if verbose:
+        print(
+            f"  ├─ Found {mapped_transcripts:,} RefSeq transcripts with Ensembl cross-references"
+        )
+        print(f"  └─ Covering {len(gene_to_refseq_with_ensembl):,} genes")
+
+    return ensembl_to_refseq, refseq_to_ensembl, gene_to_refseq_with_ensembl
+
+
+def find_refseq_gtf_file(genome_data_dir: Union[str, Path]) -> Optional[Path]:
+    """Find available RefSeq GTF file in the genome data directory.
+
+    Args:
+        genome_data_dir: Directory containing genome files
+
+    Returns:
+        Path to RefSeq GTF file or None if not found
+    """
+    genome_data_dir = Path(genome_data_dir)
+
+    # Possible RefSeq GTF filenames (in order of preference)
+    possible_files = [
+        "GRCh38_latest_genomic.gtf",  # NCBI RefSeq
+        "ncbiRefSeq.gtf",  # UCSC RefSeq
+        "refseq_genomic.gtf",  # Alternative naming
+        "GRCh38_refseq.gtf",  # Alternative naming
+    ]
+
+    for filename in possible_files:
+        gtf_path = genome_data_dir / filename
+        if gtf_path.exists():
+            return gtf_path
+
+    return None
+
+
+def comprehensive_cleanup_bed_with_refseq_gtf_direct(
+    input_bed_path: Union[str, Path],
+    gtf_path: Union[str, Path],
+    preferred_transcripts_path: Union[str, Path],
+    output_bed_path: Union[str, Path],
+    refseq_gtf_path: Optional[Union[str, Path]] = None,
+    verbose: bool = True,
+) -> Dict:
+    """Comprehensive BED cleanup using direct RefSeq GTF cross-references with fallback logic.
+
+    Args:
+        input_bed_path: Path to input BED file
+        gtf_path: Path to GENCODE GTF annotation file
+        preferred_transcripts_path: Path to preferred transcripts file
+        output_bed_path: Path to save enhanced BED file
+        refseq_gtf_path: Path to RefSeq GTF file (auto-detected if None)
+        verbose: Print detailed progress
+
+    Returns:
+        Dictionary with processing statistics
+    """
+    from pathlib import Path
+
+    # Step 1: Find RefSeq GTF if not provided
+    if refseq_gtf_path is None:
+        genome_data_dir = Path(gtf_path).parent
+        refseq_gtf_path = find_refseq_gtf_file(genome_data_dir)
+
+        if refseq_gtf_path is None:
+            if verbose:
+                print("  ❌ No RefSeq GTF found!")
+                print("  💡 Please run: bash 0_download_genome.sh")
+            raise FileNotFoundError(
+                f"RefSeq GTF file not found in {genome_data_dir}. "
+                f"Please run 0_download_genome.sh to download RefSeq annotations."
+            )
+
+    if verbose:
+        print(f"  ├─ Using RefSeq GTF: {refseq_gtf_path.name}")
+
+    # Step 2: Run standard cleanup to get Ensembl transcript mappings
+    temp_bed_path = str(output_bed_path).replace(".bed", "_temp.bed")
+
+    standard_stats = comprehensive_cleanup_bed_with_transcripts(
+        input_bed_path=input_bed_path,
+        gtf_path=gtf_path,
+        preferred_transcripts_path=preferred_transcripts_path,
+        output_bed_path=temp_bed_path,
+        verbose=verbose,
+    )
+
+    # Step 3: Extract RefSeq mapping from GTF cross-references
+    if verbose:
+        print("  ├─ Extracting RefSeq mappings...")
+
+    ensembl_to_refseq, refseq_to_ensembl, gene_to_refseq_with_ensembl = (
+        extract_ensembl_refseq_mapping_from_refseq_gtf_direct(
+            refseq_gtf_path=refseq_gtf_path, verbose=verbose
+        )
+    )
+
+    # Step 4: Add RefSeq column to BED file with enhanced fallback logic
+    if verbose:
+        print("  ├─ Mapping transcripts to RefSeq...")
+
+    enhanced_entries = []
+    refseq_assignments = 0
+    direct_matches = 0
+    fallback_matches = 0
+    gene_level_matches = 0
+
+    with open(temp_bed_path, "r") as f:
+        for line in f:
+            if line.startswith("#"):
+                continue
+
+            parts = line.strip().split("\t")
+            if len(parts) >= 7:
+                ensembl_transcript_id = parts[6]
+                # Extract gene name from BED name field (assumes format: GENE_ENSG_...)
+                bed_name_parts = parts[3].split("_")
+                gene_name = bed_name_parts[0] if bed_name_parts else "Unknown"
+
+                refseq_id = "NA"
+
+                # Method 1: Direct lookup (versioned)
+                if ensembl_transcript_id in ensembl_to_refseq:
+                    refseq_id = ensembl_to_refseq[ensembl_transcript_id]
+                    direct_matches += 1
+                else:
+                    # Method 2: Direct lookup (base, without version)
+                    base_ensembl = ensembl_transcript_id.split(".")[0]
+                    if base_ensembl in ensembl_to_refseq:
+                        refseq_id = ensembl_to_refseq[base_ensembl]
+                        direct_matches += 1
+                    else:
+                        # Method 3: Fallback - find RefSeq with only one Ensembl match
+                        for (
+                            refseq_transcript,
+                            ensembl_list,
+                        ) in refseq_to_ensembl.items():
+                            if len(ensembl_list) == 1:
+                                target_ensembl = ensembl_list[0]
+                                if (
+                                    ensembl_transcript_id == target_ensembl
+                                    or base_ensembl == target_ensembl.split(".")[0]
+                                ):
+                                    refseq_id = refseq_transcript
+                                    fallback_matches += 1
+                                    break
+
+                        # Method 4: Gene-level fallback
+                        if (
+                            refseq_id == "NA"
+                            and gene_name in gene_to_refseq_with_ensembl
+                        ):
+                            refseq_candidates = gene_to_refseq_with_ensembl[gene_name]
+                            unique_refseq = list(set(refseq_candidates))
+
+                            if len(unique_refseq) == 1:
+                                refseq_id = unique_refseq[0]
+                                gene_level_matches += 1
+                            elif len(unique_refseq) > 1:
+                                # Pick the best one (prefer NM_ over XM_, then shortest)
+                                best_refseq = min(
+                                    unique_refseq,
+                                    key=lambda x: (not x.startswith("NM_"), len(x), x),
+                                )
+                                refseq_id = best_refseq
+                                gene_level_matches += 1
+
+                if refseq_id != "NA":
+                    refseq_assignments += 1
+
+                # Create enhanced line
+                enhanced_line = line.strip() + f"\t{refseq_id}"
+                enhanced_entries.append(enhanced_line)
+
+    # Write final enhanced BED file
+    output_bed_path = Path(output_bed_path)
+    output_bed_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_bed_path, "w") as f:
+        f.write("\n".join(enhanced_entries))
+
+    # Clean up temporary file
+    Path(temp_bed_path).unlink()
+
+    # Calculate final statistics
+    refseq_mapping_rate = (
+        (refseq_assignments / len(enhanced_entries) * 100) if enhanced_entries else 0
+    )
+
+    final_stats = {
+        **standard_stats,
+        "refseq_assignments": refseq_assignments,
+        "refseq_mapping_rate": refseq_mapping_rate,
+        "direct_matches": direct_matches,
+        "fallback_matches": fallback_matches,
+        "gene_level_matches": gene_level_matches,
+        "mapping_source": "refseq_gtf_cross_references_with_gene_fallback",
+    }
+
+    if verbose:
+        total_fallback = fallback_matches + gene_level_matches
+        print(f"  ├─ Mapped: {direct_matches} direct, {total_fallback} fallback")
+        print(f"  └─ RefSeq success: {refseq_mapping_rate:.1f}%")
+
+    return final_stats
+
+
 def parse_gene_list(gene_list_path: Union[str, Path]) -> List[str]:
     """Parse a file containing a list of gene names.
 

@@ -54,7 +54,7 @@ if [ "$missing_riboprof" = true ]; then
     echo ""
     echo "❌ Missing ribosome profiling BED files!"
     echo "Please place your experimental data files in $RIBOPROF_DIR:"
-    echo "  - truncations.bed (all detected truncation sites)"
+    echo "  - isoforms.bed (all detected isoforms sites)"
     exit 1
 fi
 

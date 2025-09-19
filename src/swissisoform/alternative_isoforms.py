@@ -45,9 +45,10 @@ class AlternativeIsoform:
     def load_bed(self, file_path: str) -> None:
         """Load data from BED format file with flexible column support.
 
-        Supports both standard 6-column and enhanced 7-column formats:
+        Supports standard 6-column, enhanced 7-column, and dual-transcript 8-column formats:
         - 6 columns: chrom, start, end, name, score, strand
         - 7 columns: chrom, start, end, name, score, strand, transcript_id
+        - 8 columns: chrom, start, end, name, score, strand, ensembl_transcript_id, refseq_transcript_id
 
         Args:
             file_path (str): Path to the BED file.
@@ -55,11 +56,17 @@ class AlternativeIsoform:
         Raises:
             ValueError: If the BED file is empty or has an unsupported format.
         """
-        # Read BED format - auto-detect number of columns
+        # Read BED format - auto-detect number of columns, skipping comment lines
         with open(file_path, "r") as f:
-            first_line = f.readline().strip()
+            first_line = None
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    first_line = line
+                    break
+
             if not first_line:
-                raise ValueError("Empty BED file")
+                raise ValueError("Empty BED file or no data lines found")
 
             num_columns = len(first_line.split("\t"))
 
@@ -67,6 +74,7 @@ class AlternativeIsoform:
             # Standard 6-column format
             column_names = ["chrom", "start", "end", "name", "score", "strand"]
             self._debug_print("Loading standard 6-column BED format")
+
         elif num_columns == 7:
             # Enhanced 7-column format with transcript_id
             column_names = [
@@ -81,17 +89,35 @@ class AlternativeIsoform:
             self._debug_print(
                 "Loading enhanced 7-column BED format with transcript IDs"
             )
-        else:
-            raise ValueError(
-                f"Unsupported BED format: {num_columns} columns. Expected 6 or 7."
+
+        elif num_columns == 8:
+            # Dual-transcript 8-column format with both Ensembl and RefSeq IDs
+            column_names = [
+                "chrom",
+                "start",
+                "end",
+                "name",
+                "score",
+                "strand",
+                "ensembl_transcript_id",
+                "refseq_transcript_id",
+            ]
+            self._debug_print(
+                "Loading dual-transcript 8-column BED format with Ensembl and RefSeq IDs"
             )
 
-        # Read the full file
+        else:
+            raise ValueError(
+                f"Unsupported BED format: {num_columns} columns. Expected 6, 7, or 8."
+            )
+
+        # Read the full file, skipping comment lines
         self.start_sites = pd.read_csv(
             file_path,
             sep="\t",
             names=column_names,
             dtype=str,  # Read all as strings first to avoid parsing issues
+            comment="#",  # Skip lines starting with #
         )
 
         # Parse the name field which contains gene information
@@ -155,6 +181,26 @@ class AlternativeIsoform:
             self._debug_print(
                 f"Transcript assignments: {transcript_assignments}/{len(self.start_sites)}"
             )
+        elif "ensembl_transcript_id" in self.start_sites.columns:
+            # For 8-column format, report both transcript types
+            ensembl_assignments = (
+                self.start_sites["ensembl_transcript_id"] != "NA"
+            ).sum()
+            refseq_assignments = (
+                self.start_sites["refseq_transcript_id"] != "NA"
+            ).sum()
+
+            self._debug_print(
+                f"Ensembl transcript assignments: {ensembl_assignments}/{len(self.start_sites)}"
+            )
+            self._debug_print(
+                f"RefSeq transcript assignments: {refseq_assignments}/{len(self.start_sites)}"
+            )
+
+            # For backward compatibility, create a transcript_id column using Ensembl ID
+            self.start_sites["transcript_id"] = self.start_sites[
+                "ensembl_transcript_id"
+            ]
 
     def check_data_quality(self) -> Dict:
         """Check data quality for loaded start sites.
