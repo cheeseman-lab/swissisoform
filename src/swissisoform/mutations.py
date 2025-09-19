@@ -1632,52 +1632,146 @@ class MutationHandler:
             protein_generator: An object with a predict_consequence_by_translation method for consequence validation.
 
         Returns:
-            pd.DataFrame: DataFrame with validated consequences and comparison to reported impact.
+            pd.DataFrame: DataFrame with validated consequences in new 'impact_validated' column.
         """
         validated_mutations = []
 
         print(f"  │  │  ├─ Validating {len(mutations_df)} mutation consequences...")
+        print(f"  │  │  │  ├─ Will add 'impact_validated' column")
 
-        for _, mutation in mutations_df.iterrows():
+        # Show input distribution
+        if "impact" in mutations_df.columns:
+            input_impacts = mutations_df["impact"].value_counts()
+            print(f"  │  │  │  ├─ Original impact distribution:")
+            for impact, count in input_impacts.items():
+                print(f"  │  │  │  │  ├─ {impact}: {count}")
+
+        validation_stats = {
+            "total_processed": 0,
+            "successful_validations": 0,
+            "validation_failures": 0,
+            "impact_agreements": 0,
+            "impact_disagreements": 0,
+            "disagreement_patterns": {},
+        }
+
+        for idx, mutation in mutations_df.iterrows():
+            validation_stats["total_processed"] += 1
+
             try:
                 # Get mutation details
                 genomic_pos = int(mutation["position"])
                 ref_allele = str(mutation["reference"]).upper()
                 alt_allele = str(mutation["alternate"]).upper()
-                reported_consequence = mutation.get("impact", "unknown")
+                original_impact = mutation.get("impact", "unknown")
+                variant_id = mutation.get("variant_id", f"pos_{genomic_pos}")
+
+                print(
+                    f"  │  │  │  ├─ [{idx + 1}/{len(mutations_df)}] Validating {variant_id}"
+                )
+                print(f"  │  │  │  │  ├─ Position: {genomic_pos}")
+                print(f"  │  │  │  │  ├─ Mutation: {ref_allele}>{alt_allele}")
+                print(f"  │  │  │  │  ├─ Original impact: '{original_impact}'")
 
                 # Use protein_generator to predict consequence
-                validated_consequence = (
+                validated_impact = (
                     await protein_generator.predict_consequence_by_translation(
                         transcript_id, genomic_pos, ref_allele, alt_allele
                     )
                 )
 
-                # Create validated mutation record
+                print(f"  │  │  │  │  ├─ Validated impact: '{validated_impact}'")
+
+                # Create validated mutation record - PRESERVE ORIGINAL IMPACT
                 validated_mutation = mutation.copy()
-                validated_mutation["validated_consequence"] = validated_consequence
-                validated_mutation["consequence_matches"] = (
-                    validated_consequence == reported_consequence
-                )
-                validated_mutation["reported_consequence"] = reported_consequence
+
+                # Add new column with validated impact
+                validated_mutation["impact_validated"] = validated_impact
+                validated_mutation["validation_method"] = "translation_based"
+                validated_mutation["validation_successful"] = True
+
+                # Track agreement/disagreement
+                if original_impact == validated_impact:
+                    validated_mutation["impact_agreement"] = True
+                    validation_stats["impact_agreements"] += 1
+                    print(
+                        f"  │  │  │  │  └─ ✅ AGREEMENT: Original and validated match"
+                    )
+                else:
+                    validated_mutation["impact_agreement"] = False
+                    validation_stats["impact_disagreements"] += 1
+
+                    # Track disagreement patterns
+                    disagreement_key = f"{original_impact} → {validated_impact}"
+                    if (
+                        disagreement_key
+                        not in validation_stats["disagreement_patterns"]
+                    ):
+                        validation_stats["disagreement_patterns"][disagreement_key] = 0
+                    validation_stats["disagreement_patterns"][disagreement_key] += 1
+
+                    print(
+                        f"  │  │  │  │  └─ 🔄 DISAGREEMENT: {original_impact} → {validated_impact}"
+                    )
 
                 validated_mutations.append(validated_mutation)
+                validation_stats["successful_validations"] += 1
 
             except Exception as e:
-                # If validation fails, keep original consequence
+                print(f"  │  │  │  │  └─ ❌ VALIDATION FAILED: {str(e)}")
+
+                # Keep original mutation with error info
                 validated_mutation = mutation.copy()
-                validated_mutation["validated_consequence"] = mutation.get(
-                    "impact", "unknown"
-                )
-                validated_mutation["consequence_matches"] = None
-                validated_mutation["reported_consequence"] = mutation.get(
-                    "impact", "unknown"
-                )
+                validated_mutation["impact_validated"] = "validation_failed"
+                validated_mutation["validation_method"] = "translation_based"
+                validated_mutation["validation_successful"] = False
                 validated_mutation["validation_error"] = str(e)
+                validated_mutation["impact_agreement"] = False
 
                 validated_mutations.append(validated_mutation)
+                validation_stats["validation_failures"] += 1
 
-        return pd.DataFrame(validated_mutations)
+        # Create final DataFrame
+        result_df = pd.DataFrame(validated_mutations)
+
+        # Print comprehensive summary
+        print(f"  │  │  │  └─ Validation Summary:")
+        print(
+            f"  │  │  │     ├─ Total processed: {validation_stats['total_processed']}"
+        )
+        print(
+            f"  │  │  │     ├─ Successful validations: {validation_stats['successful_validations']}"
+        )
+        print(
+            f"  │  │  │     ├─ Validation failures: {validation_stats['validation_failures']}"
+        )
+        print(
+            f"  │  │  │     ├─ Impact agreements: {validation_stats['impact_agreements']}"
+        )
+        print(
+            f"  │  │  │     └─ Impact disagreements: {validation_stats['impact_disagreements']}"
+        )
+
+        if validation_stats["disagreement_patterns"]:
+            print(f"  │  │  │     ├─ Disagreement patterns:")
+            for pattern, count in validation_stats["disagreement_patterns"].items():
+                print(f"  │  │  │     │  ├─ {pattern}: {count}")
+
+        # Show final distributions
+        if not result_df.empty:
+            print(f"  │  │  │     ├─ Final original impact distribution:")
+            if "impact" in result_df.columns:
+                for impact, count in result_df["impact"].value_counts().items():
+                    print(f"  │  │  │     │  ├─ {impact}: {count}")
+
+            print(f"  │  │  │     └─ Final validated impact distribution:")
+            if "impact_validated" in result_df.columns:
+                for impact, count in (
+                    result_df["impact_validated"].value_counts().items()
+                ):
+                    print(f"  │  │  │        ├─ {impact}: {count}")
+
+        return result_df
 
     async def analyze_gene_mutations_comprehensive(
         self,

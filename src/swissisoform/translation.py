@@ -1639,11 +1639,26 @@ class AlternativeProteinGenerator:
         Returns:
             str: Predicted consequence type (e.g., 'missense variant', 'nonsense variant', 'frameshift variant', 'synonymous variant', or 'unknown').
         """
+        if self.debug:
+            print(
+                f"        ├─ Predicting consequence for {ref_allele}>{alt_allele} at {genomic_pos}"
+            )
+
         try:
             # Get canonical protein
             canonical_result = self.extract_canonical_protein(transcript_id)
             if not canonical_result:
+                if self.debug:
+                    print(f"        │  └─ ❌ Could not extract canonical protein")
                 return "unknown"
+
+            if self.debug:
+                print(
+                    f"        │  ├─ Canonical protein length: {len(canonical_result['protein'])} AA"
+                )
+                print(
+                    f"        │  ├─ Canonical CDS length: {len(canonical_result['coding_sequence'])} bp"
+                )
 
             # Apply mutation to get mutated protein
             mutated_result = self._apply_mutation_to_sequence(
@@ -1651,17 +1666,34 @@ class AlternativeProteinGenerator:
             )
 
             if not mutated_result:
+                if self.debug:
+                    print(f"        │  └─ No protein change (synonymous)")
                 return "synonymous variant"  # No protein change
 
+            if self.debug:
+                print(
+                    f"        │  ├─ Mutated protein length: {len(mutated_result['protein'])} AA"
+                )
+                print(
+                    f"        │  ├─ Mutated CDS length: {len(mutated_result['coding_sequence'])} bp"
+                )
+
             # Classify the type of change
-            return self.classify_protein_change(
+            consequence = self.classify_protein_change(
                 canonical_result["protein"],
                 mutated_result["protein"],
                 canonical_result["coding_sequence"],
                 mutated_result["coding_sequence"],
             )
 
+            if self.debug:
+                print(f"        │  └─ Classified as: {consequence}")
+
+            return consequence
+
         except Exception as e:
+            if self.debug:
+                print(f"        │  └─ ❌ Exception during prediction: {str(e)}")
             return "unknown"
 
     def classify_protein_change(
@@ -1678,26 +1710,72 @@ class AlternativeProteinGenerator:
         Returns:
             str: Consequence type (e.g., 'synonymous variant', 'missense variant', 'nonsense variant', 'frameshift variant', 'inframe deletion', 'inframe insertion').
         """
+        if self.debug:
+            print(f"          ├─ Classifying protein change:")
+            print(f"          │  ├─ Original protein: {len(orig_protein)} AA")
+            print(f"          │  ├─ Mutated protein: {len(mut_protein)} AA")
+            print(f"          │  ├─ Original CDS: {len(orig_cds)} bp")
+            print(f"          │  └─ Mutated CDS: {len(mut_cds)} bp")
+
         # No protein change
         if mut_protein == orig_protein:
+            if self.debug:
+                print(
+                    f"          └─ Classification: synonymous variant (no protein change)"
+                )
             return "synonymous variant"
 
         # Check for premature stop codon
         if "*" in mut_protein and "*" not in orig_protein[: len(mut_protein)]:
+            # Find position of stop codon
+            stop_pos = mut_protein.find("*")
+            if self.debug:
+                print(
+                    f"          └─ Classification: nonsense variant (stop codon at position {stop_pos + 1})"
+                )
             return "nonsense variant"
 
         # Check for length changes
         if len(mut_protein) != len(orig_protein):
             cds_length_change = len(mut_cds) - len(orig_cds)
+            protein_length_change = len(mut_protein) - len(orig_protein)
+
+            if self.debug:
+                print(f"          │  ├─ Length change detected:")
+                print(f"          │  │  ├─ CDS change: {cds_length_change} bp")
+                print(f"          │  │  └─ Protein change: {protein_length_change} AA")
+
             if cds_length_change % 3 != 0:
+                if self.debug:
+                    print(
+                        f"          └─ Classification: frameshift variant (CDS change not divisible by 3)"
+                    )
                 return "frameshift variant"
             else:
                 if len(mut_protein) < len(orig_protein):
+                    if self.debug:
+                        print(
+                            f"          └─ Classification: inframe deletion ({-protein_length_change} AA deleted)"
+                        )
                     return "inframe deletion"
                 else:
+                    if self.debug:
+                        print(
+                            f"          └─ Classification: inframe insertion ({protein_length_change} AA inserted)"
+                        )
                     return "inframe insertion"
 
         # Same length, different sequence = missense
+        # Find the position of the change
+        if self.debug:
+            for i, (orig_aa, mut_aa) in enumerate(zip(orig_protein, mut_protein)):
+                if orig_aa != mut_aa:
+                    print(
+                        f"          │  ├─ First AA change at position {i + 1}: {orig_aa}>{mut_aa}"
+                    )
+                    break
+            print(f"          └─ Classification: missense variant")
+
         return "missense variant"
 
     # ===== HELPER METHODS =====
