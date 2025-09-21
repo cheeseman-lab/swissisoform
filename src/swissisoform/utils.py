@@ -45,12 +45,12 @@ def save_gene_level_results(
     print(f"Gene-level results saved to {output_path}")
 
 
-def save_truncation_level_results(
+def save_isoform_level_results(
     results: List[Dict],
     output_dir: Union[str, Path],
-    filename: str = "truncation_level_results.csv",
+    filename: str = "isoform_level_results.csv",
 ) -> None:
-    """Save detailed transcript-truncation pair analysis results to CSV file.
+    """Save detailed transcript-isoform pair analysis results to CSV file.
 
     Args:
         results: List of result dictionaries containing pair_results
@@ -59,6 +59,7 @@ def save_truncation_level_results(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
     # Extract all pair results
     all_pairs = []
     for result in results:
@@ -68,19 +69,23 @@ def save_truncation_level_results(
             for pair in result["pair_results"]:
                 pair_with_gene = {"gene_name": gene_name, **pair}
                 all_pairs.append(pair_with_gene)
+
     # If no pairs found, return early
     if not all_pairs:
-        print(f"No transcript-truncation pairs found to save")
+        print(f"No transcript-isoform pairs found to save")
         return
+
     # Convert to DataFrame
     pairs_df = pd.DataFrame(all_pairs)
+
     # Organize columns in preferred order
     column_order = [
         "gene_name",  # Gene name first
         "transcript_id",  # Transcript ID second
-        "truncation_id",  # Alternative feature ID third
-        "truncation_start",
-        "truncation_end",
+        "feature_id",  # Alternative feature ID third
+        "feature_type",  # truncation or extension
+        "feature_start",
+        "feature_end",
         "mutation_count_total",  # Total mutation count
     ]
 
@@ -90,9 +95,11 @@ def save_truncation_level_results(
     ]
     column_order.extend(mutation_category_columns)
 
-    # Add the ClinVar IDs column
-    clinvar_columns = [col for col in pairs_df.columns if col.startswith("clinvar")]
-    column_order.extend(clinvar_columns)
+    # Add variant IDs columns
+    variant_id_columns = [
+        col for col in pairs_df.columns if col.startswith("variant_ids_")
+    ]
+    column_order.extend(variant_id_columns)
 
     # Reorder columns that exist in the dataframe
     available_columns = [col for col in column_order if col in pairs_df.columns]
@@ -110,7 +117,7 @@ def save_truncation_level_results(
     # Save to CSV
     output_path = output_dir / filename
     pairs_df.to_csv(output_path, index=False)
-    print(f"Transcript-truncation pair analysis saved to {output_path}")
+    print(f"Transcript-isoform pair analysis saved to {output_path}")
 
 
 def print_mutation_summary(results_df, output_dir):
@@ -126,32 +133,36 @@ def print_mutation_summary(results_df, output_dir):
     for status, count in results_df["status"].value_counts().items():
         print(f"  │  ├─ {status}: {count}")
 
-    # Transcript-truncation statistics
+    # Transcript-isoform statistics (updated for new structure)
     successful_genes = results_df[results_df["status"] == "success"]
     if not successful_genes.empty:
         total_transcripts = successful_genes["total_transcripts"].sum()
-        total_truncations = successful_genes["truncation_features"].sum()
-        total_pairs = successful_genes["transcript_truncation_pairs"].sum()
+        total_features = successful_genes["alternative_features"].sum()
+        total_pairs = successful_genes["transcript_feature_pairs"].sum()
 
         # Calculate average pairs per gene
         avg_pairs_per_gene = (
             total_pairs / len(successful_genes) if len(successful_genes) > 0 else 0
         )
 
-        print(f"\n  ├─ Transcript-Truncation Analysis:")
+        print(f"\n  ├─ Transcript-Isoform Analysis:")
         print(f"  │  ├─ Total transcripts across all genes: {total_transcripts}")
-        print(f"  │  ├─ Total truncation features: {total_truncations}")
-        print(f"  │  ├─ Total transcript-truncation pairs: {total_pairs}")
+        print(f"  │  ├─ Total alternative isoform features: {total_features}")
+        print(f"  │  ├─ Total transcript-isoform pairs: {total_pairs}")
         print(f"  │  └─ Average pairs per gene: {avg_pairs_per_gene:.2f}")
 
         # Mutation statistics if available
         if "mutations_filtered" in successful_genes.columns:
             total_mutations = successful_genes["mutations_filtered"].sum()
             print(f"\n  ├─ Mutation Analysis:")
-            print(f"  │  ├─ Total mutations in truncation regions: {total_mutations}")
+            print(
+                f"  │  ├─ Total mutations in alternative isoform regions: {total_mutations}"
+            )
 
             # Try to load mutation analysis results to report statistics
-            mutation_analysis_path = Path(output_dir) / "mutation_analysis_by_pair.csv"
+            mutation_analysis_path = (
+                Path(output_dir) / "isoform_level_results.csv"
+            )  # Updated filename
             if mutation_analysis_path.exists():
                 try:
                     pairs_df = pd.read_csv(mutation_analysis_path)
@@ -169,8 +180,25 @@ def print_mutation_summary(results_df, output_dir):
                         f"  │  ├─ Total mutations across all pairs: {total_pair_mutations}"
                     )
                     print(
-                        f"  │  ├─ Average mutations per transcript-truncation pair: {avg_mutations_per_pair:.2f}"
+                        f"  │  ├─ Average mutations per transcript-isoform pair: {avg_mutations_per_pair:.2f}"
                     )
+
+                    # Show breakdown by isoform type if available
+                    if "feature_type" in pairs_df.columns:
+                        print(f"  │  │")
+                        print(f"  │  ├─ Breakdown by isoform type:")
+
+                        type_mutations = pairs_df.groupby("feature_type")[
+                            "mutation_count_total"
+                        ].sum()
+                        for isoform_type, count in type_mutations.items():
+                            type_pairs = len(
+                                pairs_df[pairs_df["feature_type"] == isoform_type]
+                            )
+                            avg_per_type = count / type_pairs if type_pairs > 0 else 0
+                            print(
+                                f"  │  │  ├─ {isoform_type.capitalize()}: {count} total ({avg_per_type:.1f} avg/pair)"
+                            )
 
                     # Print statistics for each mutation category
                     mutation_categories = [
@@ -204,23 +232,25 @@ def print_mutation_summary(results_df, output_dir):
                             )
 
                     print(
-                        f"  │  └─ Detailed results available in mutation_analysis_by_pair.csv"
+                        f"  │  └─ Detailed results available in isoform_level_results.csv"  # Updated filename
                     )
                 except Exception as e:
                     logger.error(f"Error reading mutation analysis: {str(e)}")
                     print(f"  │  └─ Error reading detailed mutation analysis: {str(e)}")
+
     # Genes with errors
     error_genes = results_df[results_df["status"] == "error"]
     if not error_genes.empty:
         print("\n  ├─ Genes with errors:")
         for _, row in error_genes.iterrows():
             print(f"  │  ├─ {row['gene_name']}: {row['error']}")
+
     print(f"\n  ├─ Results saved to: {output_dir}")
     print(
         f"  ├─ Gene-level results saved to: {Path(output_dir) / 'gene_level_results.csv'}"
     )
     print(
-        f"  ├─ Detailed mutation analysis by pair saved to: {Path(output_dir) / 'mutation_analysis_by_pair.csv'}"
+        f"  ├─ Detailed mutation analysis by pair saved to: {Path(output_dir) / 'isoform_level_results.csv'}"  # Updated filename
     )
 
 
@@ -258,12 +288,14 @@ def print_translation_summary(
         print(f"\n  ├─ Sequence Generation:")
         print(f"  │  ├─ Total sequences generated: {len(dataset):,}")
 
-        # Calculate transcript-truncation pairs
+        # Calculate transcript-isoform pairs
         genes_with_data = dataset["gene"].nunique()
         if mutations_mode and "variant_type" in dataset.columns:
-            # Count unique transcript-truncation pairs (canonical + truncated base pairs)
+            # Count unique transcript-isoform pairs (canonical + alternative base pairs)
             base_sequences = dataset[
-                dataset["variant_type"].isin(["canonical", "truncated"])
+                dataset["variant_type"].isin(
+                    ["canonical", "alternative"]
+                )  # Updated terminology
             ]
             unique_pairs = (
                 len(base_sequences) // 2
@@ -276,7 +308,9 @@ def print_translation_summary(
                 len(dataset) // 2 if len(dataset) % 2 == 0 else (len(dataset) + 1) // 2
             )
 
-        print(f"  │  ├─ Transcript-truncation pairs: {unique_pairs}")
+        print(
+            f"  │  ├─ Transcript-isoform pairs: {unique_pairs}"
+        )  # Updated terminology
         print(
             f"  │  └─ Average sequences per gene: {len(dataset) / genes_with_data:.1f}"
         )
@@ -322,12 +356,14 @@ def print_translation_summary(
                     )
         else:
             # Pairs mode breakdown
-            if "is_truncated" in dataset.columns:
-                canonical_count = len(dataset[dataset["is_truncated"] == 0])
-                truncated_count = len(dataset[dataset["is_truncated"] == 1])
+            if "is_alternative" in dataset.columns:  # Updated column name
+                canonical_count = len(dataset[dataset["is_alternative"] == 0])
+                alternative_count = len(dataset[dataset["is_alternative"] == 1])
                 print(f"\n  ├─ Sequence breakdown:")
                 print(f"  │  ├─ Canonical: {canonical_count:,}")
-                print(f"  │  └─ Truncated: {truncated_count:,}")
+                print(
+                    f"  │  └─ Alternative isoform: {alternative_count:,}"
+                )  # Updated terminology
 
         # Length statistics
         print(f"\n  ├─ Length statistics:")
@@ -342,7 +378,9 @@ def print_translation_summary(
     if failed_genes:
         print(f"\n  ├─ Genes with errors:")
         for gene in failed_genes[:5]:  # Show first 5
-            print(f"  │  ├─ {gene}: No transcript-truncation pairs found")
+            print(
+                f"  │  ├─ {gene}: No transcript-isoform pairs found"
+            )  # Updated terminology
         if len(failed_genes) > 5:
             print(f"  │  └─ ... and {len(failed_genes) - 5} more")
 

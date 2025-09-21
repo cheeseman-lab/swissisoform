@@ -560,9 +560,17 @@ class MutationHandler:
     def _extract_clinvar_molecular_consequences(
         self, variant_info: Dict, variant_data: Dict
     ):
-        """Extract molecular consequences from ClinVar variant."""
+        """Extract molecular consequences from ClinVar variant.
+
+        Takes only the first (primary) consequence when multiple are present.
+        """
         mol_cons = variant_data.get("molecular_consequence_list", [])
-        variant_info["molecular_consequences"] = ";".join(mol_cons) if mol_cons else ""
+
+        if mol_cons:
+            # Store ONLY the primary (first) consequence
+            variant_info["molecular_consequences"] = mol_cons[0].strip()
+        else:
+            variant_info["molecular_consequences"] = ""
 
     def _extract_clinvar_location_info(self, variant_info: Dict, variant_data: Dict):
         """Extract location information from ClinVar variant."""
@@ -2007,8 +2015,7 @@ class MutationHandler:
                                 [all_mutations, filtered_mutations]
                             )
 
-            # Initialize validation components if needed
-            protein_generator = None
+            # Initialize validation components if needed and validate all mutations once
             if validate_consequences and not all_mutations.empty:
                 print(f"  ├─ Initializing consequence validation...")
                 from swissisoform.translation import AlternativeProteinGenerator
@@ -2019,6 +2026,28 @@ class MutationHandler:
                     output_dir=output_dir,
                     debug=False,
                 )
+
+                # Use the first transcript for validation context
+                primary_transcript = transcript_ids_from_bed[0]
+                print(
+                    f"  ├─ Validating consequences for all {len(all_mutations)} mutations using {primary_transcript}..."
+                )
+
+                all_mutations = await self._validate_mutation_consequences(
+                    all_mutations, primary_transcript, protein_generator
+                )
+
+                print(
+                    f"  ├─ Validation complete. Has impact_validated: {'impact_validated' in all_mutations.columns}"
+                )
+                if "impact_validated" in all_mutations.columns:
+                    print(f"  ├─ Impact validation summary:")
+                    print(
+                        f"      Original impacts: {all_mutations['impact'].value_counts().to_dict()}"
+                    )
+                    print(
+                        f"      Validated impacts: {all_mutations['impact_validated'].value_counts().to_dict()}"
+                    )
 
             # Container for all transcript-feature analysis results
             pair_results = []
@@ -2063,20 +2092,13 @@ class MutationHandler:
                             f"  │  ├─ {transcript_id} × {feature_id} ({feature_type}): {pair_mutation_count} mutations"
                         )
 
-                        # Validate consequences if requested
-                        if validate_consequences and protein_generator:
-                            validated_mutations = (
-                                await self._validate_mutation_consequences(
-                                    pair_mutations, transcript_id, protein_generator
-                                )
-                            )
-                            pair_mutations = validated_mutations
-
                         variant_ids = []
 
                         # Count by impact category (using validated consequences if available)
                         impact_column = (
-                            "impact_validated" if validate_consequences else "impact"
+                            "impact_validated"
+                            if "impact_validated" in pair_mutations.columns
+                            else "impact"
                         )
                         for impact in pair_mutations[impact_column].unique():
                             if pd.isna(impact):
@@ -2229,7 +2251,19 @@ class MutationHandler:
                             & (all_mutations["position"] <= feature_end)
                         ].copy()
 
-                        # Create the visualization using only this feature
+                        print(
+                            f"  │  │  ├─ Creating view with {len(pair_mutations)} mutations"
+                        )
+                        print(
+                            f"  │  │  ├─ Mutations columns: {list(pair_mutations.columns)}"
+                        )
+                        print(
+                            f"  │  │  ├─ Has impact_validated: {'impact_validated' in pair_mutations.columns}"
+                        )
+                        if "impact_validated" in pair_mutations.columns:
+                            print(
+                                f"  │  │  ├─ Validated impacts: {pair_mutations['impact_validated'].unique()}"
+                            )
                         print(
                             f"  │  │  ├─ Creating view with {len(pair_mutations)} mutations"
                         )

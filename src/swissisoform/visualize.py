@@ -61,7 +61,7 @@ class GenomeVisualizer:
         self.source_markers = {
             "gnomAD": "o",  # circle
             "ClinVar": "x",  # heavy asterisk
-            "Aggregator": "s",  # square
+            "COSMIC": "s",  # square
         }
 
         # Track dimensions
@@ -72,7 +72,7 @@ class GenomeVisualizer:
         self.mutation_track_positions = {
             "gnomAD": 0.7,
             "ClinVar": 0.8,
-            "Aggregator": 0.9,
+            "COSMIC": 0.9,
         }
 
     def _get_mutation_color(self, impact: str) -> str:
@@ -418,10 +418,20 @@ class GenomeVisualizer:
                 alt_start_ymin = black_bar_y - (alt_start_height / 2)
                 alt_start_ymax = black_bar_y + (alt_start_height / 2)
 
-                if transcript_strand == "+":
-                    alt_start_pos = alt_end
-                else:
-                    alt_start_pos = alt_start
+                if region_type == "extension":
+                    if transcript_strand == "+":
+                        alt_start_pos = alt_start  # Start of extension region
+                    else:
+                        alt_start_pos = (
+                            alt_end  # End of extension region (start in - strand)
+                        )
+                else:  # truncation
+                    if transcript_strand == "+":
+                        alt_start_pos = alt_end  # End of truncated region
+                    else:
+                        alt_start_pos = (
+                            alt_start  # Start of truncated region (end in - strand)
+                        )
 
                 ax.vlines(
                     x=alt_start_pos,
@@ -435,7 +445,10 @@ class GenomeVisualizer:
                 )
 
                 # Place the start codon label and region type
-                label_x = alt_end if transcript_strand == "+" else alt_start
+                if region_type == "extension":
+                    label_x = alt_start if transcript_strand == "+" else alt_end
+                else:  # truncation
+                    label_x = alt_end if transcript_strand == "+" else alt_start
                 label_text = alt_feature.get("start_codon", "")
                 if region_type:
                     label_text = f"{region_type.capitalize()} {label_text}".strip()
@@ -486,9 +499,8 @@ class GenomeVisualizer:
                     )
 
                     for (_, mutation), y_pos in zip(source_data.iterrows(), jittered_y):
-                        color = self._get_mutation_color(
-                            mutation.get(impact_col, mutation.get("impact", "unknown"))
-                        )
+                        # FIX: Use impact_col consistently
+                        color = self._get_mutation_color(mutation[impact_col])
                         ax.scatter(
                             mutation["position"],
                             y_pos,
@@ -498,7 +510,7 @@ class GenomeVisualizer:
                             alpha=1,
                         )
 
-        # Create legends
+        # Create legends - DYNAMIC VERSION
         feature_legend_elements = [
             plt.Rectangle(
                 (0, 0), 1, 1, facecolor=self.feature_colors["CDS"], label="CDS"
@@ -506,18 +518,16 @@ class GenomeVisualizer:
             plt.Rectangle(
                 (0, 0), 1, 1, facecolor=self.feature_colors["UTR"], label="UTR"
             ),
-            # Use a straight vertical line for start codon in legend
             Line2D(
                 [0],
-                [0],  # Single point
-                marker="|",  # Vertical line marker
+                [0],
+                marker="|",
                 color=self.feature_colors["start_codon"],
                 label="Start codon",
-                markersize=12,  # Control height
-                markeredgewidth=3,  # Control width - same as alternative start
-                linestyle="None",  # Only show the marker
+                markersize=12,
+                markeredgewidth=3,
+                linestyle="None",
             ),
-            # Use a straight vertical line for stop codon in legend
             Line2D(
                 [0],
                 [0],
@@ -525,33 +535,60 @@ class GenomeVisualizer:
                 color=self.feature_colors["stop_codon"],
                 label="Stop codon",
                 markersize=12,
-                markeredgewidth=3,  # Match width with other codons
+                markeredgewidth=3,
                 linestyle="None",
             ),
         ]
 
+        # Add alternative isoform legend elements based on what's actually present
         if alt_features is not None and not alt_features.empty:
-            feature_legend_elements.extend(
-                [
-                    Line2D(
-                        [0],
-                        [0],
-                        marker="|",
-                        color=self.feature_colors["extension"],
-                        label="Alternative Isoform",
-                        markersize=12,
-                        markeredgewidth=3,
-                        linestyle="None",
-                    ),
-                    Line2D(
-                        [0],
-                        [0],
-                        color=self.feature_colors["truncation"],
-                        label="Alternative Isoform",
-                        linewidth=1.5,
-                    ),
-                ]
-            )
+            region_types = alt_features["region_type"].unique()
+
+            for region_type in region_types:
+                if region_type == "truncation":
+                    feature_legend_elements.extend(
+                        [
+                            Line2D(
+                                [0],
+                                [0],
+                                marker="|",
+                                color=self.feature_colors["truncation"],
+                                label="Truncation start",
+                                markersize=12,
+                                markeredgewidth=3,
+                                linestyle="None",
+                            ),
+                            Line2D(
+                                [0],
+                                [0],
+                                color=self.feature_colors["truncation"],
+                                label="Truncation region",
+                                linewidth=1.5,
+                            ),
+                        ]
+                    )
+                elif region_type == "extension":
+                    feature_legend_elements.extend(
+                        [
+                            Line2D(
+                                [0],
+                                [0],
+                                marker="|",
+                                color=self.feature_colors["extension"],
+                                label="Extension start",
+                                markersize=12,
+                                markeredgewidth=3,
+                                linestyle="None",
+                            ),
+                            Line2D(
+                                [0],
+                                [0],
+                                color=self.feature_colors["extension"],
+                                label="Extension region",
+                                linewidth=1.5,
+                            ),
+                        ]
+                    )
 
         # Add legends with improved spacing and spine handling
         if mutations_df is not None and not mutations_df.empty:
@@ -769,15 +806,16 @@ class GenomeVisualizer:
                 region_type = alt_feature.get("region_type", "alternative")
 
                 # Get transcript strand
-                transcript_strand = "+"
+                transcript_strand = "+"  # Default to positive strand
                 if features is not None and not features.empty:
                     transcript_info = features[features["feature_type"] == "transcript"]
                     if not transcript_info.empty:
                         transcript_strand = transcript_info.iloc[0]["strand"]
 
                 # Draw a bracket for truncation/extension
-                bracket_y = 0.2
-                bracket_height = 0.05
+                bracket_y = 0.2  # Position for the top of the bracket
+                bracket_height = 0.05  # Height of the bracket
+
                 bracket_vertices = [
                     (alt_start, bracket_y),
                     (alt_start, bracket_y - bracket_height),
@@ -796,16 +834,29 @@ class GenomeVisualizer:
                     label="Alternative Isoform",
                 )
 
-                # Alternative start marker positioning depends on strand
+                # Alternative start marker positioning depends on strand and region type
                 black_bar_y = 0.4
                 alt_start_height = self.codon_height
                 alt_start_ymin = black_bar_y - (alt_start_height / 2)
                 alt_start_ymax = black_bar_y + (alt_start_height / 2)
 
-                if transcript_strand == "+":
-                    alt_start_pos = alt_end
-                else:
-                    alt_start_pos = alt_start
+                # FIX: Correct positioning logic for extensions vs truncations
+                if region_type == "extension":
+                    # For extensions, the alternative start is at the beginning of the extension
+                    if transcript_strand == "+":
+                        alt_start_pos = alt_start  # Start of extension region
+                    else:
+                        alt_start_pos = (
+                            alt_end  # End of extension region (start in - strand)
+                        )
+                else:  # truncation
+                    # For truncations, the alternative start is at the end of the truncated region
+                    if transcript_strand == "+":
+                        alt_start_pos = alt_end  # End of truncated region
+                    else:
+                        alt_start_pos = (
+                            alt_start  # Start of truncated region (end in - strand)
+                        )
 
                 ax.vlines(
                     x=alt_start_pos,
@@ -819,7 +870,12 @@ class GenomeVisualizer:
                 )
 
                 # Place the start codon label and region type
-                label_x = alt_end if transcript_strand == "+" else alt_start
+                # FIX: Use the same positioning logic for labels
+                if region_type == "extension":
+                    label_x = alt_start if transcript_strand == "+" else alt_end
+                else:  # truncation
+                    label_x = alt_end if transcript_strand == "+" else alt_start
+
                 label_text = alt_feature.get("start_codon", "")
                 if region_type:
                     label_text = f"{region_type.capitalize()} {label_text}".strip()
@@ -841,7 +897,12 @@ class GenomeVisualizer:
 
             if not zoomed_mutations.empty:
                 source_legend_elements = []
-                unique_impacts = zoomed_mutations["impact"].unique()
+                impact_col = (
+                    "impact_validated"
+                    if "impact_validated" in zoomed_mutations.columns
+                    else "impact"
+                )
+                unique_impacts = mutations_df[impact_col].unique()
                 mutation_legend_elements = self._create_mutation_legend_groups(
                     unique_impacts
                 )
@@ -874,7 +935,7 @@ class GenomeVisualizer:
                         for (_, mutation), y_pos in zip(
                             source_data.iterrows(), jittered_y
                         ):
-                            color = self._get_mutation_color(mutation["impact"])
+                            color = self._get_mutation_color(mutation[impact_col])
                             ax.scatter(
                                 mutation["position"],
                                 y_pos,
@@ -884,7 +945,7 @@ class GenomeVisualizer:
                                 alpha=0.8,
                             )
 
-        # Create and add legends
+        # Create and add legends - DYNAMIC VERSION
         feature_legend_elements = [
             plt.Rectangle(
                 (0, 0), 1, 1, facecolor=self.feature_colors["CDS"], label="CDS"
@@ -892,18 +953,16 @@ class GenomeVisualizer:
             plt.Rectangle(
                 (0, 0), 1, 1, facecolor=self.feature_colors["UTR"], label="UTR"
             ),
-            # Use a straight vertical line for start codon in legend
             Line2D(
                 [0],
-                [0],  # Single point
-                marker="|",  # Vertical line marker
+                [0],
+                marker="|",
                 color=self.feature_colors["start_codon"],
                 label="Start codon",
-                markersize=15,  # Control height
-                markeredgewidth=3,  # Control width - same as alternative start
-                linestyle="None",  # Only show the marker
+                markersize=15,
+                markeredgewidth=3,
+                linestyle="None",
             ),
-            # Use a straight vertical line for stop codon in legend
             Line2D(
                 [0],
                 [0],
@@ -911,28 +970,60 @@ class GenomeVisualizer:
                 color=self.feature_colors["stop_codon"],
                 label="Stop codon",
                 markersize=12,
-                markeredgewidth=3,  # Match width with other codons
+                markeredgewidth=3,
                 linestyle="None",
             ),
-            # Use a straight vertical line for alternative start in legend
-            Line2D(
-                [0],
-                [0],
-                marker="|",
-                color=self.feature_colors["alternative_start"],
-                label="Alternative start",
-                markersize=12,
-                markeredgewidth=3,  # Make width consistent with other codon markers
-                linestyle="None",  # Only show the marker
-            ),
-            Line2D(
-                [0],
-                [0],
-                color=self.feature_colors["truncation"],
-                label="Truncation",
-                linewidth=1.5,
-            ),
         ]
+
+        # Add alternative isoform legend elements based on what's actually present
+        if alt_features is not None and not alt_features.empty:
+            region_types = alt_features["region_type"].unique()
+
+            for region_type in region_types:
+                if region_type == "truncation":
+                    feature_legend_elements.extend(
+                        [
+                            Line2D(
+                                [0],
+                                [0],
+                                marker="|",
+                                color=self.feature_colors["truncation"],
+                                label="Truncation start",
+                                markersize=12,
+                                markeredgewidth=3,
+                                linestyle="None",
+                            ),
+                            Line2D(
+                                [0],
+                                [0],
+                                color=self.feature_colors["truncation"],
+                                label="Truncation region",
+                                linewidth=1.5,
+                            ),
+                        ]
+                    )
+                elif region_type == "extension":
+                    feature_legend_elements.extend(
+                        [
+                            Line2D(
+                                [0],
+                                [0],
+                                marker="|",
+                                color=self.feature_colors["extension"],
+                                label="Extension start",
+                                markersize=12,
+                                markeredgewidth=3,
+                                linestyle="None",
+                            ),
+                            Line2D(
+                                [0],
+                                [0],
+                                color=self.feature_colors["extension"],
+                                label="Extension region",
+                                linewidth=1.5,
+                            ),
+                        ]
+                    )
 
         # Add legends with improved spacing
         if (

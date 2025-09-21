@@ -41,7 +41,7 @@ from swissisoform.mutations import MutationHandler
 from swissisoform.utils import (
     parse_gene_list,
     save_gene_level_results,
-    save_truncation_level_results,
+    save_isoform_level_results,
     print_mutation_summary,
 )
 
@@ -138,7 +138,7 @@ async def main(
 
         # Save both levels of results
         save_gene_level_results(results, output_dir)
-        save_truncation_level_results(results, output_dir)
+        save_isoform_level_results(results, output_dir)
 
     # Final summary
     end_time = datetime.now()
