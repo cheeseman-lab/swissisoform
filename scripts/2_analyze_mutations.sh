@@ -80,7 +80,7 @@ case $SLURM_ARRAY_TASK_ID in
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
           --sources "clinvar" \
-          --impact-types "missense variant" "nonsense variant" "frameshift variant" "5 prime UTR variant" \
+          --impact-types "missense variant" "nonsense variant" "frameshift variant" \
           --visualize
         echo "Array Task 1: Completed reduced mutations analysis at $(date)"
         ;;
@@ -92,7 +92,7 @@ case $SLURM_ARRAY_TASK_ID in
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
           --sources "clinvar" \
-          --impact-types "missense variant" "nonsense variant" "frameshift variant" "5 prime UTR variant" \
+          --impact-types "missense variant" "nonsense variant" "frameshift variant" \
         echo "Array Task 2: Completed full mutations analysis at $(date)"
         ;;
     *)

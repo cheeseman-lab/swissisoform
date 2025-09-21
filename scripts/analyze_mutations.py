@@ -190,7 +190,6 @@ if __name__ == "__main__":
             "missense variant",
             "nonsense variant",
             "frameshift variant",
-            "5 prime UTR variant",
         ],
         help="Mutation impact types to include (space-separated)",
     )

@@ -86,7 +86,20 @@ class MutationHandler:
             ConnectionError: If the API request fails.
         """
         self.mutation_categories = {
-            # High impact first
+            # UTR impact first
+            "utr_5prime": [
+                "5_prime_utr",
+                "5 prime utr",
+                "5_prime_utr_variant",
+                "5 prime utr variant",
+            ],
+            "utr_3prime": [
+                "3_prime_utr",
+                "3 prime utr",
+                "3_prime_utr_variant",
+                "3 prime utr variant",
+            ],
+            # High impact second
             "nonsense": ["nonsense", "stop_gained", "stop gained", "nonsense_variant"],
             "frameshift": ["frameshift", "frameshift_variant", "frameshift variant"],
             "start_lost": ["start_lost", "start lost", "start_loss"],
@@ -100,6 +113,7 @@ class MutationHandler:
                 "inframe_indel",
             ],
             "inframe_ins": ["inframe_insertion", "inframe insertion", "inframe_ins"],
+            # Low impact last
             "splice": [
                 "splice",
                 "splice_variant",
@@ -107,22 +121,12 @@ class MutationHandler:
                 "splice_donor_variant",
                 "splice_acceptor_variant",
             ],
-            # Low impact last
             "synonymous": ["synonymous", "synonymous_variant", "synonymous variant"],
-            "utr_5prime": [
-                "5_prime_utr",
-                "5 prime utr",
-                "5_prime_utr_variant",
-                "5 prime utr variant",
-            ],
-            "utr_3prime": [
-                "3_prime_utr",
-                "3 prime utr",
-                "3_prime_utr_variant",
-                "3 prime utr variant",
-            ],
             "intronic": ["intron_variant", "intron variant"],
         }
+
+        # Define which categories to exclude by default
+        self.low_impact_categories = ["splice", "synonymous", "intronic"]
 
     async def get_gnomad_variants(self, gene_name: str) -> pd.DataFrame:
         """Get processed variant data from gnomAD.
@@ -1427,6 +1431,36 @@ class MutationHandler:
 
         return df.reset_index(drop=True)
 
+    def _filter_out_low_impact_variants(
+        self, mutations_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """Filter out low impact variants (splice, synonymous, intronic) by default.
+
+        Args:
+            mutations_df: DataFrame with mutations
+
+        Returns:
+            Filtered DataFrame excluding low impact variants
+        """
+        if mutations_df.empty:
+            return mutations_df
+
+        # Get all low impact terms
+        low_impact_terms = []
+        for category in self.low_impact_categories:
+            low_impact_terms.extend(self.mutation_categories[category])
+
+        # Add explicit terms to filter
+        low_impact_terms.extend(["other variant", "unknown"])
+
+        # Filter out mutations with low impact
+        filtered_df = mutations_df.copy()
+        for term in low_impact_terms:
+            mask = ~filtered_df["impact"].str.contains(term, case=False, na=False)
+            filtered_df = filtered_df[mask]
+
+        return filtered_df
+
     def _log_raw_dataframe_structure(
         self, df: pd.DataFrame, source: str, gene_name: str
     ):
@@ -1810,9 +1844,6 @@ class MutationHandler:
     ) -> Dict:
         """Comprehensive mutation analysis for a gene with transcript-alternative feature pairs.
 
-        This method performs mutation analysis for alternative start sites including
-        both truncations and extensions with optional consequence validation.
-
         Args:
             gene_name: Name of the gene to analyze
             genome_handler: Initialized GenomeHandler instance
@@ -1824,7 +1855,6 @@ class MutationHandler:
             sources: Data sources to pull mutations from
             top_n_per_type_per_transcript: Top N features per type per transcript
             validate_consequences: Whether to validate consequences via translation
-
         Returns:
             Dictionary containing comprehensive analysis results
         """
@@ -1846,7 +1876,6 @@ class MutationHandler:
             transcript_ids_from_bed = [
                 tid for tid in transcript_ids_from_bed if tid != "NA"
             ]
-
             if not transcript_ids_from_bed:
                 print(f"\r  ├─ No valid transcript assignments in BED file")
                 return {
@@ -1869,7 +1898,6 @@ class MutationHandler:
             transcript_info = transcript_info[
                 transcript_info["transcript_id"].isin(transcript_ids_from_bed)
             ]
-
             if transcript_info.empty:
                 print(
                     f"\r  ├─ None of the BED transcript IDs found in genome annotation"
@@ -1879,7 +1907,6 @@ class MutationHandler:
                     "status": "no_matching_transcripts",
                     "error": None,
                 }
-
             print(
                 f"\r  ├─ Using {len(transcript_info)} transcripts from BED file assignments"
             )
@@ -1891,45 +1918,36 @@ class MutationHandler:
                 flush=True,
             )
             transcript_feature_pairs = []
-
             # Process each alternative feature (which already has transcript assignment)
             for idx, feature in alt_features.iterrows():
                 feature_transcript_id = feature["transcript_id"]
-
                 # Skip if no transcript assignment
                 if feature_transcript_id == "NA":
                     continue
-
                 # Get transcript info for this specific transcript
                 transcript_match = transcript_info[
                     transcript_info["transcript_id"] == feature_transcript_id
                 ]
-
                 if transcript_match.empty:
                     # This transcript ID from BED wasn't found in genome annotation
                     continue
-
                 # Get refseq_id directly from feature if present
                 refseq_id = feature.get("refseq_transcript_id", None)
                 if refseq_id == "NA":
                     refseq_id = None
-
                 transcript = transcript_match.iloc[0]
                 transcript_start = transcript["start"]
                 transcript_end = transcript["end"]
                 transcript_chromosome = transcript["chromosome"]
                 transcript_strand = transcript["strand"]
-
                 feature_start = feature["start"]
                 feature_end = feature["end"]
                 feature_chrom = feature["chromosome"]
                 feature_type = feature.get("region_type", "unknown")
-
                 # Create feature ID
                 feature_id = f"{feature_type}_{idx}"
                 if "start_codon" in feature and not pd.isna(feature["start_codon"]):
                     feature_id = f"{feature_type}_{feature['start_codon']}_{feature_start}_{feature_end}"
-
                 # Create the transcript-feature pair
                 transcript_feature_pairs.append(
                     {
@@ -1953,10 +1971,13 @@ class MutationHandler:
                     "status": "no_valid_pairs",
                     "error": None,
                 }
-
             print(
                 f"\r  ├─ Created {len(transcript_feature_pairs)} transcript-feature pairs from BED assignments"
             )
+
+            # Determine sources to use
+            if sources is None:
+                sources = ["clinvar"]
 
             # Get the list of desired impact types for each source
             desired_impact_types = []
@@ -1964,59 +1985,9 @@ class MutationHandler:
                 for source, impacts in impact_types.items():
                     desired_impact_types.extend(impacts)
 
-            # Fetch raw mutations and filter them for each transcript-feature pair
-            print(f"  ├─ Fetching mutation data...", end="", flush=True)
-
-            # Determine sources to use
-            if sources is None:
-                sources = ["clinvar"]
-
-            # Fetch mutations for each transcript-feature pair using its refseq_id
-            all_mutations = pd.DataFrame()
-            for pair in transcript_feature_pairs:
-                pair_refseq_id = pair.get("refseq_id", None)
-                pair_mutations = await self.get_visualization_ready_mutations(
-                    gene_name=gene_name,
-                    alt_features=None,
-                    sources=sources,
-                    refseq_id=pair_refseq_id,
-                    custom_parquet_path=custom_parquet_path,
-                )
-                if pair_mutations is not None and not pair_mutations.empty:
-                    all_mutations = pd.concat(
-                        [all_mutations, pair_mutations], ignore_index=True
-                    )
-
-            if all_mutations is None or all_mutations.empty:
-                print(f"\r  ├─ No mutations found for this gene")
-                all_mutations = pd.DataFrame()
-            else:
-                print(
-                    f"\r  ├─ Found {len(all_mutations)} total mutations for this gene"
-                )
-
-                # Apply impact type filtering if specified
-                if impact_types:
-                    print(f"  ├─ Filtering for impact types: {impact_types}")
-                    for source, impacts in impact_types.items():
-                        source_mutations = all_mutations[
-                            all_mutations["source"].str.lower() == source.lower()
-                        ]
-
-                        if not source_mutations.empty:
-                            filtered_mutations = source_mutations[
-                                source_mutations["impact"].isin(impacts)
-                            ]
-                            # Replace the original mutations with filtered ones
-                            all_mutations = all_mutations[
-                                all_mutations["source"].str.lower() != source.lower()
-                            ]
-                            all_mutations = pd.concat(
-                                [all_mutations, filtered_mutations]
-                            )
-
-            # Initialize validation components if needed and validate all mutations once
-            if validate_consequences and not all_mutations.empty:
+            # Initialize validation components once if needed
+            protein_generator = None
+            if validate_consequences:
                 print(f"  ├─ Initializing consequence validation...")
                 from swissisoform.translation import AlternativeProteinGenerator
 
@@ -2027,170 +1998,56 @@ class MutationHandler:
                     debug=False,
                 )
 
-                # Use the first transcript for validation context
-                primary_transcript = transcript_ids_from_bed[0]
-                print(
-                    f"  ├─ Validating consequences for all {len(all_mutations)} mutations using {primary_transcript}..."
-                )
-
-                all_mutations = await self._validate_mutation_consequences(
-                    all_mutations, primary_transcript, protein_generator
-                )
-
-                print(
-                    f"  ├─ Validation complete. Has impact_validated: {'impact_validated' in all_mutations.columns}"
-                )
-                if "impact_validated" in all_mutations.columns:
-                    print(f"  ├─ Impact validation summary:")
-                    print(
-                        f"      Original impacts: {all_mutations['impact'].value_counts().to_dict()}"
-                    )
-                    print(
-                        f"      Validated impacts: {all_mutations['impact_validated'].value_counts().to_dict()}"
-                    )
-
             # Container for all transcript-feature analysis results
             pair_results = []
+            all_mutations_for_viz = (
+                pd.DataFrame()
+            )  # Collect all validated mutations for final visualization
 
-            # Process each transcript-feature pair
-            print(f"  ├─ Analyzing mutations for each transcript-feature pair...")
-
+            # Process each transcript-feature pair individually
+            print(
+                f"  ├─ Processing {len(transcript_feature_pairs)} transcript-feature pairs..."
+            )
             for pair_idx, pair in enumerate(transcript_feature_pairs, 1):
                 transcript_id = pair["transcript_id"]
                 feature_id = pair["feature_id"]
                 feature_idx = pair["feature_idx"]
                 feature_type = pair["feature_type"]
-
-                # Get feature start and end positions
+                refseq_id = pair.get("refseq_id", None)
                 feature_start = pair["feature_start"]
                 feature_end = pair["feature_end"]
 
-                # Initialize default counts for all desired impact types
-                mutation_categories = {}
+                print(
+                    f"  │  ├─ Processing pair {pair_idx}/{len(transcript_feature_pairs)}: {transcript_id} × {feature_id}"
+                )
 
-                # Ensure all our desired impact types have columns, even if zero
-                for impact_type in desired_impact_types:
-                    category_key = f"mutations_{impact_type.replace(' ', '_').lower()}"
-                    mutation_categories[category_key] = 0
+                # STEP 1: Get mutations specifically for this transcript-feature pair
+                print(
+                    f"  │  │  ├─ Fetching mutations for {refseq_id or 'gene-level'}..."
+                )
+                pair_mutations = await self.get_visualization_ready_mutations(
+                    gene_name=gene_name,
+                    alt_features=alt_features.loc[[feature_idx]],  # Only this feature
+                    sources=sources,
+                    refseq_id=refseq_id,
+                    custom_parquet_path=custom_parquet_path,
+                )
 
-                    # Also create empty columns for variant IDs for each impact type
-                    impact_key = f"variant_ids_{impact_type.replace(' ', '_').lower()}"
-                    mutation_categories[impact_key] = ""
-
-                # Create a feature-specific filter for mutations
-                if not all_mutations.empty:
-                    # Filter mutations to only those in this feature region
-                    pair_mutations = all_mutations[
-                        (all_mutations["position"] >= feature_start)
-                        & (all_mutations["position"] <= feature_end)
-                    ].copy()
-
-                    pair_mutation_count = len(pair_mutations)
-
-                    if pair_mutation_count > 0:
-                        print(
-                            f"  │  ├─ {transcript_id} × {feature_id} ({feature_type}): {pair_mutation_count} mutations"
-                        )
-
-                        variant_ids = []
-
-                        # Count by impact category (using validated consequences if available)
-                        impact_column = (
-                            "impact_validated"
-                            if "impact_validated" in pair_mutations.columns
-                            else "impact"
-                        )
-                        for impact in pair_mutations[impact_column].unique():
-                            if pd.isna(impact):
-                                continue
-
-                            # Get mutations for this impact
-                            impact_mutations = pair_mutations[
-                                pair_mutations[impact_column] == impact
-                            ]
-                            category_count = len(impact_mutations)
-
-                            # Store count for this impact type
+                if pair_mutations is None or pair_mutations.empty:
+                    print(f"  │  │  ├─ No mutations found for this pair")
+                    # Still record the pair with zero counts
+                    mutation_categories = {}
+                    if impact_types:
+                        for impact_type in desired_impact_types:
                             category_key = (
-                                f"mutations_{impact.replace(' ', '_').lower()}"
+                                f"mutations_{impact_type.replace(' ', '_').lower()}"
                             )
-                            mutation_categories[category_key] = category_count
-
-                            # Store variant IDs for this impact type
-                            if "variant_id" in impact_mutations.columns:
-                                impact_ids = (
-                                    impact_mutations["variant_id"]
-                                    .dropna()
-                                    .unique()
-                                    .tolist()
-                                )
-                                # Convert to strings (to handle numeric IDs), filter empty strings
-                                impact_ids = [
-                                    str(id).strip()
-                                    for id in impact_ids
-                                    if str(id).strip()
-                                ]
-
-                                # Add to the category-specific IDs
-                                if impact_ids:
-                                    impact_key = f"variant_ids_{impact.replace(' ', '_').lower()}"
-                                    mutation_categories[impact_key] = ",".join(
-                                        impact_ids
-                                    )
-
-                        # Collect all variant IDs for this feature region
-                        if "variant_id" in pair_mutations.columns:
-                            variant_ids = (
-                                pair_mutations["variant_id"].dropna().unique().tolist()
+                            mutation_categories[category_key] = 0
+                            impact_key = (
+                                f"variant_ids_{impact_type.replace(' ', '_').lower()}"
                             )
-                            variant_ids = [
-                                str(id).strip() for id in variant_ids if str(id).strip()
-                            ]
+                            mutation_categories[impact_key] = ""
 
-                        # Add results for this pair with detailed mutation categories
-                        pair_result = {
-                            "transcript_id": transcript_id,
-                            "feature_id": feature_id,
-                            "feature_type": feature_type,
-                            "feature_start": feature_start,
-                            "feature_end": feature_end,
-                            "mutation_count_total": pair_mutation_count,
-                            "variant_ids": ",".join(variant_ids) if variant_ids else "",
-                            **mutation_categories,
-                        }
-
-                        # Add validation metrics if consequences were validated
-                        if (
-                            validate_consequences
-                            and "consequence_matches" in pair_mutations.columns
-                        ):
-                            total_validated = (
-                                pair_mutations["consequence_matches"].notna().sum()
-                            )
-                            matches = pair_mutations["consequence_matches"].sum()
-                            pair_result["consequences_validated"] = total_validated
-                            pair_result["consequences_match_reported"] = matches
-                            pair_result["validation_accuracy"] = (
-                                matches / total_validated if total_validated > 0 else 0
-                            )
-
-                        pair_results.append(pair_result)
-                    else:
-                        # No mutations for this pair, still record it with zeros
-                        pair_results.append(
-                            {
-                                "transcript_id": transcript_id,
-                                "feature_id": feature_id,
-                                "feature_type": feature_type,
-                                "feature_start": feature_start,
-                                "feature_end": feature_end,
-                                "mutation_count_total": 0,
-                                "variant_ids": "",
-                                **mutation_categories,  # Include zero counts for all categories
-                            }
-                        )
-                else:
-                    # No mutations at all, record with zeros
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
@@ -2200,9 +2057,224 @@ class MutationHandler:
                             "feature_end": feature_end,
                             "mutation_count_total": 0,
                             "variant_ids": "",
-                            **mutation_categories,  # Include zero counts for all categories
+                            **mutation_categories,
                         }
                     )
+                    continue
+
+                print(f"  │  │  ├─ Found {len(pair_mutations)} mutations")
+
+                # STEP 2: Filter to mutations in the specific alternative region
+                print(
+                    f"  │  │  ├─ Filtering to feature region ({feature_start}-{feature_end})..."
+                )
+                region_mutations = pair_mutations[
+                    (pair_mutations["position"] >= feature_start)
+                    & (pair_mutations["position"] <= feature_end)
+                ].copy()
+
+                if region_mutations.empty:
+                    print(f"  │  │  ├─ No mutations in feature region")
+                    mutation_categories = {}
+                    if impact_types:
+                        for impact_type in desired_impact_types:
+                            category_key = (
+                                f"mutations_{impact_type.replace(' ', '_').lower()}"
+                            )
+                            mutation_categories[category_key] = 0
+                            impact_key = (
+                                f"variant_ids_{impact_type.replace(' ', '_').lower()}"
+                            )
+                            mutation_categories[impact_key] = ""
+
+                    pair_results.append(
+                        {
+                            "transcript_id": transcript_id,
+                            "feature_id": feature_id,
+                            "feature_type": feature_type,
+                            "feature_start": feature_start,
+                            "feature_end": feature_end,
+                            "mutation_count_total": 0,
+                            "variant_ids": "",
+                            **mutation_categories,
+                        }
+                    )
+                    continue
+
+                print(f"  │  │  ├─ {len(region_mutations)} mutations in feature region")
+
+                # STEP 3: Filter out low impact variants
+                print(f"  │  │  ├─ Filtering out low impact variants...")
+                high_impact_mutations = self._filter_out_low_impact_variants(
+                    region_mutations
+                )
+                print(
+                    f"  │  │  ├─ {len(high_impact_mutations)} high-impact mutations remain"
+                )
+
+                if high_impact_mutations.empty:
+                    print(f"  │  │  ├─ No high-impact mutations remain")
+                    mutation_categories = {}
+                    if impact_types:
+                        for impact_type in desired_impact_types:
+                            category_key = (
+                                f"mutations_{impact_type.replace(' ', '_').lower()}"
+                            )
+                            mutation_categories[category_key] = 0
+                            impact_key = (
+                                f"variant_ids_{impact_type.replace(' ', '_').lower()}"
+                            )
+                            mutation_categories[impact_key] = ""
+
+                    pair_results.append(
+                        {
+                            "transcript_id": transcript_id,
+                            "feature_id": feature_id,
+                            "feature_type": feature_type,
+                            "feature_start": feature_start,
+                            "feature_end": feature_end,
+                            "mutation_count_total": 0,
+                            "variant_ids": "",
+                            **mutation_categories,
+                        }
+                    )
+                    continue
+
+                # STEP 4: Validate consequences for this specific subset
+                validated_mutations = high_impact_mutations.copy()
+                if validate_consequences and protein_generator is not None:
+                    print(
+                        f"  │  │  ├─ Validating consequences for {len(high_impact_mutations)} mutations..."
+                    )
+                    validated_mutations = await self._validate_mutation_consequences(
+                        high_impact_mutations, transcript_id, protein_generator
+                    )
+                    print(f"  │  │  ├─ Validation complete")
+
+                    # Apply user-specified impact filtering on VALIDATED impacts
+                    if (
+                        impact_types
+                        and "impact_validated" in validated_mutations.columns
+                    ):
+                        pre_filter_count = len(validated_mutations)
+                        validated_mutations = validated_mutations[
+                            validated_mutations["impact_validated"].isin(
+                                desired_impact_types
+                            )
+                        ]
+                        print(
+                            f"  │  │  ├─ User impact filtering: {pre_filter_count} → {len(validated_mutations)} mutations"
+                        )
+
+                # STEP 5: Collect results for this pair
+                pair_mutation_count = len(validated_mutations)
+
+                # Initialize default counts for all desired impact types
+                mutation_categories = {}
+                if impact_types:
+                    for impact_type in desired_impact_types:
+                        category_key = (
+                            f"mutations_{impact_type.replace(' ', '_').lower()}"
+                        )
+                        mutation_categories[category_key] = 0
+                        impact_key = (
+                            f"variant_ids_{impact_type.replace(' ', '_').lower()}"
+                        )
+                        mutation_categories[impact_key] = ""
+
+                variant_ids = []
+                if pair_mutation_count > 0:
+                    # Count by impact category
+                    impact_column = (
+                        "impact_validated"
+                        if "impact_validated" in validated_mutations.columns
+                        else "impact"
+                    )
+
+                    for impact in validated_mutations[impact_column].unique():
+                        if pd.isna(impact):
+                            continue
+
+                        impact_mutations = validated_mutations[
+                            validated_mutations[impact_column] == impact
+                        ]
+                        category_count = len(impact_mutations)
+
+                        # Store count and variant IDs for this impact type
+                        category_key = f"mutations_{impact.replace(' ', '_').lower()}"
+                        if category_key in mutation_categories:
+                            mutation_categories[category_key] = category_count
+
+                            if "variant_id" in impact_mutations.columns:
+                                impact_ids = (
+                                    impact_mutations["variant_id"]
+                                    .dropna()
+                                    .unique()
+                                    .tolist()
+                                )
+                                impact_ids = [
+                                    str(id).strip()
+                                    for id in impact_ids
+                                    if str(id).strip()
+                                ]
+                                if impact_ids:
+                                    impact_key = f"variant_ids_{impact.replace(' ', '_').lower()}"
+                                    mutation_categories[impact_key] = ",".join(
+                                        impact_ids
+                                    )
+
+                    # Collect all variant IDs
+                    if "variant_id" in validated_mutations.columns:
+                        variant_ids = (
+                            validated_mutations["variant_id"].dropna().unique().tolist()
+                        )
+                        variant_ids = [
+                            str(id).strip() for id in variant_ids if str(id).strip()
+                        ]
+
+                    # Add to collection for final visualization
+                    validated_mutations = validated_mutations.copy()
+                    validated_mutations["pair_transcript_id"] = transcript_id
+                    validated_mutations["pair_feature_id"] = feature_id
+                    all_mutations_for_viz = pd.concat(
+                        [all_mutations_for_viz, validated_mutations], ignore_index=True
+                    )
+
+                # Create result record for this pair
+                pair_result = {
+                    "transcript_id": transcript_id,
+                    "feature_id": feature_id,
+                    "feature_type": feature_type,
+                    "feature_start": feature_start,
+                    "feature_end": feature_end,
+                    "mutation_count_total": pair_mutation_count,
+                    "variant_ids": ",".join(variant_ids) if variant_ids else "",
+                    **mutation_categories,
+                }
+
+                # Add validation metrics if available
+                if (
+                    validate_consequences
+                    and "consequence_matches" in validated_mutations.columns
+                ):
+                    total_validated = (
+                        validated_mutations["consequence_matches"].notna().sum()
+                    )
+                    matches = validated_mutations["consequence_matches"].sum()
+                    pair_result["consequences_validated"] = total_validated
+                    pair_result["consequences_match_reported"] = matches
+                    pair_result["validation_accuracy"] = (
+                        matches / total_validated if total_validated > 0 else 0
+                    )
+
+                pair_results.append(pair_result)
+                print(
+                    f"  │  │  └─ Pair complete: {pair_mutation_count} final mutations"
+                )
+
+            print(
+                f"  ├─ All pairs processed. Total mutations for visualization: {len(all_mutations_for_viz)}"
+            )
 
             # Generate visualizations if requested
             if visualize:
@@ -2211,7 +2283,6 @@ class MutationHandler:
                 visualizer = GenomeVisualizer(genome_handler)
                 gene_dir = Path(output_dir) / gene_name
                 gene_dir.mkdir(parents=True, exist_ok=True)
-
                 print(
                     f"  ├─ Generating visualizations for each transcript-feature pair:"
                 )
@@ -2241,37 +2312,30 @@ class MutationHandler:
                     # Prepare output paths
                     pair_base_filename = f"{transcript_id}_{feature_id}"
 
-                    # Filter mutations for this specific feature
-                    if not all_mutations.empty:
-                        feature_start = pair["feature_start"]
-                        feature_end = pair["feature_end"]
-
-                        pair_mutations = all_mutations[
-                            (all_mutations["position"] >= feature_start)
-                            & (all_mutations["position"] <= feature_end)
+                    # Filter mutations for this specific feature from the validated collection
+                    if not all_mutations_for_viz.empty:
+                        pair_viz_mutations = all_mutations_for_viz[
+                            (
+                                all_mutations_for_viz["pair_transcript_id"]
+                                == transcript_id
+                            )
+                            & (all_mutations_for_viz["pair_feature_id"] == feature_id)
                         ].copy()
 
                         print(
-                            f"  │  │  ├─ Creating view with {len(pair_mutations)} mutations"
+                            f"  │  │  ├─ Creating view with {len(pair_viz_mutations)} validated mutations"
                         )
-                        print(
-                            f"  │  │  ├─ Mutations columns: {list(pair_mutations.columns)}"
-                        )
-                        print(
-                            f"  │  │  ├─ Has impact_validated: {'impact_validated' in pair_mutations.columns}"
-                        )
-                        if "impact_validated" in pair_mutations.columns:
+
+                        if "impact_validated" in pair_viz_mutations.columns:
                             print(
-                                f"  │  │  ├─ Validated impacts: {pair_mutations['impact_validated'].unique()}"
+                                f"  │  │  ├─ Validated impacts: {pair_viz_mutations['impact_validated'].unique()}"
                             )
-                        print(
-                            f"  │  │  ├─ Creating view with {len(pair_mutations)} mutations"
-                        )
+
                         visualizer.visualize_transcript(
                             gene_name=gene_name,
                             transcript_id=transcript_id,
                             alt_features=feature_for_viz,
-                            mutations_df=pair_mutations,
+                            mutations_df=pair_viz_mutations,
                             output_file=str(
                                 transcript_dir / f"{pair_base_filename}_filtered.pdf"
                             ),
@@ -2282,13 +2346,15 @@ class MutationHandler:
                             gene_name=gene_name,
                             transcript_id=transcript_id,
                             alt_features=feature_for_viz,
-                            mutations_df=pair_mutations,
+                            mutations_df=pair_viz_mutations,
                             output_file=str(
                                 transcript_dir
                                 / f"{pair_base_filename}_filtered_zoom.pdf"
                             ),
                             padding=100,
                         )
+                    else:
+                        print(f"  │  │  ├─ No mutations to visualize for this pair")
 
             # Calculate total mutations across all pairs
             total_mutations = (
