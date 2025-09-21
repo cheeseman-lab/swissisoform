@@ -684,36 +684,49 @@ class AlternativeProteinGenerator:
         Returns:
             Optional[Dict]: Dict with mutated sequence info or None if mutation failed/synonymous.
         """
-        self._debug_print(
-            f"Applying mutation {ref_allele}>{alt_allele} at position {genomic_pos} to {sequence_type} sequence"
-        )
+        if self.debug:
+            print(
+                f"            ├─ Applying mutation {ref_allele}>{alt_allele} at position {genomic_pos} to {sequence_type} sequence"
+            )
 
         # Get the base sequence and metadata
         if sequence_type == "extension":
             if extension_feature is None:
-                self._debug_print("Extension feature required for extension mutations")
+                if self.debug:
+                    print(
+                        "            └─ ❌ Extension feature required for extension mutations"
+                    )
                 return None
             base_result = self.extract_alternative_protein(
                 transcript_id, extension_feature
             )
             if not base_result:
-                self._debug_print("Could not extract base extension protein")
+                if self.debug:
+                    print("            └─ ❌ Could not extract base extension protein")
                 return None
         else:
             base_result = self.extract_canonical_protein(transcript_id)
             if not base_result:
-                self._debug_print("Could not extract base canonical protein")
+                if self.debug:
+                    print("            └─ ❌ Could not extract base canonical protein")
                 return None
 
         original_coding_sequence = base_result["coding_sequence"]
         original_protein = base_result["protein"]
         strand = base_result["strand"]
 
+        if self.debug:
+            print(
+                f"            ├─ Base sequence: {len(original_coding_sequence)} bp CDS, {len(original_protein)} AA"
+            )
+
         # Get transcript data for validation and mapping
         transcript_data = self.genome.get_transcript_features_with_sequence(
             transcript_id
         )
         if not transcript_data:
+            if self.debug:
+                print("            └─ ❌ No transcript data available")
             return None
 
         chromosome = transcript_data["sequence"]["chromosome"]
@@ -724,14 +737,50 @@ class AlternativeProteinGenerator:
                 chromosome, genomic_pos, genomic_pos, "+"
             )
             actual_genomic_base = str(actual_genomic_base).upper()
+
+            if self.debug:
+                print(
+                    f"            ├─ Genomic reference check: expected={ref_allele}, actual={actual_genomic_base}"
+                )
+
         except Exception as e:
-            self._debug_print(f"Could not get sequence at position {genomic_pos}: {e}")
+            if self.debug:
+                print(
+                    f"            └─ ❌ Could not get sequence at position {genomic_pos}: {e}"
+                )
             return None
 
-        if actual_genomic_base != ref_allele.upper():
-            self._debug_print(
-                f"Reference mismatch at {genomic_pos}: expected {ref_allele}, found {actual_genomic_base}"
+        # Handle strand-specific reference checking
+        reference_ok = False
+        if strand == "+":
+            if actual_genomic_base == ref_allele.upper():
+                reference_ok = True
+            else:
+                if self.debug:
+                    print(
+                        f"            ├─ ⚠️  Reference mismatch on + strand: {ref_allele} != {actual_genomic_base}"
+                    )
+        else:
+            # For minus strand, check both orientations
+            complement_map = {"A": "T", "T": "A", "G": "C", "C": "G"}
+            actual_transcript_base = complement_map.get(
+                actual_genomic_base, actual_genomic_base
             )
+
+            if (
+                actual_genomic_base == ref_allele.upper()
+                or actual_transcript_base == ref_allele.upper()
+            ):
+                reference_ok = True
+            else:
+                if self.debug:
+                    print(
+                        f"            ├─ ⚠️  Reference mismatch on - strand: {ref_allele} not in [{actual_genomic_base}, {actual_transcript_base}]"
+                    )
+
+        if not reference_ok:
+            if self.debug:
+                print(f"            └─ ❌ Reference validation failed")
             return None
 
         # Map genomic position to coding sequence position
@@ -744,16 +793,21 @@ class AlternativeProteinGenerator:
         )
 
         if mutation_coding_pos is None:
-            self._debug_print(
-                f"Could not map genomic position {genomic_pos} to coding sequence"
-            )
+            if self.debug:
+                print(
+                    f"            └─ ❌ Could not map genomic position {genomic_pos} to coding sequence"
+                )
             return None
+
+        if self.debug:
+            print(f"            ├─ Mapped to coding position: {mutation_coding_pos}")
 
         # Validate coding position bounds
         if mutation_coding_pos >= len(original_coding_sequence):
-            self._debug_print(
-                f"Coding position {mutation_coding_pos} beyond sequence length {len(original_coding_sequence)}"
-            )
+            if self.debug:
+                print(
+                    f"            └─ ❌ Coding position {mutation_coding_pos} beyond sequence length {len(original_coding_sequence)}"
+                )
             return None
 
         # Convert genomic alleles to transcript orientation
@@ -765,14 +819,24 @@ class AlternativeProteinGenerator:
             transcript_ref = complement_map.get(ref_allele.upper(), ref_allele.upper())
             transcript_alt = complement_map.get(alt_allele.upper(), alt_allele.upper())
 
+        if self.debug:
+            print(
+                f"            ├─ Transcript orientation: {transcript_ref}>{transcript_alt}"
+            )
+
         # Validate reference in coding sequence
         current_base = original_coding_sequence[mutation_coding_pos].upper()
         if current_base != transcript_ref:
-            self._debug_print(
-                f"Reference mismatch in coding sequence at pos {mutation_coding_pos}: "
-                f"expected {transcript_ref} (from genomic {ref_allele}), found {current_base}"
-            )
+            if self.debug:
+                print(
+                    f"            ├─ ❌ Reference mismatch in coding sequence at pos {mutation_coding_pos}: expected {transcript_ref} (from genomic {ref_allele}), found {current_base}"
+                )
             return None
+
+        if self.debug:
+            print(
+                f"            ├─ Coding sequence reference validated: {current_base} == {transcript_ref}"
+            )
 
         # Apply mutation in transcript orientation
         mutated_coding_sequence = (
@@ -780,6 +844,11 @@ class AlternativeProteinGenerator:
             + transcript_alt
             + original_coding_sequence[mutation_coding_pos + 1 :]
         )
+
+        if self.debug:
+            print(
+                f"            ├─ Applied mutation at coding pos {mutation_coding_pos}: {current_base}>{transcript_alt}"
+            )
 
         # Translate mutated sequence
         if len(mutated_coding_sequence) >= 3:
@@ -792,16 +861,16 @@ class AlternativeProteinGenerator:
 
         # Check if protein actually changed (filter synonymous mutations)
         if mutated_protein == original_protein:
-            self._debug_print(f"Synonymous mutation - protein unchanged")
+            if self.debug:
+                print(f"            └─ Synonymous mutation - protein unchanged")
             return None
 
         # Calculate amino acid difference
         aa_change = self._calculate_aa_difference(original_protein, mutated_protein)
 
-        self._debug_print(
-            f"Applied mutation {ref_allele}>{alt_allele} -> {transcript_ref}>{transcript_alt} "
-            f"at coding position {mutation_coding_pos}, AA change: {aa_change}"
-        )
+        if self.debug:
+            print(f"            ├─ Protein changed! AA change: {aa_change}")
+            print(f"            └─ ✅ Mutation application successful")
 
         return {
             "coding_sequence": mutated_coding_sequence,
@@ -1654,6 +1723,69 @@ class AlternativeProteinGenerator:
                 f"        ├─ Predicting consequence for {ref_allele}>{alt_allele} at {genomic_pos}"
             )
 
+            # DEBUG: Check if position is in CDS
+            features = self.genome.get_transcript_features(transcript_id)
+            cds_regions = features[features["feature_type"] == "CDS"]
+            in_cds = False
+            cds_match = None
+
+            for _, cds in cds_regions.iterrows():
+                if cds["start"] <= genomic_pos <= cds["end"]:
+                    in_cds = True
+                    cds_match = cds
+                    print(
+                        f"        │  ├─ ✅ Position {genomic_pos} IS in CDS: {cds['start']}-{cds['end']}"
+                    )
+                    break
+
+            if not in_cds:
+                print(f"        │  ├─ ❌ Position {genomic_pos} NOT in any CDS!")
+                cds_list = [
+                    f"{cds['start']}-{cds['end']}" for _, cds in cds_regions.iterrows()
+                ]
+                print(f"        │  ├─ Available CDS regions: {', '.join(cds_list[:3])}")
+
+            # DEBUG: Check reference allele
+            transcript_data = self.genome.get_transcript_features_with_sequence(
+                transcript_id
+            )
+            if transcript_data:
+                chromosome = transcript_data["sequence"]["chromosome"]
+                strand = transcript_data["sequence"]["strand"]
+
+                try:
+                    actual_base = self.genome.get_sequence(
+                        chromosome, genomic_pos, genomic_pos, "+"
+                    )
+                    actual_base = str(actual_base).upper()
+                    print(
+                        f"        │  ├─ Genomic base at {genomic_pos}: {actual_base} (expected: {ref_allele})"
+                    )
+                    print(f"        │  ├─ Transcript strand: {strand}")
+
+                    if strand == "-":
+                        complement_map = {"A": "T", "T": "A", "G": "C", "C": "G"}
+                        actual_transcript = complement_map.get(actual_base, actual_base)
+                        print(
+                            f"        │  ├─ Transcript orientation: {actual_transcript}"
+                        )
+
+                        if (
+                            ref_allele != actual_base
+                            and ref_allele != actual_transcript
+                        ):
+                            print(
+                                f"        │  ├─ ⚠️  REFERENCE MISMATCH! Expected {ref_allele}, found genomic={actual_base}, transcript={actual_transcript}"
+                            )
+                    else:
+                        if ref_allele != actual_base:
+                            print(
+                                f"        │  ├─ ⚠️  REFERENCE MISMATCH! Expected {ref_allele}, found {actual_base}"
+                            )
+
+                except Exception as e:
+                    print(f"        │  ├─ Error checking reference: {e}")
+
         try:
             # Get canonical protein
             canonical_result = self.extract_canonical_protein(transcript_id)
@@ -1669,24 +1801,55 @@ class AlternativeProteinGenerator:
                 print(
                     f"        │  ├─ Canonical CDS length: {len(canonical_result['coding_sequence'])} bp"
                 )
+                print(f"        │  ├─ First 20 AA: {canonical_result['protein'][:20]}")
 
             # Apply mutation to get mutated protein
+            if self.debug:
+                print(f"        │  ├─ Applying mutation...")
+
             mutated_result = self._apply_mutation_to_sequence(
                 transcript_id, genomic_pos, ref_allele, alt_allele, "canonical"
             )
 
             if not mutated_result:
                 if self.debug:
-                    print(f"        │  └─ No protein change (synonymous)")
+                    print(f"        │  ├─ ❌ _apply_mutation_to_sequence returned None")
+                    print(f"        │  └─ This is WHY it's being called synonymous!")
                 return "synonymous variant"  # No protein change
 
             if self.debug:
+                print(f"        │  ├─ ✅ Mutation applied successfully")
                 print(
                     f"        │  ├─ Mutated protein length: {len(mutated_result['protein'])} AA"
                 )
                 print(
                     f"        │  ├─ Mutated CDS length: {len(mutated_result['coding_sequence'])} bp"
                 )
+                print(f"        │  ├─ First 20 AA: {mutated_result['protein'][:20]}")
+
+                # Show the actual protein difference
+                orig_protein = canonical_result["protein"]
+                mut_protein = mutated_result["protein"]
+
+                if orig_protein == mut_protein:
+                    print(
+                        f"        │  ├─ ⚠️  Proteins are identical - this explains synonymous classification!"
+                    )
+                else:
+                    # Find differences
+                    differences = []
+                    for i, (orig_aa, mut_aa) in enumerate(
+                        zip(orig_protein, mut_protein)
+                    ):
+                        if orig_aa != mut_aa:
+                            differences.append((i + 1, orig_aa, mut_aa))
+                            if len(differences) <= 3:  # Show first 3
+                                print(
+                                    f"        │  ├─ AA change at position {i + 1}: {orig_aa}>{mut_aa}"
+                                )
+
+                    if differences:
+                        print(f"        │  ├─ Total AA differences: {len(differences)}")
 
             # Classify the type of change
             consequence = self.classify_protein_change(
@@ -1704,6 +1867,9 @@ class AlternativeProteinGenerator:
         except Exception as e:
             if self.debug:
                 print(f"        │  └─ ❌ Exception during prediction: {str(e)}")
+                import traceback
+
+                print(f"        │     └─ Traceback: {traceback.format_exc()}")
             return "unknown"
 
     def classify_protein_change(
@@ -1778,12 +1944,19 @@ class AlternativeProteinGenerator:
         # Same length, different sequence = missense
         # Find the position of the change
         if self.debug:
+            differences_found = 0
             for i, (orig_aa, mut_aa) in enumerate(zip(orig_protein, mut_protein)):
                 if orig_aa != mut_aa:
-                    print(
-                        f"          │  ├─ First AA change at position {i + 1}: {orig_aa}>{mut_aa}"
-                    )
-                    break
+                    differences_found += 1
+                    if differences_found <= 3:  # Show first 3 differences
+                        print(
+                            f"          │  ├─ AA change at position {i + 1}: {orig_aa}>{mut_aa}"
+                        )
+                    elif differences_found == 4:
+                        print(f"          │  ├─ ... (more differences)")
+                        break
+
+            print(f"          │  ├─ Total differences: {differences_found}")
             print(f"          └─ Classification: missense variant")
 
         return "missense variant"
