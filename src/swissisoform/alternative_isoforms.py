@@ -627,14 +627,14 @@ class AlternativeIsoform:
 
         return groups
 
-    def get_visualization_features(
+    def get_mutation_features(
         self,
         gene_name: str,
         top_n_per_type_per_transcript: Optional[int] = None,
         include_extensions: bool = True,
         include_truncations: bool = True,
     ) -> pd.DataFrame:
-        """Get features formatted for visualization, including both truncations and extensions.
+        """Get features formatted for mutations, including both truncations and extensions.
 
         Args:
             gene_name (str): Name of the gene to get features for.
@@ -710,6 +710,84 @@ class AlternativeIsoform:
             viz_features.append(feature)
 
         return pd.DataFrame(viz_features)
+
+    def get_translation_features(
+        self,
+        gene_name: str,
+        top_n_per_type_per_transcript: Optional[int] = None,
+        include_extensions: bool = True,
+        include_truncations: bool = True,
+    ) -> pd.DataFrame:
+        """Get features formatted for translation, including both truncations and extensions.
+
+        Args:
+            gene_name (str): Name of the gene to get features for.
+            top_n_per_type_per_transcript (Optional[int]): If specified, keep top N most efficient per TYPE.
+            include_extensions (bool): Whether to include extension regions.
+            include_truncations (bool): Whether to include truncation regions.
+
+        Returns:
+            pd.DataFrame: Features formatted for translation with original coordinates.
+
+        Raises:
+            ValueError: If no data is loaded.
+        """
+        if self.start_sites.empty:
+            raise ValueError("No data loaded. Please load data first with load_bed().")
+
+        # Use the updated function with per-type filtering
+        regions = self.calculate_alternative_start_regions(
+            gene_name, top_n_per_type_per_transcript
+        )
+
+        if regions.empty:
+            return pd.DataFrame()
+
+        # Filter by region type if requested
+        if not include_extensions:
+            regions = regions[regions["region_type"] != "extension"]
+        if not include_truncations:
+            regions = regions[regions["region_type"] != "truncation"]
+
+        if regions.empty:
+            return pd.DataFrame()
+
+        # Convert to translation format - NO MUTATION COORDINATE EXTENSIONS
+        translation_features = []
+
+        for _, region in regions.iterrows():
+            feature = {
+                "chromosome": region["chromosome"],
+                "source": "ribosome_profiling",
+                "feature_type": f"alternative_start_{region['region_type']}",
+                "start": region["region_start"],  # Original coordinates only
+                "end": region["region_end"],  # Original coordinates only
+                "alternative_start_pos": region["alternative_start_pos"],
+                "canonical_start_pos": region["canonical_start_pos"],
+                "score": region["efficiency"],
+                "strand": region["strand"],
+                "frame": ".",
+                "gene_id": region["gene_id"],
+                "transcript_id": region["transcript_id"],
+                "refseq_transcript_id": region.get("refseq_transcript_id", "NA"),
+                "gene_name": region["gene_name"],
+                "start_codon": region["alternative_start_codon"],
+                "name": region["region_id"],
+                "region_type": region["region_type"],
+                "region_length": region["region_length"],
+                "biological_effect": region["biological_effect"],
+                "bed_annotation": region["bed_annotation"],
+                "annotation_matches_biology": region["annotation_matches_biology"],
+                "efficiency": region["efficiency"],
+                "canonical_efficiency": region["canonical_efficiency"],
+                "efficiency_ratio": region["efficiency"]
+                / region["canonical_efficiency"]
+                if region["canonical_efficiency"] > 0
+                else 0,
+            }
+            translation_features.append(feature)
+
+        return pd.DataFrame(translation_features)
 
     def get_gene_list(self) -> List[str]:
         """Get list of all genes in the dataset.

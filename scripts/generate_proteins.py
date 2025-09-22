@@ -304,7 +304,7 @@ async def main(
             # Additional info for mutations mode
             if mutations_mode:
                 # Quick check for mutations in alternative regions
-                alt_features = alt_isoforms.get_visualization_features(gene_name)
+                alt_features = alt_isoforms.get_translation_features(gene_name)
                 if not alt_features.empty:
                     print(
                         f"  ├─ Found {len(alt_features)} alternative regions for mutation analysis"

@@ -113,6 +113,7 @@ class MutationHandler:
                 "inframe_indel",
             ],
             "inframe_ins": ["inframe_insertion", "inframe insertion", "inframe_ins"],
+            "synonymous": ["synonymous", "synonymous_variant", "synonymous variant"],
             # Low impact last
             "splice": [
                 "splice",
@@ -121,12 +122,11 @@ class MutationHandler:
                 "splice_donor_variant",
                 "splice_acceptor_variant",
             ],
-            "synonymous": ["synonymous", "synonymous_variant", "synonymous variant"],
             "intronic": ["intron_variant", "intron variant"],
         }
 
         # Define which categories to exclude by default
-        self.low_impact_categories = ["splice", "synonymous", "intronic"]
+        self.low_impact_categories = ["splice", "intronic"]
 
     async def get_gnomad_variants(self, gene_name: str) -> pd.DataFrame:
         """Get processed variant data from gnomAD.
@@ -2024,7 +2024,7 @@ class MutationHandler:
         try:
             # Get alternative isoform features
             print(f"  ├─ Getting alternative features...", end="", flush=True)
-            alt_features = alt_isoform_handler.get_visualization_features(
+            alt_features = alt_isoform_handler.get_mutation_features(
                 gene_name, top_n_per_type_per_transcript
             )
             if alt_features.empty:
@@ -2103,8 +2103,8 @@ class MutationHandler:
                 transcript_end = transcript["end"]
                 transcript_chromosome = transcript["chromosome"]
                 transcript_strand = transcript["strand"]
-                feature_start = feature["start"]
-                feature_end = feature["end"]
+                feature_start = feature.get("mutation_start", feature["start"])
+                feature_end = feature.get("mutation_end", feature["end"])
                 feature_chrom = feature["chromosome"]
                 feature_type = feature.get("region_type", "unknown")
                 # Create feature ID
@@ -2194,6 +2194,7 @@ class MutationHandler:
                     sources=sources,
                     refseq_id=refseq_id,
                     custom_parquet_path=custom_parquet_path,
+                    verbose=True,
                 )
 
                 if pair_mutations is None or pair_mutations.empty:
@@ -2226,6 +2227,10 @@ class MutationHandler:
                     continue
 
                 print(f"  │  │  ├─ Found {len(pair_mutations)} mutations")
+
+                # region_mutations = (
+                #     pair_mutations.copy()
+                # )  # Just copy, no additional filtering needed
 
                 # STEP 2: Filter to mutations in the specific alternative region
                 print(

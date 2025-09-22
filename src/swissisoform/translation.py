@@ -186,7 +186,7 @@ class AlternativeProteinGenerator:
 
         Args:
             transcript_id (str): Transcript ID to process.
-            alternative_feature (pd.Series): Series from get_visualization_features() containing region info.
+            alternative_feature (pd.Series): Series from get_translation_features() containing region info.
 
         Returns:
             Optional[Dict]: Dictionary with coding_sequence, protein, and metadata, or None if failed.
@@ -530,7 +530,7 @@ class AlternativeProteinGenerator:
         self._debug_print(f"Processing gene: {gene_name}")
 
         # Get alternative features
-        alt_features = self.alt_isoforms.get_visualization_features(
+        alt_features = self.alt_isoforms.get_translation_features(
             gene_name, top_n_per_type_per_transcript
         )
         if alt_features.empty:
@@ -1319,7 +1319,7 @@ class AlternativeProteinGenerator:
 
         try:
             # Get alternative features - transcript IDs are embedded
-            alt_features = self.alt_isoforms.get_visualization_features(gene_name)
+            alt_features = self.alt_isoforms.get_translation_features(gene_name)
             if alt_features.empty:
                 return result
 
