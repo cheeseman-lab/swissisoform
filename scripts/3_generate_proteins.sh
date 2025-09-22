@@ -5,7 +5,7 @@
 #SBATCH --array=1-4                        # Job array with 4 tasks
 #SBATCH --cpus-per-task=6                  # CPUs per task
 #SBATCH --mem=16G                          # Memory per task (64G total = 16G × 4)
-#SBATCH --time=24:00:00                    # Time limit (hrs:min:sec)
+#SBATCH --time=48:00:00                    # Time limit (hrs:min:sec)
 #SBATCH --output=out/proteins-%A_%a.out    # %A = job ID, %a = array task ID
 
 # 3_generate_proteins.sh

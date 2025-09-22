@@ -5,7 +5,7 @@
 #SBATCH --array=1-2                        # Job array with 2 tasks
 #SBATCH --cpus-per-task=8                  # CPUs per task
 #SBATCH --mem=32G                          # Memory per task (64G total = 32G × 2)
-#SBATCH --time=12:00:00                    # Time limit (hrs:min:sec)
+#SBATCH --time=48:00:00                    # Time limit (hrs:min:sec)
 #SBATCH --output=out/mutations-%A_%a.out   # %A = job ID, %a = array task ID
 
 # 2_analyze_mutations.sh

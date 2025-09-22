@@ -56,80 +56,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def validate_extension_protein(
-    canonical_protein: str, extended_protein: str, gene_name: str, transcript_id: str
-) -> bool:
-    """Validate that an extension protein makes biological sense.
-
-    Args:
-        canonical_protein (str): Canonical protein sequence.
-        extended_protein (str): Extended protein sequence.
-        gene_name (str): Gene name for logging.
-        transcript_id (str): Transcript ID for logging.
-
-    Returns:
-        bool: True if extension is valid, False otherwise.
-    """
-    # Basic checks
-    if not extended_protein or not canonical_protein:
-        return False
-
-    # Extended should be longer than canonical
-    if len(extended_protein) <= len(canonical_protein):
-        print(
-            f"    ⚠️  Extension shorter than canonical for {gene_name}:{transcript_id}"
-        )
-        return False
-
-    # Extended should start with M (methionine)
-    if not extended_protein.startswith("M"):
-        print(
-            f"    ⚠️  Extension doesn't start with methionine for {gene_name}:{transcript_id}"
-        )
-        return False
-
-    # Extended should contain the canonical sequence (allowing for some differences due to upstream ORF)
-    # This is tricky because extensions can change the reading frame
-    # For now, just check that it's longer and starts with M
-
-    return True
-
-
-def validate_truncation_protein(
-    canonical_protein: str, truncated_protein: str, gene_name: str, transcript_id: str
-) -> bool:
-    """Validate that a truncation protein makes biological sense.
-
-    Args:
-        canonical_protein (str): Canonical protein sequence.
-        truncated_protein (str): Truncated protein sequence.
-        gene_name (str): Gene name for logging.
-        transcript_id (str): Transcript ID for logging.
-
-    Returns:
-        bool: True if truncation is valid, False otherwise.
-    """
-    # Basic checks
-    if not truncated_protein or not canonical_protein:
-        return False
-
-    # Truncated should be shorter than canonical
-    if len(truncated_protein) >= len(canonical_protein):
-        print(
-            f"    ⚠️  Truncation longer than canonical for {gene_name}:{transcript_id}"
-        )
-        return False
-
-    # Truncated should start with M (methionine)
-    if not truncated_protein.startswith("M"):
-        print(
-            f"    ⚠️  Truncation doesn't start with methionine for {gene_name}:{transcript_id}"
-        )
-        return False
-
-    return True
-
-
 async def main(
     gene_list_path: str,
     output_dir: str,
@@ -265,34 +191,22 @@ async def main(
                     validation_stats["length_filtered"] += 1
                     continue
 
-                # Validate based on region type
-                if region_type == "extension":
-                    if validate_extension_protein(
-                        canonical_protein,
-                        alternative_protein,
-                        gene_name,
-                        pair["transcript_id"],
-                    ):
-                        valid_pairs += 1
-                        validation_stats["valid_pairs"] += 1
-                    else:
-                        validation_stats["invalid_extensions"] += 1
-                elif region_type == "truncation":
-                    if validate_truncation_protein(
-                        canonical_protein,
-                        alternative_protein,
-                        gene_name,
-                        pair["transcript_id"],
-                    ):
-                        valid_pairs += 1
-                        validation_stats["valid_pairs"] += 1
-                    else:
-                        validation_stats["invalid_truncations"] += 1
-                else:
-                    # Unknown region type - accept it but warn
-                    print(f"    ⚠️  Unknown region type: {region_type}")
+                if protein_generator.validate_protein_pair(
+                    canonical_protein,
+                    alternative_protein,
+                    region_type,
+                    gene_name,
+                    pair["transcript_id"],
+                    verbose=True,  # Set to False to reduce output
+                ):
                     valid_pairs += 1
                     validation_stats["valid_pairs"] += 1
+                else:
+                    # Update specific validation stats based on region type
+                    if region_type == "extension":
+                        validation_stats["invalid_extensions"] += 1
+                    elif region_type == "truncation":
+                        validation_stats["invalid_truncations"] += 1
 
             if valid_pairs == 0:
                 print(f"  └─ ❌ No valid pairs after validation")
