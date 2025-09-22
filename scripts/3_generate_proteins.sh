@@ -27,9 +27,9 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     required_files=(
         "$GENOME_DIR/GRCh38.p7.genome.fa"
         "$GENOME_DIR/gencode.v25.annotation.ensembl_cleaned.gtf"
-        "$RIBOPROF_DIR/truncations_cleaned.bed"
-        "$RIBOPROF_DIR/gene_list.txt"
-        "$RIBOPROF_DIR/gene_list_reduced.txt"
+        "$RIBOPROF_DIR/isoforms_with_transcripts.bed"
+        "$RIBOPROF_DIR/isoforms_gene_list.txt"
+        "$RIBOPROF_DIR/isoforms_gene_list_reduced.txt"
     )
 
     echo ""
@@ -46,7 +46,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
 
     if [ "$missing_files" = true ]; then
         echo ""
-        echo "❌ Missing required files! Run 1_cleanup_files.sh first"
+        echo "❌ Missing required files! Run 1_cleanup_files.sh and 2_analyze_mutations.sh first"
         exit 1
     fi
 
@@ -68,7 +68,7 @@ conda activate swissisoform || {
 # Define common paths
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
 ANNOTATION_PATH="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
-TRUNCATIONS_PATH="../data/ribosome_profiling/truncations_cleaned.bed"
+TRUNCATIONS_PATH="../data/ribosome_profiling/isoforms_with_transcripts.bed"
 MIN_LENGTH=10
 MAX_LENGTH=100000
 FORMAT="fasta,csv"
@@ -76,9 +76,9 @@ FORMAT="fasta,csv"
 # Run the appropriate task based on array task ID
 case $SLURM_ARRAY_TASK_ID in
     1)
-        # Task 1: Reduced dataset pairs
+        # Task 1: Reduced dataset pairs (canonical + alternative only)
         echo "Array Task 1: Starting reduced pairs generation at $(date)"
-        python3 generate_proteins.py "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" \
+        python3 generate_proteins.py "../data/ribosome_profiling/isoforms_gene_list_reduced.txt" "../results/reduced/proteins" \
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
@@ -88,9 +88,9 @@ case $SLURM_ARRAY_TASK_ID in
         echo "Array Task 1: Completed reduced pairs generation at $(date)"
         ;;
     2)
-        # Task 2: Reduced dataset with mutations
+        # Task 2: Reduced dataset with mutations (canonical + alternative + mutated)
         echo "Array Task 2: Starting reduced mutations generation at $(date)"
-        python3 generate_proteins.py "../data/ribosome_profiling/gene_list_reduced.txt" "../results/reduced/proteins" \
+        python3 generate_proteins.py "../data/ribosome_profiling/isoforms_gene_list_reduced.txt" "../results/reduced/proteins" \
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
@@ -98,13 +98,13 @@ case $SLURM_ARRAY_TASK_ID in
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT" \
           --mutations \
-          --impact-types "missense variant" "5 prime UTR variant"
+          --impact-types "missense variant" "nonsense variant" "frameshift variant" "5 prime UTR variant"
         echo "Array Task 2: Completed reduced mutations generation at $(date)"
         ;;
     3)
-        # Task 3: Full dataset pairs
+        # Task 3: Full dataset pairs (canonical + alternative only)
         echo "Array Task 3: Starting full pairs generation at $(date)"
-        python3 generate_proteins.py "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" \
+        python3 generate_proteins.py "../data/ribosome_profiling/isoforms_gene_list.txt" "../results/full/proteins" \
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
@@ -114,9 +114,9 @@ case $SLURM_ARRAY_TASK_ID in
         echo "Array Task 3: Completed full pairs generation at $(date)"
         ;;
     4)
-        # Task 4: Full dataset with mutations
+        # Task 4: Full dataset with mutations (canonical + alternative + mutated)
         echo "Array Task 4: Starting full mutations generation at $(date)"
-        python3 generate_proteins.py "../data/ribosome_profiling/gene_list.txt" "../results/full/proteins" \
+        python3 generate_proteins.py "../data/ribosome_profiling/isoforms_gene_list.txt" "../results/full/proteins" \
           --genome "$GENOME_PATH" \
           --annotation "$ANNOTATION_PATH" \
           --bed "$TRUNCATIONS_PATH" \
@@ -124,7 +124,7 @@ case $SLURM_ARRAY_TASK_ID in
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT" \
           --mutations \
-          --impact-types "missense variant" "5 prime UTR variant"
+          --impact-types "missense variant" "nonsense variant" "frameshift variant" "5 prime UTR variant"
         echo "Array Task 4: Completed full mutations generation at $(date)"
         ;;
     *)
@@ -174,17 +174,22 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 4 ]; then
         echo ""
         echo "Generated datasets:"
         echo "  ├─ reduced/proteins/            # Curated truncation sites"
-        echo "  │  ├─ protein_sequences_pairs.*       # Canonical + truncated pairs"
-        echo "  │  └─ protein_sequences_with_mutations.*  # With mutations"
+        echo "  │  ├─ protein_sequences_pairs.*       # Canonical + truncated/extended pairs"
+        echo "  │  └─ protein_sequences_with_mutations.*  # With mutations applied"
         echo "  └─ full/proteins/               # All truncation sites"
-        echo "     ├─ protein_sequences_pairs.*       # Canonical + truncated pairs"
-        echo "     └─ protein_sequences_with_mutations.*  # With mutations"
+        echo "     ├─ protein_sequences_pairs.*       # Canonical + truncated/extended pairs"
+        echo "     └─ protein_sequences_with_mutations.*  # With mutations applied"
+        echo ""
+        echo "Dataset composition:"
+        echo "  ├─ Pairs mode: canonical + alternative (truncated/extended) proteins"
+        echo "  └─ Mutations mode: canonical + alternative + mutated variants"
         echo ""
         echo "Next step:"
         echo "  Run: sbatch 4_predict_localization.sh"
     else
         echo ""
         echo "❌ Protein generation failed. Some output files are missing."
+        echo "Check the generate_proteins.py script and logs for errors."
         exit 1
     fi
 fi

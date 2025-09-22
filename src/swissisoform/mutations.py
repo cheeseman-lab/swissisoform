@@ -1633,17 +1633,35 @@ class MutationHandler:
         alt_features["start"] = pd.to_numeric(alt_features["start"])
         alt_features["end"] = pd.to_numeric(alt_features["end"])
 
+        # Also convert mutation coordinates if they exist
+        if "mutation_start" in alt_features.columns:
+            alt_features["mutation_start"] = pd.to_numeric(
+                alt_features["mutation_start"]
+            )
+        if "mutation_end" in alt_features.columns:
+            alt_features["mutation_end"] = pd.to_numeric(alt_features["mutation_end"])
+
         if verbose:
             print("\nAnalyzing mutations in alternative features:")
 
         filtered_dfs = []
 
         for idx, feature in alt_features.iterrows():
-            start_pos = feature["start"]
-            end_pos = feature["end"]
+            # Use mutation coordinates if available, otherwise fall back to original coordinates
+            start_pos = feature.get("mutation_start", feature["start"])
+            end_pos = feature.get("mutation_end", feature["end"])
             name = feature.get("name", f"Feature {idx + 1}")
 
-            # Filter mutations for this feature
+            # Show both original and mutation coordinates if they differ
+            if verbose and ("mutation_start" in feature or "mutation_end" in feature):
+                orig_start = feature["start"]
+                orig_end = feature["end"]
+                if start_pos != orig_start or end_pos != orig_end:
+                    print(
+                        f"  Feature {name}: {orig_start}-{orig_end} extended to {start_pos}-{end_pos} for mutation detection"
+                    )
+
+            # Filter mutations for this feature using mutation coordinates
             feature_mask = (combined_df["position"] >= start_pos) & (
                 combined_df["position"] <= end_pos
             )
@@ -1678,7 +1696,11 @@ class MutationHandler:
             return pd.DataFrame()
 
     async def _validate_mutation_consequences(
-        self, mutations_df: pd.DataFrame, transcript_id: str, protein_generator
+        self,
+        mutations_df: pd.DataFrame,
+        transcript_id: str,
+        protein_generator,
+        current_feature: Optional[pd.Series] = None,
     ) -> pd.DataFrame:
         """Validate mutation consequences using translation-based prediction.
 
@@ -1686,6 +1708,7 @@ class MutationHandler:
             mutations_df (pd.DataFrame): DataFrame containing mutation records to validate.
             transcript_id (str): Transcript identifier to use for consequence prediction.
             protein_generator: An object with a predict_consequence_by_translation method for consequence validation.
+            current_feature (Optional[pd.Series]): Current alternative feature being analyzed (for context).
 
         Returns:
             pd.DataFrame: DataFrame with validated consequences in new 'impact_validated' column.
@@ -1693,21 +1716,27 @@ class MutationHandler:
         validated_mutations = []
 
         print(f"  │  │  ├─ Validating {len(mutations_df)} mutation consequences...")
-        print(f"  │  │  │  ├─ Will add 'impact_validated' column")
+        if current_feature is not None:
+            feature_type = current_feature.get("region_type", "unknown")
+            feature_range = (
+                f"{current_feature.get('start', '?')}-{current_feature.get('end', '?')}"
+            )
+            alt_start_pos = current_feature.get("alternative_start_pos", None)
+            print(f"  │  │  │  ├─ Context: {feature_type} feature at {feature_range}")
+            if alt_start_pos:
+                print(f"  │  │  │  ├─ Alternative start position: {alt_start_pos}")
+        print(
+            f"  │  │  │  ├─ Will add 'impact_validated' and 'in_alt_start_site' columns"
+        )
 
-        # Show input distribution
-        if "impact" in mutations_df.columns:
-            input_impacts = mutations_df["impact"].value_counts()
-            print(f"  │  │  │  ├─ Original impact distribution:")
-            for impact, count in input_impacts.items():
-                print(f"  │  │  │  │  ├─ {impact}: {count}")
-
+        # Track statistics
         validation_stats = {
             "total_processed": 0,
             "successful_validations": 0,
             "validation_failures": 0,
             "impact_agreements": 0,
             "impact_disagreements": 0,
+            "alt_start_site_mutations": 0,
             "disagreement_patterns": {},
         }
 
@@ -1729,20 +1758,138 @@ class MutationHandler:
                 print(f"  │  │  │  │  ├─ Mutation: {ref_allele}>{alt_allele}")
                 print(f"  │  │  │  │  ├─ Original impact: '{original_impact}'")
 
-                # Use protein_generator to predict consequence
+                # Check if mutation is in alternative start site
+                in_alt_start_site = False
+                alt_start_note = ""
+
+                if current_feature is not None:
+                    # Extract info directly from current_feature
+                    alt_start_pos = current_feature.get("alternative_start_pos", None)
+                    start_codon = current_feature.get(
+                        "start_codon", "AUG"
+                    )  # RNA notation
+                    strand = current_feature.get("strand", "+")  # Get strand info
+
+                    if alt_start_pos is not None:
+                        try:
+                            alt_start_pos = int(alt_start_pos)
+
+                            # Handle strand-specific codon coordinates
+                            if strand == "+":
+                                codon_start = alt_start_pos
+                                codon_end = alt_start_pos + 2
+                            else:  # strand == "-"
+                                codon_start = alt_start_pos - 2
+                                codon_end = alt_start_pos
+
+                            if codon_start <= genomic_pos <= codon_end:
+                                in_alt_start_site = True
+                                validation_stats["alt_start_site_mutations"] += 1
+                                alt_start_note = (
+                                    f" (in alternative start site {start_codon})"
+                                )
+
+                                print(
+                                    f"  │  │  │  │  ├─ 🎯 MUTATION IN ALTERNATIVE START SITE: {start_codon} at {alt_start_pos} ({strand} strand)"
+                                )
+                                print(
+                                    f"  │  │  │  │  │  ├─ Codon span: {codon_start}-{codon_end}"
+                                )
+                                print(f"  │  │  │  │  │  └─ Mutation at: {genomic_pos}")
+
+                                # DEBUG: Verify the genomic sequence matches the expected start codon
+                                if hasattr(protein_generator, "genome") and hasattr(
+                                    protein_generator.genome, "get_sequence"
+                                ):
+                                    try:
+                                        chromosome = current_feature.get(
+                                            "chromosome", None
+                                        )
+                                        if chromosome:
+                                            # Get genomic sequence using appropriate strand
+                                            genomic_seq = (
+                                                protein_generator.genome.get_sequence(
+                                                    chromosome,
+                                                    codon_start,
+                                                    codon_end,
+                                                    strand,
+                                                )
+                                            )
+                                            genomic_seq_str = str(genomic_seq).upper()
+
+                                            # Convert RNA notation to DNA for comparison (U -> T)
+                                            expected_dna_codon = start_codon.replace(
+                                                "U", "T"
+                                            )
+
+                                            print(
+                                                f"  │  │  │  │  │  ├─ Expected start codon (DNA): {expected_dna_codon}"
+                                            )
+                                            print(
+                                                f"  │  │  │  │  │  ├─ Actual genomic sequence: {genomic_seq_str}"
+                                            )
+
+                                            if genomic_seq_str == expected_dna_codon:
+                                                print(
+                                                    f"  │  │  │  │  │  └─ ✅ Sequence match confirmed"
+                                                )
+                                            else:
+                                                print(
+                                                    f"  │  │  │  │  │  └─ ⚠️  Sequence mismatch! Check coordinates or strand"
+                                                )
+
+                                    except Exception as e:
+                                        print(
+                                            f"  │  │  │  │  │  └─ Could not verify sequence: {e}"
+                                        )
+
+                        except (ValueError, TypeError):
+                            print(
+                                f"  │  │  │  │  ├─ Warning: Invalid alt_start_pos '{alt_start_pos}'"
+                            )
+                    else:
+                        print(
+                            f"  │  │  │  │  ├─ No alternative_start_pos found in feature"
+                        )
+                        # DEBUG: Show what's available in the feature
+                        available_keys = (
+                            list(current_feature.keys())
+                            if hasattr(current_feature, "keys")
+                            else ["Not a dict-like object"]
+                        )
+                        print(f"  │  │  │  │  │  └─ Available keys: {available_keys}")
+
+                # Use protein_generator to predict consequence with feature context
                 validated_impact = (
                     await protein_generator.predict_consequence_by_translation(
-                        transcript_id, genomic_pos, ref_allele, alt_allele
+                        transcript_id,
+                        genomic_pos,
+                        ref_allele,
+                        alt_allele,
+                        current_feature,
                     )
                 )
 
-                print(f"  │  │  │  │  ├─ Validated impact: '{validated_impact}'")
+                # Add annotation for alternative start site mutations
+                if in_alt_start_site:
+                    validated_impact_with_note = f"{validated_impact}{alt_start_note}"
+                else:
+                    validated_impact_with_note = validated_impact
+
+                print(
+                    f"  │  │  │  │  ├─ Validated impact: '{validated_impact_with_note}'"
+                )
 
                 # Create validated mutation record - PRESERVE ORIGINAL IMPACT
                 validated_mutation = mutation.copy()
 
-                # Add new column with validated impact
+                # Add new columns
                 validated_mutation["impact_validated"] = validated_impact
+                validated_mutation["impact_validated_with_note"] = (
+                    validated_impact_with_note
+                )
+                validated_mutation["in_alt_start_site"] = in_alt_start_site
+                validated_mutation["alt_start_note"] = alt_start_note
                 validated_mutation["validation_method"] = "translation_based"
                 validated_mutation["validation_successful"] = True
 
@@ -1750,9 +1897,10 @@ class MutationHandler:
                 if original_impact == validated_impact:
                     validated_mutation["impact_agreement"] = True
                     validation_stats["impact_agreements"] += 1
-                    print(
-                        f"  │  │  │  │  └─ ✅ AGREEMENT: Original and validated match"
-                    )
+                    agreement_note = "✅ AGREEMENT: Original and validated match"
+                    if in_alt_start_site:
+                        agreement_note += " [ALT START SITE]"
+                    print(f"  │  │  │  │  └─ {agreement_note}")
                 else:
                     validated_mutation["impact_agreement"] = False
                     validation_stats["impact_disagreements"] += 1
@@ -1766,9 +1914,12 @@ class MutationHandler:
                         validation_stats["disagreement_patterns"][disagreement_key] = 0
                     validation_stats["disagreement_patterns"][disagreement_key] += 1
 
-                    print(
-                        f"  │  │  │  │  └─ 🔄 DISAGREEMENT: {original_impact} → {validated_impact}"
+                    disagreement_note = (
+                        f"🔄 DISAGREEMENT: {original_impact} → {validated_impact}"
                     )
+                    if in_alt_start_site:
+                        disagreement_note += " [ALT START SITE]"
+                    print(f"  │  │  │  │  └─ {disagreement_note}")
 
                 validated_mutations.append(validated_mutation)
                 validation_stats["successful_validations"] += 1
@@ -1779,6 +1930,9 @@ class MutationHandler:
                 # Keep original mutation with error info
                 validated_mutation = mutation.copy()
                 validated_mutation["impact_validated"] = "validation_failed"
+                validated_mutation["impact_validated_with_note"] = "validation_failed"
+                validated_mutation["in_alt_start_site"] = False
+                validated_mutation["alt_start_note"] = ""
                 validated_mutation["validation_method"] = "translation_based"
                 validated_mutation["validation_successful"] = False
                 validated_mutation["validation_error"] = str(e)
@@ -1805,7 +1959,10 @@ class MutationHandler:
             f"  │  │  │     ├─ Impact agreements: {validation_stats['impact_agreements']}"
         )
         print(
-            f"  │  │  │     └─ Impact disagreements: {validation_stats['impact_disagreements']}"
+            f"  │  │  │     ├─ Impact disagreements: {validation_stats['impact_disagreements']}"
+        )
+        print(
+            f"  │  │  │     ├─ 🎯 Mutations in alt start sites: {validation_stats['alt_start_site_mutations']}"
         )
 
         if validation_stats["disagreement_patterns"]:
@@ -1815,17 +1972,23 @@ class MutationHandler:
 
         # Show final distributions
         if not result_df.empty:
-            print(f"  │  │  │     ├─ Final original impact distribution:")
-            if "impact" in result_df.columns:
-                for impact, count in result_df["impact"].value_counts().items():
-                    print(f"  │  │  │     │  ├─ {impact}: {count}")
-
-            print(f"  │  │  │     └─ Final validated impact distribution:")
+            print(f"  │  │  │     ├─ Final validated impact distribution:")
             if "impact_validated" in result_df.columns:
                 for impact, count in (
                     result_df["impact_validated"].value_counts().items()
                 ):
-                    print(f"  │  │  │        ├─ {impact}: {count}")
+                    print(f"  │  │  │     │  ├─ {impact}: {count}")
+
+            # Show alternative start site breakdown
+            if "in_alt_start_site" in result_df.columns:
+                alt_start_count = result_df["in_alt_start_site"].sum()
+                total_count = len(result_df)
+                percentage = (
+                    (alt_start_count / total_count * 100) if total_count > 0 else 0
+                )
+                print(
+                    f"  │  │  │     └─ Alternative start site mutations: {alt_start_count}/{total_count} ({percentage:.1f}%)"
+                )
 
         return result_df
 
@@ -2146,8 +2309,19 @@ class MutationHandler:
                     print(
                         f"  │  │  ├─ Validating consequences for {len(high_impact_mutations)} mutations..."
                     )
+
+                    # Get the current feature for context
+                    current_feature = (
+                        alt_features.loc[feature_idx]
+                        if feature_idx in alt_features.index
+                        else None
+                    )
+
                     validated_mutations = await self._validate_mutation_consequences(
-                        high_impact_mutations, transcript_id, protein_generator
+                        high_impact_mutations,
+                        transcript_id,
+                        protein_generator,
+                        current_feature,  # Pass feature!
                     )
                     print(f"  │  │  ├─ Validation complete")
 
@@ -2249,28 +2423,68 @@ class MutationHandler:
                     "feature_end": feature_end,
                     "mutation_count_total": pair_mutation_count,
                     "variant_ids": ",".join(variant_ids) if variant_ids else "",
+                    "mutations_in_alt_start_site": 0,
+                    "alt_start_site_variant_ids": "",
                     **mutation_categories,
                 }
 
                 # Add validation metrics if available
-                if (
-                    validate_consequences
-                    and "consequence_matches" in validated_mutations.columns
-                ):
-                    total_validated = (
-                        validated_mutations["consequence_matches"].notna().sum()
-                    )
-                    matches = validated_mutations["consequence_matches"].sum()
-                    pair_result["consequences_validated"] = total_validated
-                    pair_result["consequences_match_reported"] = matches
-                    pair_result["validation_accuracy"] = (
-                        matches / total_validated if total_validated > 0 else 0
-                    )
+                if validate_consequences and len(validated_mutations) > 0:
+                    # Check for alternative start site mutations
+                    if "in_alt_start_site" in validated_mutations.columns:
+                        alt_start_mutations = validated_mutations[
+                            validated_mutations["in_alt_start_site"] == True
+                        ]
+                        pair_result["mutations_in_alt_start_site"] = len(
+                            alt_start_mutations
+                        )
+
+                        if (
+                            not alt_start_mutations.empty
+                            and "variant_id" in alt_start_mutations.columns
+                        ):
+                            alt_start_ids = (
+                                alt_start_mutations["variant_id"]
+                                .dropna()
+                                .unique()
+                                .tolist()
+                            )
+                            alt_start_ids = [
+                                str(id).strip()
+                                for id in alt_start_ids
+                                if str(id).strip()
+                            ]
+                            pair_result["alt_start_site_variant_ids"] = (
+                                ",".join(alt_start_ids) if alt_start_ids else ""
+                            )
+
+                    # Original validation metrics (if they exist)
+                    if "consequence_matches" in validated_mutations.columns:
+                        total_validated = (
+                            validated_mutations["consequence_matches"].notna().sum()
+                        )
+                        matches = validated_mutations["consequence_matches"].sum()
+                        pair_result["consequences_validated"] = total_validated
+                        pair_result["consequences_match_reported"] = matches
+                        pair_result["validation_accuracy"] = (
+                            matches / total_validated if total_validated > 0 else 0
+                        )
 
                 pair_results.append(pair_result)
-                print(
+
+                # Enhanced completion message
+                completion_msg = (
                     f"  │  │  └─ Pair complete: {pair_mutation_count} final mutations"
                 )
+                if (
+                    validate_consequences
+                    and len(validated_mutations) > 0
+                    and "in_alt_start_site" in validated_mutations.columns
+                ):
+                    alt_start_count = validated_mutations["in_alt_start_site"].sum()
+                    if alt_start_count > 0:
+                        completion_msg += f" (🎯 {alt_start_count} in alt start site)"
+                print(completion_msg)
 
             print(
                 f"  ├─ All pairs processed. Total mutations for visualization: {len(all_mutations_for_viz)}"
@@ -2371,6 +2585,9 @@ class MutationHandler:
                 "alternative_features": len(alt_features),
                 "transcript_feature_pairs": len(transcript_feature_pairs),
                 "mutations_filtered": total_mutations,
+                "mutations_in_alt_start_sites": sum(
+                    pair.get("mutations_in_alt_start_site", 0) for pair in pair_results
+                ),
                 "pair_results": pair_results,
                 "consequences_validated": validate_consequences,
                 "error": None,

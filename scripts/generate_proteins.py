@@ -56,6 +56,80 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def validate_extension_protein(
+    canonical_protein: str, extended_protein: str, gene_name: str, transcript_id: str
+) -> bool:
+    """Validate that an extension protein makes biological sense.
+
+    Args:
+        canonical_protein (str): Canonical protein sequence.
+        extended_protein (str): Extended protein sequence.
+        gene_name (str): Gene name for logging.
+        transcript_id (str): Transcript ID for logging.
+
+    Returns:
+        bool: True if extension is valid, False otherwise.
+    """
+    # Basic checks
+    if not extended_protein or not canonical_protein:
+        return False
+
+    # Extended should be longer than canonical
+    if len(extended_protein) <= len(canonical_protein):
+        print(
+            f"    ⚠️  Extension shorter than canonical for {gene_name}:{transcript_id}"
+        )
+        return False
+
+    # Extended should start with M (methionine)
+    if not extended_protein.startswith("M"):
+        print(
+            f"    ⚠️  Extension doesn't start with methionine for {gene_name}:{transcript_id}"
+        )
+        return False
+
+    # Extended should contain the canonical sequence (allowing for some differences due to upstream ORF)
+    # This is tricky because extensions can change the reading frame
+    # For now, just check that it's longer and starts with M
+
+    return True
+
+
+def validate_truncation_protein(
+    canonical_protein: str, truncated_protein: str, gene_name: str, transcript_id: str
+) -> bool:
+    """Validate that a truncation protein makes biological sense.
+
+    Args:
+        canonical_protein (str): Canonical protein sequence.
+        truncated_protein (str): Truncated protein sequence.
+        gene_name (str): Gene name for logging.
+        transcript_id (str): Transcript ID for logging.
+
+    Returns:
+        bool: True if truncation is valid, False otherwise.
+    """
+    # Basic checks
+    if not truncated_protein or not canonical_protein:
+        return False
+
+    # Truncated should be shorter than canonical
+    if len(truncated_protein) >= len(canonical_protein):
+        print(
+            f"    ⚠️  Truncation longer than canonical for {gene_name}:{transcript_id}"
+        )
+        return False
+
+    # Truncated should start with M (methionine)
+    if not truncated_protein.startswith("M"):
+        print(
+            f"    ⚠️  Truncation doesn't start with methionine for {gene_name}:{transcript_id}"
+        )
+        return False
+
+    return True
+
+
 async def main(
     gene_list_path: str,
     output_dir: str,
@@ -125,7 +199,7 @@ async def main(
 
     # Set default impact types if not provided and mutations are requested
     if mutations_mode and impact_types is None:
-        impact_types = ["missense variant"]
+        impact_types = ["missense variant", "5 prime UTR variant"]
 
     # Read gene list
     print(f"\nReading gene list from {gene_list_path}")
@@ -141,9 +215,17 @@ async def main(
         print(f"  ├─ Impact types: {impact_types}")
     print(f"  └─ Output format: {output_format}")
 
-    # Process genes with progress reporting
+    # Process genes with progress reporting and validation
     successful_genes = 0
     failed_genes = []
+    validation_stats = {
+        "total_pairs": 0,
+        "valid_pairs": 0,
+        "invalid_extensions": 0,
+        "invalid_truncations": 0,
+        "length_filtered": 0,
+        "identical_sequences": 0,
+    }
 
     for gene_idx, gene_name in enumerate(gene_names, 1):
         print(f"\nProcessing gene {gene_idx}/{total_genes}: {gene_name}")
@@ -159,14 +241,74 @@ async def main(
                 failed_genes.append(gene_name)
                 continue
 
-            print(f"  ├─ Found {len(test_pairs)} transcript-truncation pairs")
+            print(f"  ├─ Found {len(test_pairs)} transcript-alternative pairs")
+
+            # Validate the pairs
+            valid_pairs = 0
+            for pair in test_pairs:
+                validation_stats["total_pairs"] += 1
+
+                canonical_protein = pair["canonical"]["protein"]
+                alternative_protein = pair["alternative"]["protein"]
+                region_type = pair["region_type"]
+
+                # Check for identical sequences
+                if canonical_protein == alternative_protein:
+                    validation_stats["identical_sequences"] += 1
+                    continue
+
+                # Check length constraints
+                if not (min_length <= len(canonical_protein) <= max_length):
+                    validation_stats["length_filtered"] += 1
+                    continue
+                if not (min_length <= len(alternative_protein) <= max_length):
+                    validation_stats["length_filtered"] += 1
+                    continue
+
+                # Validate based on region type
+                if region_type == "extension":
+                    if validate_extension_protein(
+                        canonical_protein,
+                        alternative_protein,
+                        gene_name,
+                        pair["transcript_id"],
+                    ):
+                        valid_pairs += 1
+                        validation_stats["valid_pairs"] += 1
+                    else:
+                        validation_stats["invalid_extensions"] += 1
+                elif region_type == "truncation":
+                    if validate_truncation_protein(
+                        canonical_protein,
+                        alternative_protein,
+                        gene_name,
+                        pair["transcript_id"],
+                    ):
+                        valid_pairs += 1
+                        validation_stats["valid_pairs"] += 1
+                    else:
+                        validation_stats["invalid_truncations"] += 1
+                else:
+                    # Unknown region type - accept it but warn
+                    print(f"    ⚠️  Unknown region type: {region_type}")
+                    valid_pairs += 1
+                    validation_stats["valid_pairs"] += 1
+
+            if valid_pairs == 0:
+                print(f"  └─ ❌ No valid pairs after validation")
+                failed_genes.append(gene_name)
+                continue
+
+            print(f"  ├─ Valid pairs after validation: {valid_pairs}/{len(test_pairs)}")
 
             # Additional info for mutations mode
             if mutations_mode:
-                # Quick check for mutations in truncation regions
-                truncation_features = alt_isoforms.get_visualization_features(gene_name)
-                if not truncation_features.empty:
-                    print(f"  ├─ Found {len(truncation_features)} truncation regions")
+                # Quick check for mutations in alternative regions
+                alt_features = alt_isoforms.get_visualization_features(gene_name)
+                if not alt_features.empty:
+                    print(
+                        f"  ├─ Found {len(alt_features)} alternative regions for mutation analysis"
+                    )
 
             print(f"  └─ ✅ Gene processed successfully")
             successful_genes += 1
@@ -174,6 +316,15 @@ async def main(
         except Exception as e:
             print(f"  └─ ❌ Error processing gene: {str(e)}")
             failed_genes.append(gene_name)
+
+    # Print validation summary
+    print(f"\nValidation Summary:")
+    print(f"  ├─ Total transcript-alternative pairs: {validation_stats['total_pairs']}")
+    print(f"  ├─ Valid pairs: {validation_stats['valid_pairs']}")
+    print(f"  ├─ Invalid extensions: {validation_stats['invalid_extensions']}")
+    print(f"  ├─ Invalid truncations: {validation_stats['invalid_truncations']}")
+    print(f"  ├─ Length filtered: {validation_stats['length_filtered']}")
+    print(f"  └─ Identical sequences: {validation_stats['identical_sequences']}")
 
     # Generate the full dataset
     print(f"\nGenerating final dataset...")
@@ -234,7 +385,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--bed",
-        default="../data/ribosome_profiling/truncations_cleaned.bed",
+        default="../data/ribosome_profiling/isoforms_with_transcripts.bed",
         help="Path to alternative isoform BED file",
     )
     parser.add_argument(

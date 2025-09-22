@@ -678,6 +678,14 @@ class AlternativeIsoform:
                 "feature_type": f"alternative_start_{region['region_type']}",
                 "start": region["region_start"],
                 "end": region["region_end"],
+                "mutation_start": region["region_start"] - 3
+                if region["region_type"] == "truncation" and region["strand"] == "-"
+                else region["region_start"],
+                "mutation_end": region["region_end"] + 3
+                if region["region_type"] == "truncation" and region["strand"] == "+"
+                else region["region_end"],
+                "alternative_start_pos": region["alternative_start_pos"],
+                "canonical_start_pos": region["canonical_start_pos"],
                 "score": region["efficiency"],
                 "strand": region["strand"],
                 "frame": ".",

@@ -734,7 +734,7 @@ class AlternativeProteinGenerator:
         # Validate reference allele at genomic position (forward strand)
         try:
             actual_genomic_base = self.genome.get_sequence(
-                chromosome, genomic_pos, genomic_pos, "+"
+                chromosome, genomic_pos, genomic_pos + len(ref_allele) - 1, "+"
             )
             actual_genomic_base = str(actual_genomic_base).upper()
 
@@ -763,8 +763,8 @@ class AlternativeProteinGenerator:
         else:
             # For minus strand, check both orientations
             complement_map = {"A": "T", "T": "A", "G": "C", "C": "G"}
-            actual_transcript_base = complement_map.get(
-                actual_genomic_base, actual_genomic_base
+            actual_transcript_base = "".join(
+                [complement_map.get(b, b) for b in actual_genomic_base[::-1]]
             )
 
             if (
@@ -803,10 +803,11 @@ class AlternativeProteinGenerator:
             print(f"            ├─ Mapped to coding position: {mutation_coding_pos}")
 
         # Validate coding position bounds
-        if mutation_coding_pos >= len(original_coding_sequence):
+        ref_len = len(ref_allele)
+        if mutation_coding_pos + ref_len > len(original_coding_sequence):
             if self.debug:
                 print(
-                    f"            └─ ❌ Coding position {mutation_coding_pos} beyond sequence length {len(original_coding_sequence)}"
+                    f"            └─ ❌ Coding position {mutation_coding_pos}+{ref_len} beyond sequence length {len(original_coding_sequence)}"
                 )
             return None
 
@@ -816,38 +817,46 @@ class AlternativeProteinGenerator:
             transcript_ref = ref_allele.upper()
             transcript_alt = alt_allele.upper()
         else:
-            transcript_ref = complement_map.get(ref_allele.upper(), ref_allele.upper())
-            transcript_alt = complement_map.get(alt_allele.upper(), alt_allele.upper())
+            transcript_ref = "".join(
+                [complement_map.get(b, b) for b in ref_allele.upper()[::-1]]
+            )
+            transcript_alt = "".join(
+                [complement_map.get(b, b) for b in alt_allele.upper()[::-1]]
+            )
 
         if self.debug:
             print(
                 f"            ├─ Transcript orientation: {transcript_ref}>{transcript_alt}"
             )
 
-        # Validate reference in coding sequence
-        current_base = original_coding_sequence[mutation_coding_pos].upper()
-        if current_base != transcript_ref:
+        # Validate reference in coding sequence (handle multi-BP)
+        current_bases = original_coding_sequence[
+            mutation_coding_pos : mutation_coding_pos + ref_len
+        ].upper()
+        if current_bases != transcript_ref:
             if self.debug:
                 print(
-                    f"            ├─ ❌ Reference mismatch in coding sequence at pos {mutation_coding_pos}: expected {transcript_ref} (from genomic {ref_allele}), found {current_base}"
+                    f"            ├─ ❌ Reference mismatch in coding sequence at pos {mutation_coding_pos}: expected {transcript_ref} (from genomic {ref_allele}), found {current_bases}"
                 )
             return None
 
         if self.debug:
             print(
-                f"            ├─ Coding sequence reference validated: {current_base} == {transcript_ref}"
+                f"            ├─ Coding sequence reference validated: {current_bases} == {transcript_ref}"
             )
 
-        # Apply mutation in transcript orientation
+        # Apply mutation in transcript orientation (handle multi-BP substitution)
         mutated_coding_sequence = (
             original_coding_sequence[:mutation_coding_pos]
             + transcript_alt
-            + original_coding_sequence[mutation_coding_pos + 1 :]
+            + original_coding_sequence[
+                mutation_coding_pos + ref_len :
+            ]  # Replace ref_len bases
         )
 
         if self.debug:
             print(
-                f"            ├─ Applied mutation at coding pos {mutation_coding_pos}: {current_base}>{transcript_alt}"
+                f"            ├─ Applied mutation at coding pos {mutation_coding_pos}: {current_bases}>{transcript_alt}"
             )
 
         # Translate mutated sequence
@@ -1695,7 +1704,12 @@ class AlternativeProteinGenerator:
     # ===== VALIDATION METHODS =====
 
     async def predict_consequence_by_translation(
-        self, transcript_id: str, genomic_pos: int, ref_allele: str, alt_allele: str
+        self,
+        transcript_id: str,
+        genomic_pos: int,
+        ref_allele: str,
+        alt_allele: str,
+        current_feature: Optional[pd.Series] = None,
     ) -> str:
         """Predict the functional consequence of a mutation by applying it to the transcript and analyzing the resulting protein change.
 
@@ -1704,163 +1718,134 @@ class AlternativeProteinGenerator:
             genomic_pos (int): Genomic position of the mutation.
             ref_allele (str): Reference allele at the mutation position.
             alt_allele (str): Alternate allele to introduce at the mutation position.
+            current_feature (Optional[pd.Series]): Current alternative feature being analyzed.
 
         Returns:
-            str: Predicted consequence type (e.g., 'missense variant', 'nonsense variant', 'frameshift variant', 'synonymous variant', or 'unknown').
+            str: Predicted consequence type.
         """
-        # Only analyze single BP substitutions; ignore all other mutation types
-        hgvsc_pattern = f"c.{genomic_pos}{ref_allele}>{alt_allele}"
-        # Use helper to check if this is a single BP substitution
-        if not self._is_single_bp_substitution(hgvsc_pattern):
-            if self.debug:
-                print(
-                    f"        │  └─ Non-single BP mutation assumed as frameshift: {hgvsc_pattern}"
-                )
-            return "frameshift variant"
-
         if self.debug:
             print(
                 f"        ├─ Predicting consequence for {ref_allele}>{alt_allele} at {genomic_pos}"
             )
-
-            # DEBUG: Check if position is in CDS
-            features = self.genome.get_transcript_features(transcript_id)
-            cds_regions = features[features["feature_type"] == "CDS"]
-            in_cds = False
-            cds_match = None
-
-            for _, cds in cds_regions.iterrows():
-                if cds["start"] <= genomic_pos <= cds["end"]:
-                    in_cds = True
-                    cds_match = cds
-                    print(
-                        f"        │  ├─ ✅ Position {genomic_pos} IS in CDS: {cds['start']}-{cds['end']}"
-                    )
-                    break
-
-            if not in_cds:
-                print(f"        │  ├─ ❌ Position {genomic_pos} NOT in any CDS!")
-                cds_list = [
-                    f"{cds['start']}-{cds['end']}" for _, cds in cds_regions.iterrows()
-                ]
-                print(f"        │  ├─ Available CDS regions: {', '.join(cds_list[:3])}")
-
-            # DEBUG: Check reference allele
-            transcript_data = self.genome.get_transcript_features_with_sequence(
-                transcript_id
-            )
-            if transcript_data:
-                chromosome = transcript_data["sequence"]["chromosome"]
-                strand = transcript_data["sequence"]["strand"]
-
-                try:
-                    actual_base = self.genome.get_sequence(
-                        chromosome, genomic_pos, genomic_pos, "+"
-                    )
-                    actual_base = str(actual_base).upper()
-                    print(
-                        f"        │  ├─ Genomic base at {genomic_pos}: {actual_base} (expected: {ref_allele})"
-                    )
-                    print(f"        │  ├─ Transcript strand: {strand}")
-
-                    if strand == "-":
-                        complement_map = {"A": "T", "T": "A", "G": "C", "C": "G"}
-                        actual_transcript = complement_map.get(actual_base, actual_base)
-                        print(
-                            f"        │  ├─ Transcript orientation: {actual_transcript}"
-                        )
-
-                        if (
-                            ref_allele != actual_base
-                            and ref_allele != actual_transcript
-                        ):
-                            print(
-                                f"        │  ├─ ⚠️  REFERENCE MISMATCH! Expected {ref_allele}, found genomic={actual_base}, transcript={actual_transcript}"
-                            )
-                    else:
-                        if ref_allele != actual_base:
-                            print(
-                                f"        │  ├─ ⚠️  REFERENCE MISMATCH! Expected {ref_allele}, found {actual_base}"
-                            )
-
-                except Exception as e:
-                    print(f"        │  ├─ Error checking reference: {e}")
+            if current_feature is not None:
+                feature_type = current_feature.get("region_type", "unknown")
+                feature_range = f"{current_feature.get('start', '?')}-{current_feature.get('end', '?')}"
+                print(
+                    f"        │  ├─ Context: {feature_type} feature at {feature_range}"
+                )
 
         try:
-            # Get canonical protein
-            canonical_result = self.extract_canonical_protein(transcript_id)
-            if not canonical_result:
-                if self.debug:
-                    print(f"        │  └─ ❌ Could not extract canonical protein")
-                return "unknown"
-
-            if self.debug:
-                print(
-                    f"        │  ├─ Canonical protein length: {len(canonical_result['protein'])} AA"
-                )
-                print(
-                    f"        │  ├─ Canonical CDS length: {len(canonical_result['coding_sequence'])} bp"
-                )
-                print(f"        │  ├─ First 20 AA: {canonical_result['protein'][:20]}")
-
-            # Apply mutation to get mutated protein
-            if self.debug:
-                print(f"        │  ├─ Applying mutation...")
-
-            mutated_result = self._apply_mutation_to_sequence(
-                transcript_id, genomic_pos, ref_allele, alt_allele, "canonical"
+            # Clean up alleles
+            ref_clean = (
+                str(ref_allele).strip()
+                if ref_allele and str(ref_allele) != "nan"
+                else ""
+            )
+            alt_clean = (
+                str(alt_allele).strip()
+                if alt_allele and str(alt_allele) != "nan"
+                else ""
             )
 
-            if not mutated_result:
-                if self.debug:
-                    print(f"        │  ├─ ❌ _apply_mutation_to_sequence returned None")
-                    print(f"        │  └─ This is WHY it's being called synonymous!")
-                return "synonymous variant"  # No protein change
+            ref_len = len(ref_clean)
+            alt_len = len(alt_clean)
+            length_change = alt_len - ref_len
 
             if self.debug:
-                print(f"        │  ├─ ✅ Mutation applied successfully")
                 print(
-                    f"        │  ├─ Mutated protein length: {len(mutated_result['protein'])} AA"
+                    f"        │  ├─ Allele lengths: ref={ref_len} ({ref_clean}), alt={alt_len} ({alt_clean})"
                 )
-                print(
-                    f"        │  ├─ Mutated CDS length: {len(mutated_result['coding_sequence'])} bp"
+                print(f"        │  ├─ Length change: {length_change}")
+
+            # Simple length-based classification for indels
+            if length_change != 0:
+                if length_change % 3 == 0:
+                    # In-frame - length change divisible by 3
+                    consequence = (
+                        "inframe insertion" if length_change > 0 else "inframe deletion"
+                    )
+                    if self.debug:
+                        print(
+                            f"        │  └─ In-frame indel: {consequence} ({length_change} bp change)"
+                        )
+                    return consequence
+                else:
+                    # Frameshift - length change not divisible by 3
+                    if self.debug:
+                        print(
+                            f"        │  └─ Frameshift variant ({length_change} bp change, not divisible by 3)"
+                        )
+                    return "frameshift variant"
+
+            # Same length variants - use protein translation for detailed analysis
+            if self.debug:
+                print(f"        │  ├─ Same length variant - using protein translation")
+
+            # Determine sequence type based on current feature context
+            if (
+                current_feature is not None
+                and current_feature.get("region_type") == "extension"
+            ):
+                if self.debug:
+                    print(f"        │  ├─ Using EXTENSION sequence")
+
+                base_result = self.extract_alternative_protein(
+                    transcript_id, current_feature
                 )
-                print(f"        │  ├─ First 20 AA: {mutated_result['protein'][:20]}")
+                if not base_result:
+                    if self.debug:
+                        print(
+                            f"        │  └─ ❌ Could not extract base extension protein"
+                        )
+                    return "unknown"
 
-                # Show the actual protein difference
-                orig_protein = canonical_result["protein"]
-                mut_protein = mutated_result["protein"]
+                mutated_result = self._apply_mutation_to_sequence(
+                    transcript_id,
+                    genomic_pos,
+                    ref_clean,
+                    alt_clean,
+                    "extension",
+                    current_feature,
+                )
 
-                if orig_protein == mut_protein:
+            else:
+                if self.debug:
+                    print(f"        │  ├─ Using CANONICAL sequence")
+
+                base_result = self.extract_canonical_protein(transcript_id)
+                if not base_result:
+                    if self.debug:
+                        print(f"        │  └─ ❌ Could not extract canonical protein")
+                    return "unknown"
+
+                mutated_result = self._apply_mutation_to_sequence(
+                    transcript_id, genomic_pos, ref_clean, alt_clean, "canonical"
+                )
+
+            if self.debug:
+                print(f"        │  ├─ Base protein: {len(base_result['protein'])} AA")
+                if mutated_result:
                     print(
-                        f"        │  ├─ ⚠️  Proteins are identical - this explains synonymous classification!"
+                        f"        │  ├─ Mutated protein: {len(mutated_result['protein'])} AA"
                     )
                 else:
-                    # Find differences
-                    differences = []
-                    for i, (orig_aa, mut_aa) in enumerate(
-                        zip(orig_protein, mut_protein)
-                    ):
-                        if orig_aa != mut_aa:
-                            differences.append((i + 1, orig_aa, mut_aa))
-                            if len(differences) <= 3:  # Show first 3
-                                print(
-                                    f"        │  ├─ AA change at position {i + 1}: {orig_aa}>{mut_aa}"
-                                )
+                    print(f"        │  ├─ ❌ Mutation failed - probably synonymous")
 
-                    if differences:
-                        print(f"        │  ├─ Total AA differences: {len(differences)}")
+            # Classify the change
+            if not mutated_result:
+                if self.debug:
+                    print(f"        │  └─ No protein change detected - synonymous")
+                return "synonymous variant"
 
-            # Classify the type of change
             consequence = self.classify_protein_change(
-                canonical_result["protein"],
+                base_result["protein"],
                 mutated_result["protein"],
-                canonical_result["coding_sequence"],
+                base_result["coding_sequence"],
                 mutated_result["coding_sequence"],
             )
 
             if self.debug:
-                print(f"        │  └─ Classified as: {consequence}")
+                print(f"        │  └─ Protein-based classification: {consequence}")
 
             return consequence
 
