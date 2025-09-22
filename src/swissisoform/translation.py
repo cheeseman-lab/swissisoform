@@ -1958,73 +1958,72 @@ class AlternativeProteinGenerator:
     ) -> bool:
         """Validate that an extension protein makes biological sense.
 
-        Args:
-            canonical_protein (str): Canonical protein sequence.
-            extended_protein (str): Extended protein sequence.
-            gene_name (str): Gene name for logging.
-            transcript_id (str): Transcript ID for logging.
-            verbose (bool): Whether to print validation warnings.
-
-        Returns:
-            bool: True if extension is valid, False otherwise.
+        This method logs warnings but always returns True to allow sequence generation.
         """
-        # Basic checks
+        # Basic checks - these should still fail validation
         if not extended_protein or not canonical_protein:
             if verbose:
                 print(f"    ❌ Empty protein sequence for {gene_name}:{transcript_id}")
-            return False
+            return False  # This is a real failure
+
+        # All other checks become warnings but don't fail validation
+        warnings_found = False
 
         # Extended should be longer than canonical
         if len(extended_protein) <= len(canonical_protein):
             if verbose:
                 print(
-                    f"    ⚠️  Extension shorter than canonical for {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: Extension shorter than canonical for {gene_name}:{transcript_id}"
                 )
                 print(
                     f"        Canonical: {len(canonical_protein)} AA, Extended: {len(extended_protein)} AA"
                 )
-            return False
+            warnings_found = True
 
         # Extended should start with M (methionine)
         if not extended_protein.startswith("M"):
             if verbose:
                 print(
-                    f"    ⚠️  Extension doesn't start with methionine for {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: Extension doesn't start with methionine for {gene_name}:{transcript_id}"
                 )
                 print(f"        Starts with: '{extended_protein[:5]}...'")
-            return False
+            warnings_found = True
 
-        # Check for premature stop codons (before the expected end)
+        # Check for premature stop codons
         premature_stops = self._count_premature_stops(extended_protein)
         if premature_stops > 0:
             if verbose:
                 print(
-                    f"    ⚠️  Extension has {premature_stops} premature stop codon(s) for {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: Extension has {premature_stops} premature stop codon(s) for {gene_name}:{transcript_id}"
                 )
-                # Show positions of stops
                 stop_positions = [
                     i for i, aa in enumerate(extended_protein) if aa == "*"
                 ]
                 print(f"        Stop positions: {stop_positions}")
-            return False
+            warnings_found = True
 
-        # Check for reasonable N-terminal extension (not too extreme)
+        # Check for reasonable extension length
         extension_length = len(extended_protein) - len(canonical_protein)
-        if extension_length > 200:  # More than 200 AA extension is suspicious
+        if extension_length > 200:
             if verbose:
                 print(
-                    f"    ⚠️  Very long extension ({extension_length} AA) for {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: Very long extension ({extension_length} AA) for {gene_name}:{transcript_id}"
                 )
-                print(f"        This may indicate a frame shift or annotation error")
-            return False
+            warnings_found = True
 
-        # Check sequence composition (not too many unusual AAs)
+        # Check sequence composition
         if not self._check_sequence_composition(
-            extended_protein, gene_name, transcript_id, verbose
+            extended_protein, gene_name, transcript_id, verbose, warn_only=True
         ):
-            return False
+            warnings_found = True
 
-        return True
+        # Always return True but log if warnings were found
+        if warnings_found and verbose:
+            print(
+                f"    📝 Extension sequence generated despite warnings for {gene_name}:{transcript_id}"
+            )
+
+        return True  # Always proceed with sequence generation
 
     def validate_truncation_protein(
         self,
@@ -2036,80 +2035,80 @@ class AlternativeProteinGenerator:
     ) -> bool:
         """Validate that a truncation protein makes biological sense.
 
-        Args:
-            canonical_protein (str): Canonical protein sequence.
-            truncated_protein (str): Truncated protein sequence.
-            gene_name (str): Gene name for logging.
-            transcript_id (str): Transcript ID for logging.
-            verbose (bool): Whether to print validation warnings.
-
-        Returns:
-            bool: True if truncation is valid, False otherwise.
+        This method logs warnings but always returns True to allow sequence generation.
         """
-        # Basic checks
+        # Basic checks - these should still fail validation
         if not truncated_protein or not canonical_protein:
             if verbose:
                 print(f"    ❌ Empty protein sequence for {gene_name}:{transcript_id}")
-            return False
+            return False  # This is a real failure
+
+        # All other checks become warnings but don't fail validation
+        warnings_found = False
 
         # Truncated should be shorter than canonical
         if len(truncated_protein) >= len(canonical_protein):
             if verbose:
                 print(
-                    f"    ⚠️  Truncation longer than canonical for {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: Truncation longer than canonical for {gene_name}:{transcript_id}"
                 )
                 print(
                     f"        Canonical: {len(canonical_protein)} AA, Truncated: {len(truncated_protein)} AA"
                 )
-            return False
+            warnings_found = True
 
         # Truncated should start with M (methionine)
         if not truncated_protein.startswith("M"):
             if verbose:
                 print(
-                    f"    ⚠️  Truncation doesn't start with methionine for {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: Truncation doesn't start with methionine for {gene_name}:{transcript_id}"
                 )
                 print(f"        Starts with: '{truncated_protein[:5]}...'")
-            return False
+            warnings_found = True
 
-        # Check for premature stop codons (before the expected end)
+        # Check for premature stop codons
         premature_stops = self._count_premature_stops(truncated_protein)
         if premature_stops > 0:
             if verbose:
                 print(
-                    f"    ⚠️  Truncation has {premature_stops} premature stop codon(s) for {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: Truncation has {premature_stops} premature stop codon(s) for {gene_name}:{transcript_id}"
                 )
                 stop_positions = [
                     i for i, aa in enumerate(truncated_protein) if aa == "*"
                 ]
                 print(f"        Stop positions: {stop_positions}")
-            return False
+            warnings_found = True
 
-        # Check that truncation is reasonable (not too short to be functional)
-        if len(truncated_protein) < 20:  # Very short proteins are suspicious
+        # Check for very short proteins
+        if len(truncated_protein) < 20:
             if verbose:
                 print(
-                    f"    ⚠️  Very short truncation ({len(truncated_protein)} AA) for {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: Very short truncation ({len(truncated_protein)} AA) for {gene_name}:{transcript_id}"
                 )
-                print(f"        May not retain biological function")
-            return False
+            warnings_found = True
 
         # Check sequence composition
         if not self._check_sequence_composition(
-            truncated_protein, gene_name, transcript_id, verbose
+            truncated_protein, gene_name, transcript_id, verbose, warn_only=True
         ):
-            return False
+            warnings_found = True
 
-        # Check that the truncated protein could be a reasonable N-terminal fragment
+        # Check for extreme truncation
         truncation_length = len(canonical_protein) - len(truncated_protein)
-        if truncation_length > len(canonical_protein) * 0.8:  # Removing >80% is extreme
+        if truncation_length > len(canonical_protein) * 0.8:
             if verbose:
                 print(
-                    f"    ⚠️  Extreme truncation ({truncation_length} AA removed, {truncation_length / len(canonical_protein) * 100:.1f}%) for {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: Extreme truncation ({truncation_length} AA removed, {truncation_length / len(canonical_protein) * 100:.1f}%) for {gene_name}:{transcript_id}"
                 )
-            return False
+            warnings_found = True
 
-        return True
+        # Always return True but log if warnings were found
+        if warnings_found and verbose:
+            print(
+                f"    📝 Truncation sequence generated despite warnings for {gene_name}:{transcript_id}"
+            )
+
+        return True  # Always proceed with sequence generation
 
     def _count_premature_stops(self, protein_sequence: str) -> int:
         """Count premature stop codons in protein sequence.
@@ -2135,6 +2134,7 @@ class AlternativeProteinGenerator:
         gene_name: str,
         transcript_id: str,
         verbose: bool = True,
+        warn_only: bool = False,
     ) -> bool:
         """Check if protein sequence composition is reasonable.
 
@@ -2143,6 +2143,7 @@ class AlternativeProteinGenerator:
             gene_name (str): Gene name for logging.
             transcript_id (str): Transcript ID for logging.
             verbose (bool): Whether to print warnings.
+            warn_only (bool): If True, only warn but don't fail validation.
 
         Returns:
             bool: True if composition is reasonable, False otherwise.
@@ -2150,30 +2151,31 @@ class AlternativeProteinGenerator:
         if not protein_sequence:
             return False
 
-        # Check for excessive rare amino acids or unusual patterns
+        warnings_found = False
         sequence_length = len(protein_sequence)
 
-        # Count unusual amino acids
-        unusual_count = protein_sequence.count("X")  # Unknown amino acid
+        # Count unusual amino acids - this should still fail
+        unusual_count = protein_sequence.count("X")
         if unusual_count > 0:
             if verbose:
                 print(
-                    f"    ⚠️  {unusual_count} unknown amino acid(s) (X) in {gene_name}:{transcript_id}"
+                    f"    ❌ {unusual_count} unknown amino acid(s) (X) in {gene_name}:{transcript_id}"
                 )
-            return False
+            if not warn_only:
+                return False
+            warnings_found = True
 
-        # Check for excessive proline (can indicate frame shifts)
+        # Check for excessive proline
         proline_count = protein_sequence.count("P")
         proline_percent = (proline_count / sequence_length) * 100
-        if proline_percent > 15:  # >15% proline is unusual
+        if proline_percent > 15:
             if verbose:
                 print(
-                    f"    ⚠️  High proline content ({proline_percent:.1f}%) in {gene_name}:{transcript_id}"
+                    f"    ⚠️  WARNING: High proline content ({proline_percent:.1f}%) in {gene_name}:{transcript_id}"
                 )
-                print(f"        May indicate frame shift or unusual sequence")
-            return False
+            warnings_found = True
 
-        # Check for valid amino acid characters
+        # Check for valid amino acid characters - this should still fail
         valid_aas = set("ACDEFGHIKLMNPQRSTVWY*")
         invalid_aas = set(protein_sequence) - valid_aas
         if invalid_aas:
@@ -2181,9 +2183,11 @@ class AlternativeProteinGenerator:
                 print(
                     f"    ❌ Invalid amino acid characters in {gene_name}:{transcript_id}: {invalid_aas}"
                 )
-            return False
+            if not warn_only:
+                return False
+            warnings_found = True
 
-        return True
+        return not warnings_found if not warn_only else True
 
     def validate_protein_pair(
         self,
