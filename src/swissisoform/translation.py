@@ -256,34 +256,66 @@ class AlternativeProteinGenerator:
         stop_codon_start = stop_codons.iloc[0]["start"]
         stop_codon_end = stop_codons.iloc[0]["end"]
 
-        # PART 1: Extract extension region (5'UTR portion)
-        # This is raw genomic sequence from extension start to canonical start
-        if strand == "+":
-            extension_region_start = extension_start
-            extension_region_end = (
-                canonical_start_codon_start - 1
-            )  # Stop before canonical start
-        else:
-            extension_region_start = (
-                canonical_start_codon_end  # Start at canonical start
-            )
-            extension_region_end = extension_end
+        # PART 1: Extract extension region (5'UTR only, no introns)
+        # Only include features annotated as UTR that overlap the extension
+        utr_features = features[features["feature_type"].str.contains("UTR")]
+        extension_utrs = []
+        for _, utr in utr_features.iterrows():
+            utr_start = utr["start"]
+            utr_end = utr["end"]
+            # Check overlap with extension region
+            if strand == "+":
+                if (
+                    utr_end < extension_start
+                    or utr_start >= canonical_start_codon_start
+                ):
+                    continue
+                start = max(utr_start, extension_start)
+                end = min(utr_end, canonical_start_codon_start - 1)
+            else:
+                if utr_start > extension_end or utr_end <= canonical_start_codon_end:
+                    continue
+                start = max(utr_start, canonical_start_codon_end + 1)
+                end = min(utr_end, extension_end)
+            extension_utrs.append((start, end))
 
+        # Sort UTRs for proper genomic order
+        if strand == "+":
+            extension_utrs.sort(key=lambda x: x[0])
+        else:
+            extension_utrs.sort(key=lambda x: x[0], reverse=True)
+
+        # Always print the extension region info
         self._debug_print(
-            f"Extension region: {extension_region_start}-{extension_region_end} ({strand} strand)"
+            f"Extension region: {extension_start}-{extension_end} ({strand} strand)"
         )
 
+        # Extract UTR sequences
+        extension_sequence = ""
         try:
-            extension_sequence = self.genome.get_sequence(
-                chromosome, extension_region_start, extension_region_end, strand
-            )
-            extension_sequence = str(extension_sequence)
+            for start, end in extension_utrs:
+                seq = self.genome.get_sequence(chromosome, start, end, strand)
+                seq_str = str(seq)
+                extension_sequence += seq_str
+
+                # Print individual UTR info if more than one UTR region found
+                if len(extension_utrs) > 1:
+                    self._debug_print(
+                        f"Appending UTR {start}-{end}, length {len(seq_str)} bp, sequence: {seq_str}"
+                    )
+
+            # Always print the final extension sequence info
             self._debug_print(
                 f"Extension sequence length: {len(extension_sequence)} bp"
             )
+
+            # Print additional info if multiple UTR regions were processed
+            if len(extension_utrs) > 1:
+                self._debug_print(f"from {len(extension_utrs)} UTR regions")
+
         except Exception as e:
             self._debug_print(f"Error extracting extension sequence: {e}")
-            return None
+            extension_sequence = ""
 
         # PART 2: Extract CDS regions from canonical start to stop codon
         # This is the same logic as canonical protein extraction
