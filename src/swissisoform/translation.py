@@ -170,6 +170,10 @@ class AlternativeProteinGenerator:
         else:
             protein = ""
 
+        self._debug_print(
+            f"Canonical sequence length: {len(coding_sequence)} bp, {len(protein)} AA"
+        )
+
         return {
             "coding_sequence": coding_sequence,
             "protein": protein,
@@ -385,7 +389,7 @@ class AlternativeProteinGenerator:
     def _extract_truncation_protein(
         self, transcript_id: str, truncation_feature: pd.Series
     ) -> Optional[Dict]:
-        """Extract protein sequence starting from the base after truncation.
+        """Extract protein sequence starting from alternative start position.
 
         Args:
             transcript_id (str): Transcript ID to process.
@@ -406,112 +410,113 @@ class AlternativeProteinGenerator:
         strand = transcript_data["sequence"]["strand"]
         chromosome = transcript_data["sequence"]["chromosome"]
 
-        # Get truncation positions
-        truncation_start = truncation_feature["start"]
-        truncation_end = truncation_feature["end"]
+        # Get alternative start position
+        alt_start_pos = truncation_feature.get("alternative_start_pos")
+        if alt_start_pos is None:
+            self._debug_print("No alternative start position in truncation feature")
+            return None
 
-        # Find the original stop codon (our endpoint)
-        stop_codons = features[features["feature_type"] == "stop_codon"]
+        alt_start_pos = int(alt_start_pos)
+        self._debug_print(
+            f"Alternative start position: {alt_start_pos} ({strand} strand)"
+        )
 
-        stop_codon_start = None
-        stop_codon_end = None
-        if not stop_codons.empty:
-            stop_codon_start = stop_codons.iloc[0]["start"]
-            stop_codon_end = stop_codons.iloc[0]["end"]
-
-        # Start at the NEXT base after truncation
-        if strand == "+":
-            alt_start_pos = truncation_end + 1
-            extract_end = stop_codon_end if stop_codon_end else None
-        else:
-            alt_start_pos = truncation_start
-            extract_end = stop_codon_start if stop_codon_start else None
-
-        # Get CDS regions that overlap with our new range
+        # Get CDS regions
         cds_regions = features[features["feature_type"] == "CDS"].copy()
+        if cds_regions.empty:
+            self._debug_print("No CDS regions found for transcript")
+            return None
+
+        # Canonical CDS start for removed region calculation
+        if strand == "+":
+            canonical_start = cds_regions["start"].min()
+            removed_start, removed_end = canonical_start, alt_start_pos - 1
+            removed_len = max(0, removed_end - removed_start + 1)
+        else:
+            canonical_start = cds_regions["end"].max()
+            removed_start, removed_end = alt_start_pos + 1, canonical_start
+            removed_len = max(0, removed_end - removed_start + 1)
+
+        self._debug_print(
+            f"Truncation region (removed): {removed_start}-{removed_end} ({strand} strand)"
+        )
+        self._debug_print(f"Truncation sequence length: {removed_len} bp")
+
+        # Stop codon for truncation end
+        stop_codons = features[features["feature_type"] == "stop_codon"]
+        if stop_codons.empty:
+            self._debug_print("No stop codon found for transcript")
+            return None
+
+        stop_codon_start = stop_codons.iloc[0]["start"]
+        stop_codon_end = stop_codons.iloc[0]["end"]
+
+        if strand == "+":
+            extract_start = alt_start_pos
+            extract_end = stop_codon_end
+        else:
+            extract_start = stop_codon_start
+            extract_end = alt_start_pos
+
+        # Gather CDS overlaps (remaining region to translate)
         overlapping_cds = []
-
         for _, cds in cds_regions.iterrows():
-            cds_start = cds["start"]
-            cds_end = cds["end"]
+            cds_start, cds_end = cds["start"], cds["end"]
+            if extract_end < cds_start or extract_start > cds_end:
+                continue
 
-            if strand == "+":
-                if cds_end < alt_start_pos:
-                    continue
-                if extract_end and cds_start > extract_end:
-                    continue
+            effective_start = max(cds_start, extract_start)
+            effective_end = min(cds_end, extract_end)
 
-                effective_start = max(cds_start, alt_start_pos)
-                effective_end = min(cds_end, extract_end) if extract_end else cds_end
-            else:
-                if cds_start > alt_start_pos:
-                    continue
-                if extract_end and cds_end < extract_end:
-                    continue
+            if effective_end >= effective_start:
+                overlapping_cds.append({"start": effective_start, "end": effective_end})
 
-                effective_start = (
-                    max(cds_start, extract_end) if extract_end else cds_start
-                )
-                effective_end = min(cds_end, alt_start_pos)
+        if not overlapping_cds:
+            self._debug_print("No overlapping CDS regions found for remaining sequence")
+            return None
 
-            # Handle the length check with special case for single nucleotide CDS
-            if effective_end > effective_start:
-                # Normal case - include the region
-                overlapping_cds.append(
-                    {
-                        "start": effective_start,
-                        "end": effective_end,
-                        "length": effective_end - effective_start + 1,
-                    }
-                )
-            elif effective_end == effective_start:
-                # Boundary case - check if this is a legitimate single nucleotide CDS
-                if cds_start == cds_end:
-                    # Legitimate single nucleotide CDS - include it
-                    overlapping_cds.append(
-                        {
-                            "start": effective_start,
-                            "end": effective_end,
-                            "length": 1,
-                        }
-                    )
-
-        # Sort CDS regions properly for extraction
+        # Order CDS properly
         if strand == "+":
             overlapping_cds.sort(key=lambda x: x["start"])
         else:
             overlapping_cds.sort(key=lambda x: x["start"], reverse=True)
 
-        # Extract sequence from each CDS region
+        # Build coding sequence
         coding_sequence = ""
         for cds in overlapping_cds:
-            cds_seq = self.genome.get_sequence(
-                chromosome, cds["start"], cds["end"], strand
-            )
-            coding_sequence += str(cds_seq)
+            seq = self.genome.get_sequence(chromosome, cds["start"], cds["end"], strand)
+            coding_sequence += str(seq)
 
-        # Translate the sequence directly
+        self._debug_print(f"Remaining CDS sequence length: {len(coding_sequence)} bp")
+        self._debug_print(f"Total CDS regions used: {len(overlapping_cds)}")
+
+        # Translate
+        protein = ""
         if len(coding_sequence) >= 3:
-            # Ensure length is divisible by 3
             remainder = len(coding_sequence) % 3
             if remainder > 0:
-                coding_sequence = coding_sequence[
-                    remainder:
-                ]  # Remove from beginning due to BED intersect issues
+                coding_sequence = coding_sequence[:-remainder]
 
             protein = str(Seq(coding_sequence).translate())
+            self._debug_print(f"Truncated protein length: {len(protein)} AA")
+
+            if protein and not protein.startswith("M"):
+                self._debug_print(
+                    f"Warning: Truncated protein doesn't start with M, starts with: {protein[:5]}"
+                )
         else:
-            protein = ""
+            self._debug_print("Coding sequence too short for translation")
 
         return {
             "coding_sequence": coding_sequence,
             "protein": protein,
             "strand": strand,
             "transcript_id": transcript_id,
-            "truncation_start": truncation_start,
-            "truncation_end": truncation_end,
             "alternative_start_pos": alt_start_pos,
-            "total_cds_regions": len(overlapping_cds),
+            "removed_region": (removed_start, removed_end),
+            "removed_length": removed_len,
+            "remaining_cds_regions": len(overlapping_cds),
+            "extraction_method": "alternative_start_plus_cds",
             "region_type": "truncation",
         }
 

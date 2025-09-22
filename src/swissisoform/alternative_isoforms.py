@@ -498,14 +498,14 @@ class AlternativeIsoform:
                 else:  # strand == "-"
                     if alt_pos < canonical_pos:
                         # Lower genomic coord = downstream in transcript = truncation
-                        region_start = alt_pos
-                        region_end = canonical_pos - 1
+                        region_start = alt_pos + 1
+                        region_end = canonical_pos
                         region_type = "truncation"
                         biological_effect = "removes_N_terminal_sequence"
                     else:
                         # Higher genomic coord = upstream in transcript = extension
-                        region_start = canonical_pos
-                        region_end = alt_pos - 1
+                        region_start = canonical_pos + 1
+                        region_end = alt_pos
                         region_type = "extension"
                         biological_effect = "adds_N_terminal_sequence"
 

@@ -120,12 +120,12 @@ async def main(
         alt_isoform_handler=alt_isoforms,
         output_dir=output_dir,
         mutation_handler=mutation_handler,
-        debug=False,
+        debug=True,
     )
 
     # Set default impact types if not provided and mutations are requested
     if mutations_mode and impact_types is None:
-        impact_types = ["missense variant", "5 prime UTR variant"]
+        impact_types = ["missense variant"]
 
     # Read gene list
     print(f"\nReading gene list from {gene_list_path}")

@@ -98,7 +98,7 @@ case $SLURM_ARRAY_TASK_ID in
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT" \
           --mutations \
-          --impact-types "missense variant" "nonsense variant" "frameshift variant" "5 prime UTR variant"
+          --impact-types "missense variant"
         echo "Array Task 2: Completed reduced mutations generation at $(date)"
         ;;
     3)
@@ -124,7 +124,7 @@ case $SLURM_ARRAY_TASK_ID in
           --max-length "$MAX_LENGTH" \
           --format "$FORMAT" \
           --mutations \
-          --impact-types "missense variant" "nonsense variant" "frameshift variant" "5 prime UTR variant"
+          --impact-types "missense variant"
         echo "Array Task 4: Completed full mutations generation at $(date)"
         ;;
     *)
