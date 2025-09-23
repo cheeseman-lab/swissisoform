@@ -1715,7 +1715,9 @@ class MutationHandler:
         """
         validated_mutations = []
 
-        print(f"  │  │  ├─ Validating {len(mutations_df)} mutation consequences...")
+        print(
+            f"  │  │  ├─ ⚡ FAST validating {len(mutations_df)} mutation consequences..."
+        )
         if current_feature is not None:
             feature_type = current_feature.get("region_type", "unknown")
             feature_range = (
@@ -1729,7 +1731,7 @@ class MutationHandler:
             f"  │  │  │  ├─ Will add 'impact_validated' and 'in_alt_start_site' columns"
         )
 
-        # Track statistics
+        # DEFINE validation_stats HERE at the beginning:
         validation_stats = {
             "total_processed": 0,
             "successful_validations": 0,
@@ -1797,77 +1799,14 @@ class MutationHandler:
                                 )
                                 print(f"  │  │  │  │  │  └─ Mutation at: {genomic_pos}")
 
-                                # DEBUG: Verify the genomic sequence matches the expected start codon
-                                if hasattr(protein_generator, "genome") and hasattr(
-                                    protein_generator.genome, "get_sequence"
-                                ):
-                                    try:
-                                        chromosome = current_feature.get(
-                                            "chromosome", None
-                                        )
-                                        if chromosome:
-                                            # Get genomic sequence using appropriate strand
-                                            genomic_seq = (
-                                                protein_generator.genome.get_sequence(
-                                                    chromosome,
-                                                    codon_start,
-                                                    codon_end,
-                                                    strand,
-                                                )
-                                            )
-                                            genomic_seq_str = str(genomic_seq).upper()
-
-                                            # Convert RNA notation to DNA for comparison (U -> T)
-                                            expected_dna_codon = start_codon.replace(
-                                                "U", "T"
-                                            )
-
-                                            print(
-                                                f"  │  │  │  │  │  ├─ Expected start codon (DNA): {expected_dna_codon}"
-                                            )
-                                            print(
-                                                f"  │  │  │  │  │  ├─ Actual genomic sequence: {genomic_seq_str}"
-                                            )
-
-                                            if genomic_seq_str == expected_dna_codon:
-                                                print(
-                                                    f"  │  │  │  │  │  └─ ✅ Sequence match confirmed"
-                                                )
-                                            else:
-                                                print(
-                                                    f"  │  │  │  │  │  └─ ⚠️  Sequence mismatch! Check coordinates or strand"
-                                                )
-
-                                    except Exception as e:
-                                        print(
-                                            f"  │  │  │  │  │  └─ Could not verify sequence: {e}"
-                                        )
-
                         except (ValueError, TypeError):
                             print(
                                 f"  │  │  │  │  ├─ Warning: Invalid alt_start_pos '{alt_start_pos}'"
                             )
-                    else:
-                        print(
-                            f"  │  │  │  │  ├─ No alternative_start_pos found in feature"
-                        )
-                        # DEBUG: Show what's available in the feature
-                        available_keys = (
-                            list(current_feature.keys())
-                            if hasattr(current_feature, "keys")
-                            else ["Not a dict-like object"]
-                        )
-                        print(f"  │  │  │  │  │  └─ Available keys: {available_keys}")
 
-                # Use protein_generator to predict consequence with feature context
-                validated_impact = (
-                    await protein_generator.predict_consequence_by_translation(
-                        transcript_id,
-                        genomic_pos,
-                        ref_allele,
-                        alt_allele,
-                        current_feature,
-                    )
+                # Use fast prediction
+                validated_impact = await protein_generator.predict_consequence_fast(
+                    transcript_id, genomic_pos, ref_allele, alt_allele, current_feature
                 )
 
                 # Add annotation for alternative start site mutations
@@ -1890,7 +1829,7 @@ class MutationHandler:
                 )
                 validated_mutation["in_alt_start_site"] = in_alt_start_site
                 validated_mutation["alt_start_note"] = alt_start_note
-                validated_mutation["validation_method"] = "translation_based"
+                validated_mutation["validation_method"] = "fast_codon_analysis"
                 validated_mutation["validation_successful"] = True
 
                 # Track agreement/disagreement
@@ -1919,7 +1858,35 @@ class MutationHandler:
                     )
                     if in_alt_start_site:
                         disagreement_note += " [ALT START SITE]"
-                    print(f"  │  │  │  │  └─ {disagreement_note}")
+                    print(f"  │  │  │  │  ├─ {disagreement_note}")
+
+                    # Add detailed explanation for disagreements
+                    if (
+                        "missense" in original_impact
+                        and "synonymous" in validated_impact
+                    ):
+                        print(
+                            f"  │  │  │  │  └─ 📝 Explanation: Database predicted protein change, but codon analysis shows silent mutation"
+                        )
+                    elif (
+                        "synonymous" in original_impact
+                        and "missense" in validated_impact
+                    ):
+                        print(
+                            f"  │  │  │  │  └─ 📝 Explanation: Database predicted silent mutation, but codon analysis shows protein change"
+                        )
+                    elif "nonsense" in validated_impact:
+                        print(
+                            f"  │  │  │  │  └─ 📝 Explanation: Codon analysis detected premature stop codon"
+                        )
+                    elif "frameshift" in validated_impact:
+                        print(
+                            f"  │  │  │  │  └─ 📝 Explanation: Length change causes reading frame shift"
+                        )
+                    else:
+                        print(
+                            f"  │  │  │  │  └─ 📝 Explanation: Different functional interpretation"
+                        )
 
                 validated_mutations.append(validated_mutation)
                 validation_stats["successful_validations"] += 1
@@ -1933,7 +1900,7 @@ class MutationHandler:
                 validated_mutation["impact_validated_with_note"] = "validation_failed"
                 validated_mutation["in_alt_start_site"] = False
                 validated_mutation["alt_start_note"] = ""
-                validated_mutation["validation_method"] = "translation_based"
+                validated_mutation["validation_method"] = "fast_codon_analysis"
                 validated_mutation["validation_successful"] = False
                 validated_mutation["validation_error"] = str(e)
                 validated_mutation["impact_agreement"] = False

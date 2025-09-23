@@ -93,6 +93,7 @@ case $SLURM_ARRAY_TASK_ID in
           --bed "$TRUNCATIONS_PATH" \
           --sources "clinvar" \
           --impact-types "missense variant" "nonsense variant" "frameshift variant" "synonymous variant" "inframe deletion" "inframe insertion" \
+          --visualize
         echo "Array Task 2: Completed full mutations analysis at $(date)"
         ;;
     *)

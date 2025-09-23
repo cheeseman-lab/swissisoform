@@ -34,6 +34,25 @@ class AlternativeProteinGenerator:
         debug (bool): Enable debug mode for detailed output.
     """
 
+    class ValidationCache:
+        """Simple in-memory cache for validation results."""
+
+        def __init__(self):
+            self.results = {}  # key -> consequence
+            self.coding_sequences = {}  # transcript_id -> coding sequence
+            self.position_maps = {}  # transcript_id -> {genomic_pos: coding_pos}
+
+        def get_key(self, transcript_id: str, pos: int, ref: str, alt: str) -> str:
+            return f"{transcript_id}:{pos}:{ref}>{alt}"
+
+        def get_cached_result(self, transcript_id: str, pos: int, ref: str, alt: str):
+            return self.results.get(self.get_key(transcript_id, pos, ref, alt))
+
+        def cache_result(
+            self, transcript_id: str, pos: int, ref: str, alt: str, consequence: str
+        ):
+            self.results[self.get_key(transcript_id, pos, ref, alt)] = consequence
+
     def __init__(
         self,
         genome_handler: GenomeHandler,
@@ -60,6 +79,7 @@ class AlternativeProteinGenerator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.mutation_handler = mutation_handler
         self.debug = debug
+        self.validation_cache = self.ValidationCache()
 
     def _debug_print(self, message: str):
         """Print debug message if debug mode is enabled.
@@ -1892,96 +1912,394 @@ class AlternativeProteinGenerator:
                 import traceback
 
                 print(f"        │     └─ Traceback: {traceback.format_exc()}")
+
             return "unknown"
 
-    def classify_protein_change(
-        self, orig_protein: str, mut_protein: str, orig_cds: str, mut_cds: str
+    async def predict_consequence_fast(
+        self,
+        transcript_id: str,
+        genomic_pos: int,
+        ref_allele: str,
+        alt_allele: str,
+        current_feature: Optional[pd.Series] = None,
     ) -> str:
-        """Classify the type of protein sequence change resulting from a mutation.
+        """FAST: Predict consequence with caching and simple rules."""
+        # Check cache first
+        cached = self.validation_cache.get_cached_result(
+            transcript_id, genomic_pos, ref_allele, alt_allele
+        )
+        if cached:
+            if self.debug:
+                print(f"        └─ ⚡ Cached result: {cached}")
+            return cached
 
-        Args:
-            orig_protein (str): Original protein sequence before mutation.
-            mut_protein (str): Mutated protein sequence after mutation.
-            orig_cds (str): Original coding DNA sequence.
-            mut_cds (str): Mutated coding DNA sequence.
+        try:
+            # Quick classification for obvious cases
+            ref_len = len(ref_allele) if ref_allele else 0
+            alt_len = len(alt_allele) if alt_allele else 0
+            length_diff = alt_len - ref_len
 
-        Returns:
-            str: Consequence type (e.g., 'synonymous variant', 'missense variant', 'nonsense variant', 'frameshift variant', 'inframe deletion', 'inframe insertion').
-        """
-        if self.debug:
-            print(f"          ├─ Classifying protein change:")
-            print(f"          │  ├─ Original protein: {len(orig_protein)} AA")
-            print(f"          │  ├─ Mutated protein: {len(mut_protein)} AA")
-            print(f"          │  ├─ Original CDS: {len(orig_cds)} bp")
-            print(f"          │  └─ Mutated CDS: {len(mut_cds)} bp")
-
-        # No protein change
-        if mut_protein == orig_protein:
             if self.debug:
                 print(
-                    f"          └─ Classification: synonymous variant (no protein change)"
+                    f"        ├─ Analyzing {ref_allele}>{alt_allele} (lengths: {ref_len}→{alt_len}, diff: {length_diff})"
                 )
-            return "synonymous variant"
 
-        # Check for premature stop codon
-        if "*" in mut_protein and "*" not in orig_protein[: len(mut_protein)]:
-            # Find position of stop codon
-            stop_pos = mut_protein.find("*")
-            if self.debug:
-                print(
-                    f"          └─ Classification: nonsense variant (stop codon at position {stop_pos + 1})"
+            # RULE 1: Length changes
+            if length_diff != 0:
+                if length_diff % 3 == 0:
+                    consequence = (
+                        "inframe insertion" if length_diff > 0 else "inframe deletion"
+                    )
+                else:
+                    consequence = "frameshift variant"
+
+                self.validation_cache.cache_result(
+                    transcript_id, genomic_pos, ref_allele, alt_allele, consequence
                 )
-            return "nonsense variant"
+                if self.debug:
+                    print(f"        ├─ ⚡ Length-based classification: {consequence}")
+                    print(
+                        f"        │  └─ Reason: {abs(length_diff)} bp change {'in-frame' if length_diff % 3 == 0 else 'causes frameshift'}"
+                    )
+                return consequence
 
-        # Check for length changes
-        if len(mut_protein) != len(orig_protein):
-            cds_length_change = len(mut_cds) - len(orig_cds)
-            protein_length_change = len(mut_protein) - len(orig_protein)
-
-            if self.debug:
-                print(f"          │  ├─ Length change detected:")
-                print(f"          │  │  ├─ CDS change: {cds_length_change} bp")
-                print(f"          │  │  └─ Protein change: {protein_length_change} AA")
-
-            if cds_length_change % 3 != 0:
+            # RULE 2: Single BP substitutions - use codon analysis
+            if ref_len == 1 and alt_len == 1:
                 if self.debug:
                     print(
-                        f"          └─ Classification: frameshift variant (CDS change not divisible by 3)"
+                        f"        ├─ ⚡ Single BP substitution - analyzing codon context..."
                     )
-                return "frameshift variant"
-            else:
-                if len(mut_protein) < len(orig_protein):
-                    if self.debug:
-                        print(
-                            f"          └─ Classification: inframe deletion ({-protein_length_change} AA deleted)"
-                        )
-                    return "inframe deletion"
-                else:
-                    if self.debug:
-                        print(
-                            f"          └─ Classification: inframe insertion ({protein_length_change} AA inserted)"
-                        )
-                    return "inframe insertion"
 
-        # Same length, different sequence = missense
-        # Find the position of the change
+                consequence = self._analyze_single_bp_fast(
+                    transcript_id, genomic_pos, ref_allele, alt_allele, current_feature
+                )
+
+                self.validation_cache.cache_result(
+                    transcript_id, genomic_pos, ref_allele, alt_allele, consequence
+                )
+                if self.debug:
+                    print(f"        └─ ⚡ Codon-based classification: {consequence}")
+                return consequence
+
+            # RULE 3: Complex cases - fallback to full translation (rare)
+            if self.debug:
+                print(
+                    f"        ├─ Complex variant ({ref_len}→{alt_len} bp), using full translation..."
+                )
+            consequence = await self.predict_consequence_by_translation(
+                transcript_id, genomic_pos, ref_allele, alt_allele, current_feature
+            )
+
+            self.validation_cache.cache_result(
+                transcript_id, genomic_pos, ref_allele, alt_allele, consequence
+            )
+            if self.debug:
+                print(f"        └─ Full translation result: {consequence}")
+            return consequence
+
+        except Exception as e:
+            if self.debug:
+                print(f"        └─ ❌ Fast validation failed: {str(e)}")
+            return "unknown"
+
+    def _analyze_single_bp_fast(
+        self,
+        transcript_id: str,
+        genomic_pos: int,
+        ref_allele: str,
+        alt_allele: str,
+        current_feature: Optional[pd.Series] = None,
+    ) -> str:
+        """FAST: Analyze single BP changes using codon-level analysis."""
+        # Get transcript info for strand debugging
+        transcript_data = self.genome.get_transcript_features_with_sequence(
+            transcript_id
+        )
+        strand = transcript_data["sequence"]["strand"] if transcript_data else "?"
+
         if self.debug:
-            differences_found = 0
-            for i, (orig_aa, mut_aa) in enumerate(zip(orig_protein, mut_protein)):
-                if orig_aa != mut_aa:
-                    differences_found += 1
-                    if differences_found <= 3:  # Show first 3 differences
-                        print(
-                            f"          │  ├─ AA change at position {i + 1}: {orig_aa}>{mut_aa}"
-                        )
-                    elif differences_found == 4:
-                        print(f"          │  ├─ ... (more differences)")
-                        break
+            print(f"        │  ├─ 🧬 STRAND DEBUG: {strand} strand gene")
+            print(
+                f"        │  │  ├─ Genomic mutation: {ref_allele}>{alt_allele} at {genomic_pos}"
+            )
 
-            print(f"          │  ├─ Total differences: {differences_found}")
-            print(f"          └─ Classification: missense variant")
+        # Get cached coding sequence and position map
+        if transcript_id not in self.validation_cache.coding_sequences:
+            if self.debug:
+                print(f"        │  ├─ Building sequence cache for {transcript_id}...")
+            self._build_sequence_cache(transcript_id, current_feature)
+        else:
+            if self.debug:
+                print(f"        │  ├─ Using cached sequence for {transcript_id}")
 
-        return "missense variant"
+        coding_seq = self.validation_cache.coding_sequences[transcript_id]
+        pos_map = self.validation_cache.position_maps[transcript_id]
+
+        if self.debug:
+            print(f"        │  │  ├─ Coding sequence length: {len(coding_seq)} bp")
+            print(
+                f"        │  │  ├─ Position map covers: {min(pos_map.keys()) if pos_map else 'N/A'} to {max(pos_map.keys()) if pos_map else 'N/A'}"
+            )
+
+        # Map genomic position to coding position
+        coding_pos = pos_map.get(genomic_pos)
+        if coding_pos is None:
+            if self.debug:
+                print(f"        │  ├─ Position {genomic_pos} not in coding sequence")
+                # Show nearby positions for debugging
+                nearby_positions = {
+                    k: v for k, v in pos_map.items() if abs(k - genomic_pos) <= 5
+                }
+                if nearby_positions:
+                    print(
+                        f"        │  │  └─ Nearby mapped positions: {nearby_positions}"
+                    )
+                print(f"        │  └─ Classification: intronic/non-coding variant")
+            return "intronic variant"
+
+        if self.debug:
+            print(
+                f"        │  ├─ Genomic position {genomic_pos} → coding position {coding_pos}"
+            )
+
+        # Find the codon
+        codon_start = (coding_pos // 3) * 3
+        codon_offset = coding_pos % 3
+        codon_number = (coding_pos // 3) + 1
+
+        if codon_start + 3 > len(coding_seq):
+            if self.debug:
+                print(
+                    f"        │  └─ Codon extends beyond sequence boundary - splice variant"
+                )
+            return "splice variant"
+
+        # Extract original codon from coding sequence
+        original_codon = coding_seq[codon_start : codon_start + 3]
+
+        # For negative strand, we need to be careful about the mutation application
+        if strand == "-":
+            # Convert genomic alleles to transcript orientation
+            complement_map = {"A": "T", "T": "A", "G": "C", "C": "G"}
+            transcript_ref = complement_map.get(ref_allele.upper(), ref_allele.upper())
+            transcript_alt = complement_map.get(alt_allele.upper(), alt_allele.upper())
+
+            if self.debug:
+                print(f"        │  │  ├─ Negative strand conversion:")
+                print(f"        │  │  │  ├─ Genomic: {ref_allele}>{alt_allele}")
+                print(
+                    f"        │  │  │  └─ Transcript: {transcript_ref}>{transcript_alt}"
+                )
+        else:
+            transcript_ref = ref_allele.upper()
+            transcript_alt = alt_allele.upper()
+
+            if self.debug:
+                print(
+                    f"        │  │  ├─ Positive strand: using genomic alleles directly"
+                )
+
+        # Verify the reference matches what we expect in the coding sequence
+        expected_base = original_codon[codon_offset]
+        if expected_base != transcript_ref:
+            if self.debug:
+                print(f"        │  │  ├─ ⚠️  REFERENCE MISMATCH:")
+                print(f"        │  │  │  ├─ Expected in codon: {expected_base}")
+                print(f"        │  │  │  ├─ Got from mutation: {transcript_ref}")
+                print(
+                    f"        │  │  │  └─ This might indicate a coordinate mapping issue"
+                )
+            # For now, continue with codon analysis but flag the issue
+
+        # Apply mutation to codon using transcript coordinates
+        mutated_codon = (
+            original_codon[:codon_offset]
+            + transcript_alt
+            + original_codon[codon_offset + 1 :]
+        )
+
+        if self.debug:
+            print(
+                f"        │  ├─ Codon {codon_number}: {original_codon} → {mutated_codon}"
+            )
+            print(
+                f"        │  │  ├─ Position {codon_offset + 1} in codon: {original_codon[codon_offset]} → {transcript_alt}"
+            )
+            if expected_base != transcript_ref:
+                print(
+                    f"        │  │  ├─ ⚠️  Reference check: expected {expected_base}, got {transcript_ref}"
+                )
+
+        # Translate codons (this is FAST - just 2 codons)
+        try:
+            original_aa = str(Seq(original_codon).translate())
+            mutated_aa = str(Seq(mutated_codon).translate())
+
+            if self.debug:
+                print(f"        │  │  └─ Amino acid: {original_aa} → {mutated_aa}")
+        except Exception as e:
+            if self.debug:
+                print(f"        │  └─ Translation failed: {e}")
+            return "unknown"
+
+        # Classify the change with detailed reasoning
+        if original_aa == mutated_aa:
+            consequence = "synonymous variant"
+            reason = "no amino acid change"
+        elif mutated_aa == "*":
+            consequence = "nonsense variant"
+            reason = f"introduces stop codon at position {codon_number}"
+        elif original_aa == "*":
+            consequence = "stop lost variant"
+            reason = f"removes stop codon at position {codon_number}"
+        else:
+            consequence = "missense variant"
+            reason = f"amino acid change {original_aa}{codon_number}{mutated_aa}"
+
+        if self.debug:
+            print(f"        │  └─ Classification: {consequence} ({reason})")
+
+        return consequence
+
+    def _build_sequence_cache(
+        self,
+        transcript_id: str,
+        current_feature: Optional[pd.Series] = None,
+    ):
+        """Build cached coding sequence and position mapping."""
+        if self.debug:
+            print(f"        ├─ Building cache for {transcript_id}")
+
+        # Determine sequence type
+        if (
+            current_feature is not None
+            and current_feature.get("region_type") == "extension"
+        ):
+            # For extensions, use alternative sequence
+            result = self.extract_alternative_protein(transcript_id, current_feature)
+            if not result:
+                raise ValueError(f"Could not extract extension sequence")
+            coding_seq = result["coding_sequence"]
+
+            # Build position map for extension
+            pos_map = self._build_extension_position_map(transcript_id, current_feature)
+
+        else:
+            # For canonical sequences
+            result = self.extract_canonical_protein(transcript_id)
+            if not result:
+                raise ValueError(f"Could not extract canonical sequence")
+            coding_seq = result["coding_sequence"]
+
+            # Build position map for canonical
+            pos_map = self._build_canonical_position_map(transcript_id)
+
+        # Cache both
+        self.validation_cache.coding_sequences[transcript_id] = coding_seq
+        self.validation_cache.position_maps[transcript_id] = pos_map
+
+    def _build_canonical_position_map(self, transcript_id: str) -> Dict[int, int]:
+        """Build genomic position -> coding position map for canonical sequence."""
+        features = self.genome.get_transcript_features(transcript_id)
+        transcript_data = self.genome.get_transcript_features_with_sequence(
+            transcript_id
+        )
+
+        if not transcript_data:
+            return {}
+
+        strand = transcript_data["sequence"]["strand"]
+
+        # Get CDS regions and start codon
+        cds_regions = features[features["feature_type"] == "CDS"].copy()
+        start_codons = features[features["feature_type"] == "start_codon"]
+
+        if cds_regions.empty or start_codons.empty:
+            return {}
+
+        canonical_start = (
+            start_codons.iloc[0]["start"]
+            if strand == "+"
+            else start_codons.iloc[0]["end"]
+        )
+
+        if self.debug:
+            print(
+                f"        │  ├─ Building position map for {transcript_id} ({strand} strand)"
+            )
+            print(f"        │  │  ├─ Canonical start: {canonical_start}")
+            print(f"        │  │  ├─ CDS regions: {len(cds_regions)}")
+
+        # Sort CDS regions
+        if strand == "+":
+            cds_regions = cds_regions.sort_values("start")
+        else:
+            cds_regions = cds_regions.sort_values("start", ascending=False)
+
+        pos_map = {}
+        coding_pos = 0
+
+        for idx, (_, cds) in enumerate(cds_regions.iterrows()):
+            cds_start = int(cds["start"])
+            cds_end = int(cds["end"])
+
+            if self.debug and idx < 3:  # Show first few CDS regions
+                print(f"        │  │  ├─ CDS {idx + 1}: {cds_start}-{cds_end}")
+
+            # Map positions from canonical start onward
+            if strand == "+":
+                effective_start = max(cds_start, canonical_start)
+                effective_end = cds_end
+                if effective_start <= effective_end:
+                    for genomic_pos in range(effective_start, effective_end + 1):
+                        pos_map[genomic_pos] = coding_pos
+                        coding_pos += 1
+            else:
+                effective_start = cds_start
+                effective_end = min(cds_end, canonical_start)
+                if effective_start <= effective_end:
+                    for genomic_pos in range(effective_end, effective_start - 1, -1):
+                        pos_map[genomic_pos] = coding_pos
+                        coding_pos += 1
+
+        if self.debug:
+            print(
+                f"        │  │  └─ Final position map: {len(pos_map)} positions mapped"
+            )
+            # Show a few example mappings
+            example_positions = list(pos_map.items())[:5]
+            for genomic_pos, coding_pos in example_positions:
+                print(f"        │  │     ├─ {genomic_pos} → {coding_pos}")
+
+        return pos_map
+
+    def _build_extension_position_map(
+        self, transcript_id: str, extension_feature: pd.Series
+    ) -> Dict[int, int]:
+        """Build position map for extension sequences."""
+        # This is more complex - extension sequences include 5'UTR + CDS
+        # For now, use canonical mapping as approximation
+        canonical_map = self._build_canonical_position_map(transcript_id)
+
+        # Add extension region positions (simplified)
+        extension_start = extension_feature["start"]
+        extension_end = extension_feature.get(
+            "canonical_start_pos", extension_feature["end"]
+        )
+
+        extended_map = {}
+        coding_pos = 0
+
+        # Add extension positions first
+        for genomic_pos in range(int(extension_start), int(extension_end)):
+            extended_map[genomic_pos] = coding_pos
+            coding_pos += 1
+
+        # Add canonical positions with offset
+        for genomic_pos, original_coding_pos in canonical_map.items():
+            extended_map[genomic_pos] = coding_pos + original_coding_pos
+
+        return extended_map
 
     # ===== HELPER METHODS =====
 
