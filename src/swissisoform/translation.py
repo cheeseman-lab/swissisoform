@@ -1,6 +1,6 @@
 """Enhanced transcript translation and protein sequence generation module.
 
-This module contains the TruncatedProteinGenerator class for generating
+This module contains the AlternativeProteinGenerator class for generating
 amino acid sequences from alternative start sites (both truncations and extensions),
 with optional mutation integration capabilities.
 """
@@ -648,6 +648,26 @@ class AlternativeProteinGenerator:
                 )
                 continue
 
+            # ===== ADD PREMATURE STOP CHECK FOR ALTERNATIVE PROTEINS =====
+            alternative_protein = alternative_result["protein"]
+            premature_stops = self._count_premature_stops(alternative_protein)
+            region_type = feature.get("region_type", "unknown")
+
+            if premature_stops > 0:
+                region_type = feature.get("region_type", "unknown")
+                self._debug_print(
+                    f"❌ BLOCKING {region_type.upper()}: {premature_stops} premature stop codon(s) detected"
+                )
+                self._debug_print(
+                    f"❌ Gene: {gene_name}, Transcript: {transcript_id}, Feature: {feature_name}"
+                )
+                continue  # Skip this feature entirely
+
+            self._debug_print(
+                f"✅ {region_type.upper()} protein clean: {len(alternative_protein)} AA"
+            )
+            # ===== END PREMATURE STOP CHECK =====
+
             all_pairs.append(
                 {
                     "gene_name": gene_name,
@@ -1151,7 +1171,7 @@ class AlternativeProteinGenerator:
         if sources is None:
             sources = ["clinvar"]
         if impact_types is None:
-            impact_types = ["missense variant", "5 prime UTR variant"]
+            impact_types = ["missense variant"]
 
         # Create region features for mutation handler
         region_features = pd.DataFrame(
@@ -1256,7 +1276,7 @@ class AlternativeProteinGenerator:
         if sources is None:
             sources = ["clinvar"]
         if impact_types is None:
-            impact_types = ["missense variant", "5 prime UTR variant"]
+            impact_types = ["missense variant"]
 
         # Get base pairs using the simplified logic
         base_pairs = self.extract_gene_proteins(gene_name)
@@ -1456,28 +1476,20 @@ class AlternativeProteinGenerator:
         self,
         gene_list: List[str],
         include_mutations: bool = True,
+        sources: List[str] = None,
         impact_types: List[str] = None,
         output_format: str = "fasta,csv",
         min_length: int = 10,
         max_length: int = 100000,
     ) -> pd.DataFrame:
-        """Create a dataset of protein sequences with optional mutation integration.
-
-        Args:
-            gene_list (List[str]): List of gene names to process.
-            include_mutations (bool): Whether to include mutation variants.
-            impact_types (List[str], optional): Mutation impact types to include.
-            output_format (str): Format to save sequences ('fasta', 'csv', or both).
-            min_length (int): Minimum protein length to include.
-            max_length (int): Maximum protein length to include.
-
-        Returns:
-            pd.DataFrame: DataFrame with the dataset information.
-        """
+        """Create a dataset with correct comparison sets for each region type."""
         all_sequences = []
         successful_genes = 0
         skipped_genes = []
 
+        # Set defaults
+        if sources is None:
+            sources = ["clinvar"]
         if impact_types is None:
             impact_types = ["missense variant"]
 
@@ -1489,12 +1501,13 @@ class AlternativeProteinGenerator:
                 )
 
                 if include_mutations and self.mutation_handler:
-                    # Use mutation-enhanced extraction
                     enhanced_pairs = await self.extract_gene_proteins_with_mutations(
                         gene_name,
-                        include_mutations,
-                        impact_types,
+                        include_mutations=include_mutations,
+                        sources=sources,
+                        impact_types=impact_types,
                     )
+
                     if not enhanced_pairs:
                         skipped_genes.append(gene_name)
                         continue
@@ -1514,7 +1527,7 @@ class AlternativeProteinGenerator:
                         if alternative_protein == canonical_protein:
                             continue
 
-                        # Add canonical sequence
+                        # ===== COMPARISON SET 1: CANONICAL (always included) =====
                         all_sequences.append(
                             {
                                 "gene": gene_name,
@@ -1524,19 +1537,22 @@ class AlternativeProteinGenerator:
                                 "length": len(canonical_protein),
                                 "variant_type": "canonical",
                                 "region_type": region_type,
-                                # Empty mutation fields for canonical
+                                "comparison_set": f"{region_type}_analysis",  # Add comparison set identifier
+                                # Mutation fields
                                 "mutation_position": None,
                                 "mutation_change": None,
                                 "aa_change": None,
                                 "hgvsc": None,
                                 "hgvsp": None,
                                 "mutation_impact": None,
+                                "mutation_impact_validated": None,
+                                "in_alt_start_site": None,
                                 "mutation_source": None,
                                 "clinvar_variant_id": None,
                             }
                         )
 
-                        # Add base alternative sequence
+                        # ===== COMPARISON SET 2: ALTERNATIVE (truncated or extended) =====
                         all_sequences.append(
                             {
                                 "gene": gene_name,
@@ -1544,67 +1560,105 @@ class AlternativeProteinGenerator:
                                 "variant_id": feature_id,
                                 "sequence": alternative_protein,
                                 "length": len(alternative_protein),
-                                "variant_type": region_type,
+                                "variant_type": region_type,  # "truncation" or "extension"
                                 "region_type": region_type,
-                                # Empty mutation fields for base alternative
+                                "comparison_set": f"{region_type}_analysis",
+                                # Mutation fields
                                 "mutation_position": None,
                                 "mutation_change": None,
                                 "aa_change": None,
                                 "hgvsc": None,
                                 "hgvsp": None,
                                 "mutation_impact": None,
+                                "mutation_impact_validated": None,
+                                "in_alt_start_site": None,
                                 "mutation_source": None,
                                 "clinvar_variant_id": None,
                             }
                         )
 
-                        # Add mutation variants with full information
+                        # ===== COMPARISON SET 3: MUTATIONS TO APPROPRIATE BASE =====
                         for mut_idx, mut_variant in enumerate(
                             pair["alternative_mutations"]
                         ):
                             mutated_protein = mut_variant["protein"]
-                            if (
-                                min_length <= len(mutated_protein) <= max_length
-                                and mutated_protein != canonical_protein
-                            ):
-                                mut_info = mut_variant["mutation"]
+                            mut_info = mut_variant["mutation"]
 
-                                # Calculate amino acid difference
-                                aa_difference = self._calculate_aa_difference(
-                                    canonical_protein, mutated_protein
+                            # Check length constraints
+                            if not (min_length <= len(mutated_protein) <= max_length):
+                                continue
+
+                            # Determine correct mutation variant type and base comparison
+                            if region_type == "truncation":
+                                # TRUNCATION SET: canonical, truncated, canonical+mutations
+                                variant_type = "canonical_mutated"
+                                base_protein = canonical_protein
+                                variant_description = "canonical protein with mutations in truncated region"
+                            elif region_type == "extension":
+                                # EXTENSION SET: canonical, extended, extended+mutations
+                                variant_type = "extension_mutated"
+                                base_protein = alternative_protein
+                                variant_description = "extended protein with mutations in extension region"
+                            else:
+                                variant_type = f"{region_type}_mutated"
+                                base_protein = canonical_protein
+                                variant_description = (
+                                    f"{region_type} protein with mutations"
                                 )
 
-                                # Create enhanced variant ID with AA change
-                                base_variant_id = f"canonical_mut_{mut_info['position']}_{mut_info['reference']}>{mut_info['alternate']}"
-                                if aa_difference:
-                                    variant_id = f"{base_variant_id}_{aa_difference}"
-                                else:
-                                    variant_id = base_variant_id
+                            # Skip if identical to base
+                            if mutated_protein == base_protein:
+                                continue
 
-                                all_sequences.append(
-                                    {
-                                        "gene": gene_name,
-                                        "transcript_id": transcript_id,
-                                        "variant_id": variant_id,
-                                        "sequence": mutated_protein,
-                                        "length": len(mutated_protein),
-                                        "variant_type": "canonical_mutated",
-                                        "region_type": region_type,
-                                        # Full mutation information
-                                        "mutation_position": mut_info["position"],
-                                        "mutation_change": f"{mut_info['reference']}>{mut_info['alternate']}",
-                                        "aa_change": aa_difference,
-                                        "hgvsc": mut_info.get("hgvsc", ""),
-                                        "hgvsp": mut_info.get("hgvsp", ""),
-                                        "mutation_impact": mut_info.get("impact", ""),
-                                        "mutation_source": mut_info.get("source", ""),
-                                        "clinvar_variant_id": mut_info.get(
-                                            "variant_id", ""
-                                        ),
-                                    }
-                                )
+                            # Calculate AA difference from correct base
+                            aa_difference = self._calculate_aa_difference(
+                                base_protein, mutated_protein
+                            )
+
+                            # Create variant ID
+                            base_variant_id = f"{variant_type}_{mut_info['position']}_{mut_info['reference']}>{mut_info['alternate']}"
+                            if aa_difference:
+                                variant_id = f"{base_variant_id}_{aa_difference}"
+                            else:
+                                variant_id = base_variant_id
+
+                            all_sequences.append(
+                                {
+                                    "gene": gene_name,
+                                    "transcript_id": transcript_id,
+                                    "variant_id": variant_id,
+                                    "sequence": mutated_protein,
+                                    "length": len(mutated_protein),
+                                    "variant_type": variant_type,  # "canonical_mutated" or "extension_mutated"
+                                    "region_type": region_type,
+                                    "comparison_set": f"{region_type}_analysis",
+                                    "variant_description": variant_description,
+                                    # Full mutation information
+                                    "mutation_position": mut_info["position"],
+                                    "mutation_change": f"{mut_info['reference']}>{mut_info['alternate']}",
+                                    "aa_change": aa_difference,
+                                    "hgvsc": mut_info.get("hgvsc", ""),
+                                    "hgvsp": mut_info.get("hgvsp", ""),
+                                    "mutation_impact": mut_info.get("impact", ""),
+                                    "mutation_impact_validated": mut_info.get(
+                                        "impact_validated", ""
+                                    ),
+                                    "in_alt_start_site": mut_info.get(
+                                        "in_alt_start_site", False
+                                    ),
+                                    "validation_note": mut_info.get(
+                                        "validation_note", ""
+                                    ),
+                                    "applied_to": mut_info.get("applied_to", ""),
+                                    "mutation_source": mut_info.get("source", ""),
+                                    "clinvar_variant_id": mut_info.get(
+                                        "variant_id", ""
+                                    ),
+                                }
+                            )
+
                 else:
-                    # Standard extraction without mutations
+                    # Standard extraction without mutations - same 3-way comparison structure
                     gene_pairs = self.extract_gene_proteins(gene_name)
                     if not gene_pairs:
                         skipped_genes.append(gene_name)
@@ -1635,6 +1689,7 @@ class AlternativeProteinGenerator:
                                 "length": len(canonical_protein),
                                 "variant_type": "canonical",
                                 "region_type": region_type,
+                                "comparison_set": f"{region_type}_analysis",
                             }
                         )
 
@@ -1648,12 +1703,16 @@ class AlternativeProteinGenerator:
                                 "length": len(alternative_protein),
                                 "variant_type": region_type,
                                 "region_type": region_type,
+                                "comparison_set": f"{region_type}_analysis",
                             }
                         )
 
                 successful_genes += 1
+
             except Exception as e:
+                # import traceback
                 self._debug_print(f"Error processing gene {gene_name}: {str(e)}")
+                # traceback.print_exc()  # <— this will show the true source
                 skipped_genes.append(gene_name)
 
         # Create dataset
@@ -1666,8 +1725,8 @@ class AlternativeProteinGenerator:
             if "csv" in output_format.lower():
                 self._save_dataset_csv(dataset, include_mutations)
 
-        # Print summary
-        self._print_dataset_summary(
+        # Print summary with comparison set breakdown
+        self._print_dataset_summary_with_comparison_sets(
             dataset, successful_genes, len(gene_list), skipped_genes, include_mutations
         )
 
@@ -2808,6 +2867,58 @@ class AlternativeProteinGenerator:
                     print(f"  ├─ By region type:")
                     for region_type, count in region_counts.items():
                         print(f"  │  ├─ {region_type}: {count}")
+
+            print(f"  ├─ Average sequence length: {dataset['length'].mean():.1f}")
+            print(
+                f"  ├─ Sequence length range: {dataset['length'].min()}-{dataset['length'].max()}"
+            )
+
+            genes_with_data = dataset["gene"].nunique()
+            print(f"  └─ Genes with valid sequences: {genes_with_data}/{total_genes}")
+        else:
+            print("  └─ No valid sequences generated")
+
+        if skipped_genes:
+            print(
+                f"\nSkipped genes ({len(skipped_genes)}): {', '.join(skipped_genes[:10])}"
+            )
+            if len(skipped_genes) > 10:
+                print(f"  ... and {len(skipped_genes) - 10} more")
+
+    def _print_dataset_summary_with_comparison_sets(
+        self,
+        dataset: pd.DataFrame,
+        successful_genes: int,
+        total_genes: int,
+        skipped_genes: List[str],
+        include_mutations: bool = False,
+    ) -> None:
+        """Print summary with comparison set breakdown."""
+        print(f"\nProtein Sequence Generation Summary:")
+        print(f"  ├─ Genes processed successfully: {successful_genes}/{total_genes}")
+
+        if not dataset.empty:
+            print(f"  ├─ Total sequences: {len(dataset)}")
+
+            # Show comparison sets
+            if "comparison_set" in dataset.columns:
+                comparison_counts = dataset["comparison_set"].value_counts()
+                print(f"  ├─ Comparison sets:")
+                for comp_set, count in comparison_counts.items():
+                    print(f"  │  ├─ {comp_set}: {count} sequences")
+
+            # Show variant types within each comparison set
+            if (
+                "variant_type" in dataset.columns
+                and "comparison_set" in dataset.columns
+            ):
+                print(f"  ├─ Variant breakdown by comparison set:")
+                for comp_set in dataset["comparison_set"].unique():
+                    subset = dataset[dataset["comparison_set"] == comp_set]
+                    variant_counts = subset["variant_type"].value_counts()
+                    print(f"  │  ├─ {comp_set}:")
+                    for variant, count in variant_counts.items():
+                        print(f"  │  │  ├─ {variant}: {count}")
 
             print(f"  ├─ Average sequence length: {dataset['length'].mean():.1f}")
             print(
