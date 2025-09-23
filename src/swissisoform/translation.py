@@ -412,11 +412,14 @@ class AlternativeProteinGenerator:
             protein = str(Seq(full_coding_sequence).translate())
             self._debug_print(f"Extended protein length: {len(protein)} AA")
 
-            # Basic validation
-            if not protein.startswith("M"):
+            # Check for premature stops and exit
+            premature_stops = self._count_premature_stops(protein)
+            if premature_stops > 0:
                 self._debug_print(
-                    f"Warning: Extended protein doesn't start with M, starts with: {protein[:5]}"
+                    f"❌ EXCLUDING: {premature_stops} premature stop codon(s) detected"
                 )
+                return None  # Exit early - don't create this protein
+
         else:
             self._debug_print("Combined sequence too short for translation")
             protein = ""
@@ -533,13 +536,25 @@ class AlternativeProteinGenerator:
         else:
             overlapping_cds.sort(key=lambda x: x["start"], reverse=True)
 
+        # ADD THIS DEBUG SECTION (similar to extensions):
+        self._debug_print(f"CDS sequence construction for truncation:")
+        self._debug_print(f"Total overlapping CDS regions: {len(overlapping_cds)}")
+
         # Build coding sequence
         coding_sequence = ""
-        for cds in overlapping_cds:
+        for i, cds in enumerate(overlapping_cds):
             seq = self.genome.get_sequence(chromosome, cds["start"], cds["end"], strand)
-            coding_sequence += str(seq)
+            seq_str = str(seq)
+            coding_sequence += seq_str
 
-        self._debug_print(f"Remaining CDS sequence length: {len(coding_sequence)} bp")
+            # Print each CDS region info (like extensions do)
+            self._debug_print(
+                f"CDS region {i + 1}: {cds['start']}-{cds['end']}, length {len(seq_str)} bp"
+            )
+
+        self._debug_print(
+            f"Final truncated CDS sequence length: {len(coding_sequence)} bp"
+        )
         self._debug_print(f"Total CDS regions used: {len(overlapping_cds)}")
 
         # Translate
@@ -552,10 +567,14 @@ class AlternativeProteinGenerator:
             protein = str(Seq(coding_sequence).translate())
             self._debug_print(f"Truncated protein length: {len(protein)} AA")
 
-            if protein and not protein.startswith("M"):
+            # Check for premature stops and exit
+            premature_stops = self._count_premature_stops(protein)
+            if premature_stops > 0:
                 self._debug_print(
-                    f"Warning: Truncated protein doesn't start with M, starts with: {protein[:5]}"
+                    f"❌ EXCLUDING: {premature_stops} premature stop codon(s) detected"
                 )
+                return None  # Exit early - don't create this protein
+
         else:
             self._debug_print("Coding sequence too short for translation")
 
@@ -2335,15 +2354,6 @@ class AlternativeProteinGenerator:
                 )
             warnings_found = True
 
-        # Extended should start with M (methionine)
-        if not extended_protein.startswith("M"):
-            if verbose:
-                print(
-                    f"    ⚠️  WARNING: Extension doesn't start with methionine for {gene_name}:{transcript_id}"
-                )
-                print(f"        Starts with: '{extended_protein[:5]}...'")
-            warnings_found = True
-
         # Check for premature stop codons
         premature_stops = self._count_premature_stops(extended_protein)
         if premature_stops > 0:
@@ -2410,15 +2420,6 @@ class AlternativeProteinGenerator:
                 print(
                     f"        Canonical: {len(canonical_protein)} AA, Truncated: {len(truncated_protein)} AA"
                 )
-            warnings_found = True
-
-        # Truncated should start with M (methionine)
-        if not truncated_protein.startswith("M"):
-            if verbose:
-                print(
-                    f"    ⚠️  WARNING: Truncation doesn't start with methionine for {gene_name}:{transcript_id}"
-                )
-                print(f"        Starts with: '{truncated_protein[:5]}...'")
             warnings_found = True
 
         # Check for premature stop codons
