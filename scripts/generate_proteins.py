@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fast protein sequence generator using pre-validated mutation IDs from step 2.
 
-This script loads pre-validated variant IDs from step 2 results and passes them 
+This script loads pre-validated variant IDs from step 2 results and passes them
 to the existing AlternativeProteinGenerator methods to enable fast mode processing.
 
 Arguments:
@@ -60,7 +60,7 @@ async def main(
     fast_mode: bool = True,
 ):
     """Main function for fast protein sequence generation.
-    
+
     Args:
         gene_list_path (str): Path to file containing gene names
         output_dir (str): Directory to save output files
@@ -74,7 +74,7 @@ async def main(
         max_length (int): Maximum protein length to include
         output_format (str): Output format specification
         fast_mode (bool): Enable fast mode
-    
+
     Returns:
         None
     """
@@ -83,43 +83,45 @@ async def main(
         sources = ["clinvar"]
     if impact_types is None:
         impact_types = ["missense variant", "nonsense variant", "frameshift variant"]
-    
+
     start_time = datetime.now()
-    print(f"Starting fast protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    
+    print(
+        f"Starting fast protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+
     # Create output directory
     output_dir_path = Path(output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)
-    
+
     # Initialize handlers
     print("\nInitializing components:")
     print("  ├─ Loading genome data...")
     genome = GenomeHandler(genome_path, annotation_path)
-    
+
     print("  ├─ Loading alternative isoform data...")
     alt_isoforms = AlternativeIsoform()
     alt_isoforms.load_bed(bed_path)
-    
+
     print("  ├─ Initializing mutation handler...")
     mutation_handler = MutationHandler()
-    
+
     print("  └─ Initializing protein generator...")
     protein_generator = AlternativeProteinGenerator(
         genome_handler=genome,
         alt_isoform_handler=alt_isoforms,
         output_dir=output_dir,
         mutation_handler=mutation_handler,
-        debug=True,
+        debug=False,
     )
-    
+
     # Load pre-validated variant IDs
     print(f"\nLoading pre-validated variant IDs from {mutations_file}...")
     pre_validated_variants = load_pre_validated_variants(mutations_file)
-    
+
     # Read gene list
     print(f"\nReading gene list from {gene_list_path}")
     gene_names = parse_gene_list(gene_list_path)
-    
+
     total_genes = len(gene_names)
     print(f"\nStarting fast protein sequence generation for {total_genes} genes")
     print(f"Configuration:")
@@ -129,10 +131,10 @@ async def main(
     print(f"  ├─ Impact types: {', '.join(impact_types)}")
     print(f"  ├─ Length range: {min_length}-{max_length} amino acids")
     print(f"  └─ Output format: {output_format}")
-    
+
     # Generate datasets
     print(f"\nGenerating datasets...")
-    
+
     # Generate pairs dataset (canonical + alternative)
     print(f"\n1. Generating canonical + alternative pairs dataset...")
     pairs_dataset = protein_generator.create_protein_sequence_dataset_pairs(
@@ -141,7 +143,7 @@ async def main(
         min_length=min_length,
         max_length=max_length,
     )
-    
+
     # Generate mutations dataset using pre-validated variants
     print(f"\n2. Generating mutations dataset with pre-validated variants...")
     mutations_dataset = await protein_generator.create_protein_sequence_dataset_with_mutations(
@@ -155,17 +157,17 @@ async def main(
         pre_validated_variants=pre_validated_variants,  # Pass pre-validated variants
         skip_validation=fast_mode,  # Enable fast mode
     )
-    
+
     # Final summary
     end_time = datetime.now()
     duration = end_time - start_time
-    
+
     print(f"\n🎉 Fast protein sequence generation completed!")
     print(f"  ├─ Duration: {duration}")
     print(f"  ├─ Pairs dataset: {len(pairs_dataset)} sequences")
     print(f"  ├─ Mutations dataset: {len(mutations_dataset)} sequences")
     print(f"  └─ Performance: ⚡ Used pre-validated variants (skipped validation)")
-    
+
     print(f"\nGeneration completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
@@ -178,7 +180,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mutations-file",
         required=True,
-        help="Path to isoform_level_results.csv from step 2"
+        help="Path to isoform_level_results.csv from step 2",
     )
     parser.add_argument(
         "--genome",
@@ -229,13 +231,13 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable fast mode using pre-validated mutations",
     )
-    
+
     args = parser.parse_args()
-    
+
     # Create output directory if it doesn't exist
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     asyncio.run(
         main(
             gene_list_path=args.gene_list,

@@ -1705,26 +1705,26 @@ class MutationHandler:
         """Validate mutation consequences using translation-based prediction."""
         validated_mutations = []
 
-        print(f"  │  │  ├─ ⚡ MUTATION VALIDATION DEBUG")
-        print(f"  │  │  │  ├─ Transcript: {transcript_id}")
-        print(f"  │  │  │  ├─ Mutations to validate: {len(mutations_df)}")
+        print(f"        └─ ⚡ MUTATION VALIDATION")
+        print(f"           ├─ Transcript: {transcript_id}")
+        print(f"           ├─ Mutations to validate: {len(mutations_df)}")
 
         if current_feature is not None:
             feature_type = current_feature.get("region_type", "unknown")
             feature_range = (
                 f"{current_feature.get('start', '?')}-{current_feature.get('end', '?')}"
             )
-            print(f"  │  │  │  ├─ Feature context: {feature_type} at {feature_range}")
+            print(f"           ├─ Feature context: {feature_type} at {feature_range}")
 
         # Show a sample of mutations being processed
         if not mutations_df.empty:
-            print(f"  │  │  │  ├─ Sample mutations:")
+            print(f"           ├─ Sample mutations:")
             for idx, mutation in mutations_df.head(3).iterrows():
                 pos = mutation.get("position", "?")
                 ref = mutation.get("reference", "?")
                 alt = mutation.get("alternate", "?")
                 orig_impact = mutation.get("impact", "?")
-                print(f"  │  │  │  │  ├─ {pos}: {ref}>{alt} (original: {orig_impact})")
+                print(f"              ├─ {pos}: {ref}>{alt} (original: {orig_impact})")
 
         validation_stats = {
             "total_processed": 0,
@@ -1748,11 +1748,11 @@ class MutationHandler:
                 variant_id = mutation.get("variant_id", f"pos_{genomic_pos}")
 
                 print(
-                    f"        │  │  │  ├─ [{idx + 1}/{len(mutations_df)}] Validating {variant_id}"
+                    f"                 ├─ [{idx + 1}/{len(mutations_df)}] Validating {variant_id}"
                 )
-                print(f"        │  │  │  │  ├─ Position: {genomic_pos}")
-                print(f"        │  │  │  │  ├─ Mutation: {ref_allele}>{alt_allele}")
-                print(f"        │  │  │  │  ├─ Original impact: '{original_impact}'")
+                print(f"                    ├─ Position: {genomic_pos}")
+                print(f"                    ├─ Mutation: {ref_allele}>{alt_allele}")
+                print(f"                    ├─ Original impact: '{original_impact}'")
 
                 # Check if mutation is in alternative start site
                 in_alt_start_site = False
@@ -1786,18 +1786,18 @@ class MutationHandler:
                                 )
 
                                 print(
-                                    f"        │  │  │  │  ├─ 🎯 MUTATION IN ALTERNATIVE START SITE: {start_codon} at {alt_start_pos} ({strand} strand)"
+                                    f"                    ├─ 🎯 MUTATION IN ALTERNATIVE START SITE: {start_codon} at {alt_start_pos} ({strand} strand)"
                                 )
                                 print(
-                                    f"        │  │  │  │  │  ├─ Codon span: {codon_start}-{codon_end}"
+                                    f"                       ├─ Codon span: {codon_start}-{codon_end}"
                                 )
                                 print(
-                                    f"        │  │  │  │  │  └─ Mutation at: {genomic_pos}"
+                                    f"                       └─ Mutation at: {genomic_pos}"
                                 )
 
                         except (ValueError, TypeError):
                             print(
-                                f"        │  │  │  │  ├─ Warning: Invalid alt_start_pos '{alt_start_pos}'"
+                                f"                    ├─ Warning: Invalid alt_start_pos '{alt_start_pos}'"
                             )
 
                 # Use fast prediction
@@ -1812,7 +1812,7 @@ class MutationHandler:
                     validated_impact_with_note = validated_impact
 
                 print(
-                    f"        │  │  │  │  ├─ Validated impact: '{validated_impact_with_note}'"
+                    f"                    ├─ Validated impact: '{validated_impact_with_note}'"
                 )
 
                 # Create validated mutation record - PRESERVE ORIGINAL IMPACT
@@ -1835,7 +1835,7 @@ class MutationHandler:
                     agreement_note = "✅ AGREEMENT: Original and validated match"
                     if in_alt_start_site:
                         agreement_note += " [ALT START SITE]"
-                    print(f"        │  │  │  │  └─ {agreement_note}")
+                    print(f"                    └─ {agreement_note}")
                 else:
                     validated_mutation["impact_agreement"] = False
                     validation_stats["impact_disagreements"] += 1
@@ -1854,7 +1854,7 @@ class MutationHandler:
                     )
                     if in_alt_start_site:
                         disagreement_note += " [ALT START SITE]"
-                    print(f"        │  │  │  │  ├─ {disagreement_note}")
+                    print(f"                    ├─ {disagreement_note}")
 
                     # Add detailed explanation for disagreements
                     if (
@@ -1862,33 +1862,33 @@ class MutationHandler:
                         and "synonymous" in validated_impact
                     ):
                         print(
-                            f"        │  │  │  │  └─ 📝 Explanation: Database predicted protein change, but codon analysis shows silent mutation"
+                            f"                    └─ 📝 Explanation: Database predicted protein change, but codon analysis shows silent mutation"
                         )
                     elif (
                         "synonymous" in original_impact
                         and "missense" in validated_impact
                     ):
                         print(
-                            f"        │  │  │  │  └─ 📝 Explanation: Database predicted silent mutation, but codon analysis shows protein change"
+                            f"                    └─ 📝 Explanation: Database predicted silent mutation, but codon analysis shows protein change"
                         )
                     elif "nonsense" in validated_impact:
                         print(
-                            f"        │  │  │  │  └─ 📝 Explanation: Codon analysis detected premature stop codon"
+                            f"                    └─ 📝 Explanation: Codon analysis detected premature stop codon"
                         )
                     elif "frameshift" in validated_impact:
                         print(
-                            f"        │  │  │  │  └─ 📝 Explanation: Length change causes reading frame shift"
+                            f"                    └─ 📝 Explanation: Length change causes reading frame shift"
                         )
                     else:
                         print(
-                            f"        │  │  │  │  └─ 📝 Explanation: Different functional interpretation"
+                            f"                    └─ 📝 Explanation: Different functional interpretation"
                         )
 
                 validated_mutations.append(validated_mutation)
                 validation_stats["successful_validations"] += 1
 
             except Exception as e:
-                print(f"        │  │  │  │  └─ ❌ VALIDATION FAILED: {str(e)}")
+                print(f"                    └─ ❌ VALIDATION FAILED: {str(e)}")
 
                 # Keep original mutation with error info
                 validated_mutation = mutation.copy()
@@ -1908,39 +1908,39 @@ class MutationHandler:
         result_df = pd.DataFrame(validated_mutations)
 
         # Print comprehensive summary
-        print(f"  │  │  │  └─ Validation Summary:")
+        print(f"        │  └─ Validation Summary:")
         print(
-            f"  │  │  │     ├─ Total processed: {validation_stats['total_processed']}"
+            f"              ├─ Total processed: {validation_stats['total_processed']}"
         )
         print(
-            f"  │  │  │     ├─ Successful validations: {validation_stats['successful_validations']}"
+            f"              ├─ Successful validations: {validation_stats['successful_validations']}"
         )
         print(
-            f"  │  │  │     ├─ Validation failures: {validation_stats['validation_failures']}"
+            f"              ├─ Validation failures: {validation_stats['validation_failures']}"
         )
         print(
-            f"  │  │  │     ├─ Impact agreements: {validation_stats['impact_agreements']}"
+            f"              ├─ Impact agreements: {validation_stats['impact_agreements']}"
         )
         print(
-            f"  │  │  │     ├─ Impact disagreements: {validation_stats['impact_disagreements']}"
+            f"              ├─ Impact disagreements: {validation_stats['impact_disagreements']}"
         )
         print(
-            f"  │  │  │     ├─ 🎯 Mutations in alt start sites: {validation_stats['alt_start_site_mutations']}"
+            f"              ├─ 🎯 Mutations in alt start sites: {validation_stats['alt_start_site_mutations']}"
         )
 
         if validation_stats["disagreement_patterns"]:
-            print(f"  │  │  │     ├─ Disagreement patterns:")
+            print(f"              ├─ Disagreement patterns:")
             for pattern, count in validation_stats["disagreement_patterns"].items():
-                print(f"  │  │  │     │  ├─ {pattern}: {count}")
+                print(f"              │  ├─ {pattern}: {count}")
 
         # Show final distributions
         if not result_df.empty:
-            print(f"  │  │  │     ├─ Final validated impact distribution:")
+            print(f"              ├─ Final validated impact distribution:")
             if "impact_validated" in result_df.columns:
                 for impact, count in (
                     result_df["impact_validated"].value_counts().items()
                 ):
-                    print(f"  │  │  │     │  ├─ {impact}: {count}")
+                    print(f"                 ├─ {impact}: {count}")
 
             # Show alternative start site breakdown
             if "in_alt_start_site" in result_df.columns:
@@ -1950,7 +1950,7 @@ class MutationHandler:
                     (alt_start_count / total_count * 100) if total_count > 0 else 0
                 )
                 print(
-                    f"  │  │  │     └─ Alternative start site mutations: {alt_start_count}/{total_count} ({percentage:.1f}%)"
+                    f"              └─ Alternative start site mutations: {alt_start_count}/{total_count} ({percentage:.1f}%)"
                 )
 
         return result_df
@@ -2121,7 +2121,7 @@ class MutationHandler:
                     genome_handler=genome_handler,
                     alt_isoform_handler=alt_isoform_handler,
                     output_dir=output_dir,
-                    debug=True,
+                    debug=False,
                 )
 
             # Container for all transcript-feature analysis results
