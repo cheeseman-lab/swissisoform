@@ -1,31 +1,20 @@
 #!/usr/bin/env python3
-"""Unified protein sequence generator with two modes: pairs and mutations.
+"""Fast protein sequence generator using pre-validated mutation IDs from step 2.
 
-This script generates amino acid sequences from alternative transcript variants
-with two distinct modes:
-
-Modes:
-    1. Pairs mode: Generate canonical + alternative protein sequence pairs.
-    2. Mutations mode: Generate canonical + alternative + mutated protein sequences.
+This script loads pre-validated variant IDs from step 2 results and passes them 
+to the existing AlternativeProteinGenerator methods to enable fast mode processing.
 
 Arguments:
     gene_list (str): Path to file containing gene names.
     output_dir (str): Directory to save output files.
+    --mutations-file (str): Path to isoform_level_results.csv from step 2.
     --genome (str): Path to genome FASTA file.
     --annotation (str): Path to genome annotation GTF file.
     --bed (str): Path to alternative isoform BED file.
-    --mutations (bool): Enable mutations mode.
-    --impact-types (List[str], optional): Mutation impact types to include (only used with --mutations).
     --min-length (int): Minimum protein length to include.
     --max-length (int): Maximum protein length to include.
     --format (str): Output format: fasta, csv, or fasta,csv.
-    --top-n-per-type (int): Number of top alternative start sites to keep per type per transcript.
-
-Returns:
-    None
-
-Raises:
-    Exception: If any gene fails processing, error is printed and gene is skipped.
+    --fast-mode (bool): Enable fast mode (skip validation).
 """
 
 import asyncio
@@ -35,7 +24,7 @@ from pathlib import Path
 import argparse
 import logging
 import warnings
-from typing import Optional, List
+from typing import Optional, List, Dict, Set
 
 # Suppress pandas FutureWarning
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -46,7 +35,7 @@ from swissisoform.mutations import MutationHandler
 from swissisoform.translation import AlternativeProteinGenerator
 from swissisoform.utils import (
     parse_gene_list,
-    print_translation_summary,
+    load_pre_validated_variants,
 )
 
 # Configure logger
@@ -59,61 +48,61 @@ logger = logging.getLogger(__name__)
 async def main(
     gene_list_path: str,
     output_dir: str,
+    mutations_file: str,
     genome_path: str,
     annotation_path: str,
     bed_path: str,
-    mutations_mode: bool = False,
+    sources: List[str] = None,
     impact_types: List[str] = None,
     min_length: int = 10,
     max_length: int = 100000,
     output_format: str = "fasta,csv",
-    top_n_per_type: int = 1,
+    fast_mode: bool = True,
 ):
-    """Main function to process genes for protein sequence generation.
-
+    """Main function for fast protein sequence generation.
+    
     Args:
-        gene_list_path (str): Path to file containing gene names.
-        output_dir (str): Directory to save output files.
-        genome_path (str): Path to the genome FASTA file.
-        annotation_path (str): Path to the genome annotation GTF file.
-        bed_path (str): Path to the alternative isoform BED file.
-        mutations_mode (bool): If True, generate with mutations; if False, generate pairs only.
-        impact_types (Optional[List[str]]): Mutation impact types to include (only used in mutations mode).
-        min_length (int): Minimum protein length to include.
-        max_length (int): Maximum protein length to include.
-        output_format (str): Format to save sequences ('fasta', 'csv', or 'fasta,csv').
-        top_n_per_type (int): Number of top alternative start sites to keep per type per transcript.
-
+        gene_list_path (str): Path to file containing gene names
+        output_dir (str): Directory to save output files
+        mutations_file (str): Path to isoform_level_results.csv from step 2
+        genome_path (str): Path to genome FASTA file
+        annotation_path (str): Path to genome annotation GTF file
+        bed_path (str): Path to alternative isoform BED file
+        sources (List[str]): List of mutation sources to query
+        impact_types (List[str]): List of impact types to include
+        min_length (int): Minimum protein length to include
+        max_length (int): Maximum protein length to include
+        output_format (str): Output format specification
+        fast_mode (bool): Enable fast mode
+    
     Returns:
         None
-
-    Raises:
-        Exception: If any gene fails processing, error is printed and gene is skipped.
     """
+    # Set defaults
+    if sources is None:
+        sources = ["clinvar"]
+    if impact_types is None:
+        impact_types = ["missense variant", "nonsense variant", "frameshift variant"]
+    
     start_time = datetime.now()
-    print(
-        f"Starting protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
-    )
-
+    print(f"Starting fast protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
     # Create output directory
     output_dir_path = Path(output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)
-
+    
     # Initialize handlers
     print("\nInitializing components:")
     print("  ├─ Loading genome data...")
     genome = GenomeHandler(genome_path, annotation_path)
-
+    
     print("  ├─ Loading alternative isoform data...")
     alt_isoforms = AlternativeIsoform()
     alt_isoforms.load_bed(bed_path)
-
-    # Initialize mutation handler only if needed
-    mutation_handler = None
-    if mutations_mode:
-        print("  ├─ Initializing mutation handler...")
-        mutation_handler = MutationHandler()
-
+    
+    print("  ├─ Initializing mutation handler...")
+    mutation_handler = MutationHandler()
+    
     print("  └─ Initializing protein generator...")
     protein_generator = AlternativeProteinGenerator(
         genome_handler=genome,
@@ -122,171 +111,75 @@ async def main(
         mutation_handler=mutation_handler,
         debug=True,
     )
-
-    # Set default impact types if not provided and mutations are requested
-    if mutations_mode and impact_types is None:
-        impact_types = ["missense variant"]
-
+    
+    # Load pre-validated variant IDs
+    print(f"\nLoading pre-validated variant IDs from {mutations_file}...")
+    pre_validated_variants = load_pre_validated_variants(mutations_file)
+    
     # Read gene list
     print(f"\nReading gene list from {gene_list_path}")
     gene_names = parse_gene_list(gene_list_path)
-
+    
     total_genes = len(gene_names)
-    mode_name = "Mutations" if mutations_mode else "Pairs"
-    print(f"\nStarting protein sequence generation for {total_genes} genes")
+    print(f"\nStarting fast protein sequence generation for {total_genes} genes")
     print(f"Configuration:")
-    print(f"  ├─ Mode: {mode_name}")
+    print(f"  ├─ Fast mode: {fast_mode} (skip validation)")
+    print(f"  ├─ Pre-validated variants file: {mutations_file}")
+    print(f"  ├─ Sources: {', '.join(sources)}")
+    print(f"  ├─ Impact types: {', '.join(impact_types)}")
     print(f"  ├─ Length range: {min_length}-{max_length} amino acids")
-    if mutations_mode:
-        print(f"  ├─ Impact types: {impact_types}")
     print(f"  └─ Output format: {output_format}")
-
-    # Process genes with progress reporting and validation
-    successful_genes = 0
-    failed_genes = []
-    validation_stats = {
-        "total_pairs": 0,
-        "valid_pairs": 0,
-        "invalid_extensions": 0,
-        "invalid_truncations": 0,
-        "length_filtered": 0,
-        "identical_sequences": 0,
-    }
-
-    for gene_idx, gene_name in enumerate(gene_names, 1):
-        print(f"\nProcessing gene {gene_idx}/{total_genes}: {gene_name}")
-
-        try:
-            # Test if gene has any data before full processing
-            test_pairs = protein_generator.extract_gene_proteins(
-                gene_name,
-                top_n_per_type,
-            )
-            if not test_pairs:
-                print(f"  └─ ❌ No transcript-truncation pairs found")
-                failed_genes.append(gene_name)
-                continue
-
-            print(f"  ├─ Found {len(test_pairs)} transcript-alternative pairs")
-
-            # Validate the pairs
-            valid_pairs = 0
-            for pair in test_pairs:
-                validation_stats["total_pairs"] += 1
-
-                canonical_protein = pair["canonical"]["protein"]
-                alternative_protein = pair["alternative"]["protein"]
-                region_type = pair["region_type"]
-
-                # Check for identical sequences
-                if canonical_protein == alternative_protein:
-                    validation_stats["identical_sequences"] += 1
-                    continue
-
-                # Check length constraints
-                if not (min_length <= len(canonical_protein) <= max_length):
-                    validation_stats["length_filtered"] += 1
-                    continue
-                if not (min_length <= len(alternative_protein) <= max_length):
-                    validation_stats["length_filtered"] += 1
-                    continue
-
-                if protein_generator.validate_protein_pair(
-                    canonical_protein,
-                    alternative_protein,
-                    region_type,
-                    gene_name,
-                    pair["transcript_id"],
-                    verbose=True,  # Set to False to reduce output
-                ):
-                    valid_pairs += 1
-                    validation_stats["valid_pairs"] += 1
-                else:
-                    # Update specific validation stats based on region type
-                    if region_type == "extension":
-                        validation_stats["invalid_extensions"] += 1
-                    elif region_type == "truncation":
-                        validation_stats["invalid_truncations"] += 1
-
-            if valid_pairs == 0:
-                print(f"  └─ ❌ No valid pairs after validation")
-                failed_genes.append(gene_name)
-                continue
-
-            print(f"  ├─ Valid pairs after validation: {valid_pairs}/{len(test_pairs)}")
-
-            # Additional info for mutations mode
-            if mutations_mode:
-                # Quick check for mutations in alternative regions
-                alt_features = alt_isoforms.get_translation_features(gene_name)
-                if not alt_features.empty:
-                    print(
-                        f"  ├─ Found {len(alt_features)} alternative regions for mutation analysis"
-                    )
-
-            print(f"  └─ ✅ Gene processed successfully")
-            successful_genes += 1
-
-        except Exception as e:
-            print(f"  └─ ❌ Error processing gene: {str(e)}")
-            failed_genes.append(gene_name)
-
-    # Print validation summary
-    print(f"\nValidation Summary:")
-    print(f"  ├─ Total transcript-alternative pairs: {validation_stats['total_pairs']}")
-    print(f"  ├─ Valid pairs: {validation_stats['valid_pairs']}")
-    print(f"  ├─ Invalid extensions: {validation_stats['invalid_extensions']}")
-    print(f"  ├─ Invalid truncations: {validation_stats['invalid_truncations']}")
-    print(f"  ├─ Length filtered: {validation_stats['length_filtered']}")
-    print(f"  └─ Identical sequences: {validation_stats['identical_sequences']}")
-
-    # Generate the full dataset
-    print(f"\nGenerating final dataset...")
-
-    if mutations_mode:
-        dataset = (
-            await protein_generator.create_protein_sequence_dataset_with_mutations(
-                gene_list=gene_names,
-                include_mutations=True,
-                impact_types=impact_types,
-                output_format=output_format,
-                min_length=min_length,
-                max_length=max_length,
-            )
-        )
-    else:
-        dataset = protein_generator.create_protein_sequence_dataset_pairs(
-            gene_list=gene_names,
-            output_format=output_format,
-            min_length=min_length,
-            max_length=max_length,
-        )
-
+    
+    # Generate datasets
+    print(f"\nGenerating datasets...")
+    
+    # Generate pairs dataset (canonical + alternative)
+    print(f"\n1. Generating canonical + alternative pairs dataset...")
+    pairs_dataset = protein_generator.create_protein_sequence_dataset_pairs(
+        gene_list=gene_names,
+        output_format=output_format,
+        min_length=min_length,
+        max_length=max_length,
+    )
+    
+    # Generate mutations dataset using pre-validated variants
+    print(f"\n2. Generating mutations dataset with pre-validated variants...")
+    mutations_dataset = await protein_generator.create_protein_sequence_dataset_with_mutations(
+        gene_list=gene_names,
+        include_mutations=True,
+        sources=sources,
+        impact_types=impact_types,
+        output_format=output_format,
+        min_length=min_length,
+        max_length=max_length,
+        pre_validated_variants=pre_validated_variants,  # Pass pre-validated variants
+        skip_validation=fast_mode,  # Enable fast mode
+    )
+    
     # Final summary
     end_time = datetime.now()
     duration = end_time - start_time
-
-    # Create and print summary using the utils function
-    print_translation_summary(
-        dataset=dataset,
-        successful_genes=successful_genes,
-        total_genes=total_genes,
-        failed_genes=failed_genes,
-        mutations_mode=mutations_mode,
-        output_dir=output_dir,
-    )
-
-    print(
-        f"\n  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
-    )
+    
+    print(f"\n🎉 Fast protein sequence generation completed!")
+    print(f"  ├─ Duration: {duration}")
+    print(f"  ├─ Pairs dataset: {len(pairs_dataset)} sequences")
+    print(f"  ├─ Mutations dataset: {len(mutations_dataset)} sequences")
+    print(f"  └─ Performance: ⚡ Used pre-validated variants (skipped validation)")
+    
+    print(f"\nGeneration completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Generate protein sequences in two modes: pairs or mutations"
+        description="Generate protein sequences using pre-validated mutations (fast mode)"
     )
     parser.add_argument("gene_list", help="Path to file containing gene names")
     parser.add_argument("output_dir", help="Directory to save output files")
+    parser.add_argument(
+        "--mutations-file",
+        required=True,
+        help="Path to isoform_level_results.csv from step 2"
+    )
     parser.add_argument(
         "--genome",
         default="../data/genome_data/GRCh38.p7.genome.fa",
@@ -303,17 +196,6 @@ if __name__ == "__main__":
         help="Path to alternative isoform BED file",
     )
     parser.add_argument(
-        "--mutations",
-        action="store_true",
-        help="Enable mutations mode (generate canonical + truncated + mutated sequences)",
-    )
-    parser.add_argument(
-        "--impact-types",
-        nargs="+",
-        default=None,
-        help="Mutation impact types to include (space-separated, only used with --mutations)",
-    )
-    parser.add_argument(
         "--min-length",
         type=int,
         default=10,
@@ -326,35 +208,47 @@ if __name__ == "__main__":
         help="Maximum protein length to include",
     )
     parser.add_argument(
+        "--sources",
+        nargs="+",
+        default=["clinvar"],
+        help="Mutation sources to query (space-separated, default: clinvar)",
+    )
+    parser.add_argument(
+        "--impact-types",
+        nargs="+",
+        default=["missense variant", "nonsense variant", "frameshift variant"],
+        help="Mutation impact types to include (space-separated)",
+    )
+    parser.add_argument(
         "--format",
         default="fasta,csv",
         help="Output format: fasta, csv, or fasta,csv",
     )
     parser.add_argument(
-        "--top-n-per-type",
-        type=int,
-        default=1,
-        help="Number of top alternative start sites to keep per type (Truncated/Extended) per transcript",
+        "--fast-mode",
+        action="store_true",
+        help="Enable fast mode using pre-validated mutations",
     )
-
+    
     args = parser.parse_args()
-
+    
     # Create output directory if it doesn't exist
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
+    
     asyncio.run(
         main(
             gene_list_path=args.gene_list,
             output_dir=args.output_dir,
+            mutations_file=args.mutations_file,
             genome_path=args.genome,
             annotation_path=args.annotation,
             bed_path=args.bed,
-            mutations_mode=args.mutations,
+            sources=args.sources,
             impact_types=args.impact_types,
             min_length=args.min_length,
             max_length=args.max_length,
             output_format=args.format,
-            top_n_per_type=args.top_n_per_type,
+            fast_mode=args.fast_mode,
         )
     )

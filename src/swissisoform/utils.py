@@ -1513,3 +1513,70 @@ def print_translation_summary(
         print(f"  ├─ Protein sequence pairs saved to: {csv_file.name}")
         if fasta_file.exists():
             print(f"  ├─ FASTA format saved to: {fasta_file.name}")
+
+
+def load_pre_validated_variants(mutations_file: str) -> Dict[str, Set[str]]:
+    """Load pre-validated variant IDs from step 2 results.
+    
+    Args:
+        mutations_file (str): Path to isoform_level_results.csv
+        
+    Returns:
+        Dict[str, Set[str]]: Dictionary mapping gene_name -> set of variant IDs
+    """
+    print(f"Loading pre-validated variant IDs from {mutations_file}")
+    
+    # Read the mutation results
+    mutations_df = pd.read_csv(mutations_file)
+    
+    if mutations_df.empty:
+        print("No mutation records found in results file")
+        return {}
+        
+    print(f"Found {len(mutations_df)} mutation records")
+    
+    # Define the impact-specific variant ID columns
+    variant_id_columns = [
+        'variant_ids_missense_variant',
+        'variant_ids_nonsense_variant', 
+        'variant_ids_frameshift_variant',
+        'variant_ids_synonymous_variant',
+        'variant_ids_inframe_deletion',
+        'variant_ids_inframe_insertion'
+    ]
+    
+    # Extract variant IDs by gene
+    pre_validated_variants = {}
+    total_variant_ids = 0
+    
+    for _, row in mutations_df.iterrows():
+        gene_name = row.get('gene_name', '')
+        if not gene_name:
+            continue
+        
+        if gene_name not in pre_validated_variants:
+            pre_validated_variants[gene_name] = set()
+        
+        # Collect variant IDs from all impact type columns
+        for col in variant_id_columns:
+            if col in row and pd.notna(row[col]) and str(row[col]).strip():
+                # Parse comma-separated variant IDs
+                variant_ids = [vid.strip() for vid in str(row[col]).split(',') if vid.strip()]
+                pre_validated_variants[gene_name].update(variant_ids)
+                total_variant_ids += len(variant_ids)
+    
+    genes_with_variants = len([g for g in pre_validated_variants.values() if g])
+    print(f"Loaded {total_variant_ids} pre-validated variant IDs across {genes_with_variants} genes")
+    
+    # Print summary by gene (top 10)
+    gene_counts = [(gene, len(variants)) for gene, variants in pre_validated_variants.items() if variants]
+    gene_counts.sort(key=lambda x: x[1], reverse=True)
+    
+    if gene_counts:
+        print("Top genes by variant count:")
+        for gene, count in gene_counts[:10]:
+            print(f"  ├─ {gene}: {count} variants")
+        if len(gene_counts) > 10:
+            print(f"  └─ ... and {len(gene_counts) - 10} more genes")
+    
+    return pre_validated_variants

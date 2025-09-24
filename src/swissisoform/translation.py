@@ -1270,6 +1270,8 @@ class AlternativeProteinGenerator:
         include_mutations: bool = True,
         sources: List[str] = None,
         impact_types: List[str] = None,
+        pre_validated_variants: Optional[Dict[str, Set[str]]] = None,  # NEW
+        skip_validation: bool = False,  # NEW
     ) -> Optional[List[Dict]]:
         """Extract proteins for all alternative features with optional mutation integration.
 
@@ -1278,6 +1280,8 @@ class AlternativeProteinGenerator:
             include_mutations (bool): Whether to include mutation variants.
             sources (List[str], optional): List of mutation sources to include.
             impact_types (List[str], optional): Mutation impact types to include.
+            pre_validated_variants (Optional[Dict[str, Set[str]]]): Pre-validated variant IDs by gene.
+            skip_validation (bool): Skip validation loop (use pre-validated results).
 
         Returns:
             Optional[List[Dict]]: List of enhanced protein pair dictionaries, or None if failed.
@@ -1314,12 +1318,18 @@ class AlternativeProteinGenerator:
                 # Get mutations in this alternative region
                 feature_info = pair["feature_info"]
                 mutations = await self._get_mutations_in_region(
-                    gene_name,
-                    feature_info["start"],
-                    feature_info["end"],
-                    sources,
-                    impact_types,
+                    gene_name=gene_name,
+                    start=feature_info["start"],
+                    end=feature_info["end"],
+                    sources=sources,
+                    impact_types=impact_types if pre_validated_variants is None else None,
                 )
+
+                # NEW: Filter to only pre-validated variants if provided
+                if not mutations.empty and pre_validated_variants and gene_name in pre_validated_variants:
+                    pre_validated_ids = pre_validated_variants[gene_name]
+                    mutations = mutations[mutations['variant_id'].isin(pre_validated_ids)].copy()
+                    self._debug_print(f"Filtered to {len(mutations)} pre-validated mutations")
 
                 if not mutations.empty:
                     self._debug_print(
@@ -1341,10 +1351,7 @@ class AlternativeProteinGenerator:
                             sequence_type = "canonical"
                             extension_feature = None
 
-                            if (
-                                impact == "5 prime UTR variant"
-                                and pair["region_type"] == "extension"
-                            ):
+                            if pair["region_type"] == "extension":
                                 sequence_type = "extension"
                                 extension_feature = pd.Series(feature_info)
 
@@ -1378,19 +1385,24 @@ class AlternativeProteinGenerator:
                                         "hgvsc": hgvsc,
                                         "hgvsp": hgvsp,
                                         "impact": impact,
+                                        # NEW: Use original impact if skipping validation
+                                        "impact_validated": impact if skip_validation else mutation_result_data.get("impact_validated", impact),
                                         "variant_id": mutation.get("variant_id", ""),
                                         "source": mutation.get("source", ""),
                                         "calculated_aa_change": mutation_result_data.get(
                                             "aa_change", ""
                                         ),
+                                        # NEW: Add validation status
+                                        "validation_skipped": skip_validation,
                                     },
                                 }
 
                                 enhanced_pair["alternative_mutations"].append(
                                     mutation_result
                                 )
+                                mode = "pre-validated" if skip_validation else "validated"
                                 self._debug_print(
-                                    f"Successfully created {sequence_type} mutation variant with AA change: {mutation_result_data.get('aa_change', 'N/A')}"
+                                    f"Successfully created {sequence_type} mutation variant ({mode}) with AA change: {mutation_result_data.get('aa_change', 'N/A')}"
                                 )
                             else:
                                 self._debug_print(
@@ -1495,6 +1507,8 @@ class AlternativeProteinGenerator:
         output_format: str = "fasta,csv",
         min_length: int = 10,
         max_length: int = 100000,
+        pre_validated_variants: Optional[Dict[str, Set[str]]] = None, 
+        skip_validation: bool = False,
     ) -> pd.DataFrame:
         """Create a dataset with correct comparison sets for each region type."""
         all_sequences = []
@@ -1520,8 +1534,9 @@ class AlternativeProteinGenerator:
                         include_mutations=include_mutations,
                         sources=sources,
                         impact_types=impact_types,
+                        pre_validated_variants=pre_validated_variants,  
+                        skip_validation=skip_validation,
                     )
-
                     if not enhanced_pairs:
                         skipped_genes.append(gene_name)
                         continue
