@@ -1702,36 +1702,30 @@ class MutationHandler:
         protein_generator,
         current_feature: Optional[pd.Series] = None,
     ) -> pd.DataFrame:
-        """Validate mutation consequences using translation-based prediction.
-
-        Args:
-            mutations_df (pd.DataFrame): DataFrame containing mutation records to validate.
-            transcript_id (str): Transcript identifier to use for consequence prediction.
-            protein_generator: An object with a predict_consequence_by_translation method for consequence validation.
-            current_feature (Optional[pd.Series]): Current alternative feature being analyzed (for context).
-
-        Returns:
-            pd.DataFrame: DataFrame with validated consequences in new 'impact_validated' column.
-        """
+        """Validate mutation consequences using translation-based prediction."""
         validated_mutations = []
 
-        print(
-            f"  │  │  ├─ ⚡ FAST validating {len(mutations_df)} mutation consequences..."
-        )
+        print(f"  │  │  ├─ ⚡ MUTATION VALIDATION DEBUG")
+        print(f"  │  │  │  ├─ Transcript: {transcript_id}")
+        print(f"  │  │  │  ├─ Mutations to validate: {len(mutations_df)}")
+
         if current_feature is not None:
             feature_type = current_feature.get("region_type", "unknown")
             feature_range = (
                 f"{current_feature.get('start', '?')}-{current_feature.get('end', '?')}"
             )
-            alt_start_pos = current_feature.get("alternative_start_pos", None)
-            print(f"  │  │  │  ├─ Context: {feature_type} feature at {feature_range}")
-            if alt_start_pos:
-                print(f"  │  │  │  ├─ Alternative start position: {alt_start_pos}")
-        print(
-            f"  │  │  │  ├─ Will add 'impact_validated' and 'in_alt_start_site' columns"
-        )
+            print(f"  │  │  │  ├─ Feature context: {feature_type} at {feature_range}")
 
-        # DEFINE validation_stats HERE at the beginning:
+        # Show a sample of mutations being processed
+        if not mutations_df.empty:
+            print(f"  │  │  │  ├─ Sample mutations:")
+            for idx, mutation in mutations_df.head(3).iterrows():
+                pos = mutation.get("position", "?")
+                ref = mutation.get("reference", "?")
+                alt = mutation.get("alternate", "?")
+                orig_impact = mutation.get("impact", "?")
+                print(f"  │  │  │  │  ├─ {pos}: {ref}>{alt} (original: {orig_impact})")
+
         validation_stats = {
             "total_processed": 0,
             "successful_validations": 0,
@@ -1754,11 +1748,11 @@ class MutationHandler:
                 variant_id = mutation.get("variant_id", f"pos_{genomic_pos}")
 
                 print(
-                    f"  │  │  │  ├─ [{idx + 1}/{len(mutations_df)}] Validating {variant_id}"
+                    f"        │  │  │  ├─ [{idx + 1}/{len(mutations_df)}] Validating {variant_id}"
                 )
-                print(f"  │  │  │  │  ├─ Position: {genomic_pos}")
-                print(f"  │  │  │  │  ├─ Mutation: {ref_allele}>{alt_allele}")
-                print(f"  │  │  │  │  ├─ Original impact: '{original_impact}'")
+                print(f"        │  │  │  │  ├─ Position: {genomic_pos}")
+                print(f"        │  │  │  │  ├─ Mutation: {ref_allele}>{alt_allele}")
+                print(f"        │  │  │  │  ├─ Original impact: '{original_impact}'")
 
                 # Check if mutation is in alternative start site
                 in_alt_start_site = False
@@ -1792,16 +1786,18 @@ class MutationHandler:
                                 )
 
                                 print(
-                                    f"  │  │  │  │  ├─ 🎯 MUTATION IN ALTERNATIVE START SITE: {start_codon} at {alt_start_pos} ({strand} strand)"
+                                    f"        │  │  │  │  ├─ 🎯 MUTATION IN ALTERNATIVE START SITE: {start_codon} at {alt_start_pos} ({strand} strand)"
                                 )
                                 print(
-                                    f"  │  │  │  │  │  ├─ Codon span: {codon_start}-{codon_end}"
+                                    f"        │  │  │  │  │  ├─ Codon span: {codon_start}-{codon_end}"
                                 )
-                                print(f"  │  │  │  │  │  └─ Mutation at: {genomic_pos}")
+                                print(
+                                    f"        │  │  │  │  │  └─ Mutation at: {genomic_pos}"
+                                )
 
                         except (ValueError, TypeError):
                             print(
-                                f"  │  │  │  │  ├─ Warning: Invalid alt_start_pos '{alt_start_pos}'"
+                                f"        │  │  │  │  ├─ Warning: Invalid alt_start_pos '{alt_start_pos}'"
                             )
 
                 # Use fast prediction
@@ -1816,7 +1812,7 @@ class MutationHandler:
                     validated_impact_with_note = validated_impact
 
                 print(
-                    f"  │  │  │  │  ├─ Validated impact: '{validated_impact_with_note}'"
+                    f"        │  │  │  │  ├─ Validated impact: '{validated_impact_with_note}'"
                 )
 
                 # Create validated mutation record - PRESERVE ORIGINAL IMPACT
@@ -1839,7 +1835,7 @@ class MutationHandler:
                     agreement_note = "✅ AGREEMENT: Original and validated match"
                     if in_alt_start_site:
                         agreement_note += " [ALT START SITE]"
-                    print(f"  │  │  │  │  └─ {agreement_note}")
+                    print(f"        │  │  │  │  └─ {agreement_note}")
                 else:
                     validated_mutation["impact_agreement"] = False
                     validation_stats["impact_disagreements"] += 1
@@ -1858,7 +1854,7 @@ class MutationHandler:
                     )
                     if in_alt_start_site:
                         disagreement_note += " [ALT START SITE]"
-                    print(f"  │  │  │  │  ├─ {disagreement_note}")
+                    print(f"        │  │  │  │  ├─ {disagreement_note}")
 
                     # Add detailed explanation for disagreements
                     if (
@@ -1866,33 +1862,33 @@ class MutationHandler:
                         and "synonymous" in validated_impact
                     ):
                         print(
-                            f"  │  │  │  │  └─ 📝 Explanation: Database predicted protein change, but codon analysis shows silent mutation"
+                            f"        │  │  │  │  └─ 📝 Explanation: Database predicted protein change, but codon analysis shows silent mutation"
                         )
                     elif (
                         "synonymous" in original_impact
                         and "missense" in validated_impact
                     ):
                         print(
-                            f"  │  │  │  │  └─ 📝 Explanation: Database predicted silent mutation, but codon analysis shows protein change"
+                            f"        │  │  │  │  └─ 📝 Explanation: Database predicted silent mutation, but codon analysis shows protein change"
                         )
                     elif "nonsense" in validated_impact:
                         print(
-                            f"  │  │  │  │  └─ 📝 Explanation: Codon analysis detected premature stop codon"
+                            f"        │  │  │  │  └─ 📝 Explanation: Codon analysis detected premature stop codon"
                         )
                     elif "frameshift" in validated_impact:
                         print(
-                            f"  │  │  │  │  └─ 📝 Explanation: Length change causes reading frame shift"
+                            f"        │  │  │  │  └─ 📝 Explanation: Length change causes reading frame shift"
                         )
                     else:
                         print(
-                            f"  │  │  │  │  └─ 📝 Explanation: Different functional interpretation"
+                            f"        │  │  │  │  └─ 📝 Explanation: Different functional interpretation"
                         )
 
                 validated_mutations.append(validated_mutation)
                 validation_stats["successful_validations"] += 1
 
             except Exception as e:
-                print(f"  │  │  │  │  └─ ❌ VALIDATION FAILED: {str(e)}")
+                print(f"        │  │  │  │  └─ ❌ VALIDATION FAILED: {str(e)}")
 
                 # Keep original mutation with error info
                 validated_mutation = mutation.copy()
@@ -2125,7 +2121,7 @@ class MutationHandler:
                     genome_handler=genome_handler,
                     alt_isoform_handler=alt_isoform_handler,
                     output_dir=output_dir,
-                    debug=False,
+                    debug=True,
                 )
 
             # Container for all transcript-feature analysis results
@@ -2498,7 +2494,8 @@ class MutationHandler:
                     # Prepare output paths
                     pair_base_filename = f"{transcript_id}_{feature_id}"
 
-                    # Filter mutations for this specific feature from the validated collection
+                    # Always create visualization, even with empty mutations
+                    pair_viz_mutations = pd.DataFrame()  # Start with empty
                     if not all_mutations_for_viz.empty:
                         pair_viz_mutations = all_mutations_for_viz[
                             (
@@ -2508,39 +2505,37 @@ class MutationHandler:
                             & (all_mutations_for_viz["pair_feature_id"] == feature_id)
                         ].copy()
 
+                    print(
+                        f"  │  │  ├─ Creating view with {len(pair_viz_mutations)} validated mutations"
+                    )
+
+                    if "impact_validated" in pair_viz_mutations.columns:
                         print(
-                            f"  │  │  ├─ Creating view with {len(pair_viz_mutations)} validated mutations"
+                            f"  │  │  ├─ Validated impacts: {pair_viz_mutations['impact_validated'].unique()}"
                         )
 
-                        if "impact_validated" in pair_viz_mutations.columns:
-                            print(
-                                f"  │  │  ├─ Validated impacts: {pair_viz_mutations['impact_validated'].unique()}"
-                            )
+                    # Always call visualizer, even with empty mutations DataFrame
+                    visualizer.visualize_transcript(
+                        gene_name=gene_name,
+                        transcript_id=transcript_id,
+                        alt_features=feature_for_viz,
+                        mutations_df=pair_viz_mutations,  # Can be empty
+                        output_file=str(
+                            transcript_dir / f"{pair_base_filename}_filtered.pdf"
+                        ),
+                    )
 
-                        visualizer.visualize_transcript(
-                            gene_name=gene_name,
-                            transcript_id=transcript_id,
-                            alt_features=feature_for_viz,
-                            mutations_df=pair_viz_mutations,
-                            output_file=str(
-                                transcript_dir / f"{pair_base_filename}_filtered.pdf"
-                            ),
-                        )
-
-                        print(f"  │  │  └─ Creating zoomed view")
-                        visualizer.visualize_transcript_zoomed(
-                            gene_name=gene_name,
-                            transcript_id=transcript_id,
-                            alt_features=feature_for_viz,
-                            mutations_df=pair_viz_mutations,
-                            output_file=str(
-                                transcript_dir
-                                / f"{pair_base_filename}_filtered_zoom.pdf"
-                            ),
-                            padding=100,
-                        )
-                    else:
-                        print(f"  │  │  ├─ No mutations to visualize for this pair")
+                    print(f"  │  │  └─ Creating zoomed view")
+                    visualizer.visualize_transcript_zoomed(
+                        gene_name=gene_name,
+                        transcript_id=transcript_id,
+                        alt_features=feature_for_viz,
+                        mutations_df=pair_viz_mutations,  # Can be empty
+                        output_file=str(
+                            transcript_dir / f"{pair_base_filename}_filtered_zoom.pdf"
+                        ),
+                        padding=100,
+                    )
 
             # Calculate total mutations across all pairs
             total_mutations = (
