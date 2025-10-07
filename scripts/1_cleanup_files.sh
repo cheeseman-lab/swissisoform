@@ -147,4 +147,3 @@ fi
 echo ""
 echo "Next step:"
 echo "  Run: sbatch 2_analyze_mutations.sh"
-echo "  Run: sbatch 3_generate_proteins.sh"

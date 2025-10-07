@@ -34,7 +34,6 @@ class AlternativeProteinGenerator:
         debug (bool): Enable debug mode for detailed output.
     """
 
-
     class ValidationCache:
         """Simple in-memory cache for storing variant validation results.
 
@@ -485,7 +484,7 @@ class AlternativeProteinGenerator:
                 premature_stops = self._count_premature_stops(protein)
                 if premature_stops > 0:
                     self._debug_print(
-                        f"❌ EXCLUDING: {premature_stops} premature stop codon(s) detected"
+                        f"🛑 EXCLUDING: {premature_stops} premature stop codon(s) detected"
                     )
                     return None  # Exit early - don't create this protein
             except Exception as e:
@@ -643,7 +642,7 @@ class AlternativeProteinGenerator:
             premature_stops = self._count_premature_stops(protein)
             if premature_stops > 0:
                 self._debug_print(
-                    f"❌ EXCLUDING: {premature_stops} premature stop codon(s) detected"
+                    f"🛑 EXCLUDING: {premature_stops} premature stop codon(s) detected"
                 )
                 return None  # Exit early - don't create this protein
 
@@ -728,10 +727,10 @@ class AlternativeProteinGenerator:
             if premature_stops > 0:
                 region_type = feature.get("region_type", "unknown")
                 self._debug_print(
-                    f"❌ BLOCKING {region_type.upper()}: {premature_stops} premature stop codon(s) detected"
+                    f"🛑 BLOCKING {region_type.upper()}: {premature_stops} premature stop codon(s) detected"
                 )
                 self._debug_print(
-                    f"❌ Gene: {gene_name}, Transcript: {transcript_id}, Feature: {feature_name}"
+                    f"🛑 Gene: {gene_name}, Transcript: {transcript_id}, Feature: {feature_name}"
                 )
                 continue  # Skip this feature entirely
 
@@ -2502,30 +2501,27 @@ class AlternativeProteinGenerator:
             if coding_pos is None:
                 # Enhanced debugging for mapping failures
                 if self.debug:
-                    print(f"        │  │  ├─ ❌ Position mapping failed")
+                    print(f"        │  │  ├─ ⭕️ Position mapping failed")
 
-                    # Check nearby positions
-                    nearby = {
-                        k: v for k, v in pos_map.items() if abs(k - genomic_pos) <= 20
-                    }
-                    if nearby:
-                        print(f"        │  │  ├─ Nearby mapped positions:")
-                        for k, v in sorted(nearby.items())[:5]:
-                            print(f"        │  │  │  ├─ {k} → {v}")
+                    # Show all CDS and UTR ranges for verification
+                    features = self.genome.get_transcript_features(transcript_id)
 
-                    # Check if in extension region
-                    if (
-                        current_feature is not None
-                        and current_feature.get("region_type") == "extension"
-                    ):
-                        ext_start = current_feature.get("start")
-                        ext_end = current_feature.get("end")
-                        if ext_start is not None and ext_end is not None:
-                            if int(ext_start) <= genomic_pos <= int(ext_end):
-                                print(
-                                    f"        │  │  ├─ Position IS in extension region {ext_start}-{ext_end}"
-                                )
-                                return "5 prime UTR variant"  # Classify as UTR variant
+                    cds_features = features[features["feature_type"] == "CDS"]
+                    utr_features = features[
+                        features["feature_type"].str.contains("UTR", na=False)
+                    ]
+
+                    print(f"        │  │  ├─ All CDS regions in transcript:")
+                    for _, cds in cds_features.iterrows():
+                        print(f"        │  │  │  ├─ CDS: {cds['start']}-{cds['end']}")
+
+                    print(f"        │  │  ├─ All UTR regions in transcript:")
+                    for _, utr in utr_features.iterrows():
+                        print(f"        │  │  │  ├─ UTR: {utr['start']}-{utr['end']}")
+
+                    print(
+                        f"        │  │  └─ Position {genomic_pos} not in any CDS/UTR → intronic"
+                    )
 
                 return "intronic variant"
 
@@ -2637,7 +2633,7 @@ class AlternativeProteinGenerator:
         transcript_id: str,
         current_feature: Optional[pd.Series] = None,
     ):
-        """Build cached coding sequence and position mapping with better error handling."""
+        """Build cached coding sequence and position mapping with consistent coordinate systems."""
         if self.debug:
             print(f"        ├─ Building cache for {transcript_id}")
 
@@ -2647,42 +2643,29 @@ class AlternativeProteinGenerator:
                 current_feature is not None
                 and current_feature.get("region_type") == "extension"
             ):
-                # For extensions, use alternative sequence
+                # For extensions, MUST use alternative sequence - no fallbacks allowed
                 result = self.extract_alternative_protein(
                     transcript_id, current_feature
                 )
                 if not result:
                     if self.debug:
-                        print(
-                            f"        ├─ ❌ Could not extract extension sequence - trying canonical fallback"
-                        )
-                    # Fallback to canonical if extension fails
-                    result = self.extract_canonical_protein(transcript_id)
-                    if not result:
-                        raise ValueError(
-                            f"Could not extract any sequence for {transcript_id}"
-                        )
+                        print(f"        ├─ ❌ Extension sequence extraction failed")
+                    raise ValueError(
+                        f"Extension sequence extraction failed for {transcript_id} - cannot proceed with mutation analysis"
+                    )
 
                 coding_seq = result["coding_sequence"]
 
-                # Build position map for extension (with fallback)
-                try:
-                    pos_map = self._build_extension_position_map(
-                        transcript_id, current_feature
-                    )
-                    if not pos_map:
-                        if self.debug:
-                            print(
-                                f"        ├─ ❌ Extension position map empty - using canonical fallback"
-                            )
-                        pos_map = self._build_canonical_position_map(transcript_id)
-                except Exception as e:
+                # Build extension position map - must match the sequence we extracted
+                pos_map = self._build_extension_position_map(
+                    transcript_id, current_feature
+                )
+                if not pos_map:
                     if self.debug:
-                        print(f"        ├─ ❌ Extension position mapping failed: {e}")
-                        print(
-                            f"        ├─ Using canonical position mapping as fallback"
-                        )
-                    pos_map = self._build_canonical_position_map(transcript_id)
+                        print(f"        ├─ ❌ Extension position mapping failed")
+                    raise ValueError(
+                        f"Extension position mapping failed for {transcript_id}"
+                    )
 
             else:
                 # For canonical sequences
@@ -2691,24 +2674,17 @@ class AlternativeProteinGenerator:
                     raise ValueError(
                         f"Could not extract canonical sequence for {transcript_id}"
                     )
-                coding_seq = result["coding_sequence"]
 
-                # Build position map for canonical
+                coding_seq = result["coding_sequence"]
                 pos_map = self._build_canonical_position_map(transcript_id)
 
             # Validate cache contents
             if not coding_seq:
                 raise ValueError(f"Empty coding sequence for {transcript_id}")
             if not pos_map:
-                if self.debug:
-                    print(
-                        f"        ├─ ⚠️  WARNING: Empty position map for {transcript_id}"
-                    )
-                # Create a minimal position map if completely empty
-                # This is a fallback that might not be perfect but prevents crashes
-                pos_map = {}
+                raise ValueError(f"Empty position map for {transcript_id}")
 
-            # Cache both
+            # Cache both with consistent coordinate system
             self.validation_cache.coding_sequences[transcript_id] = coding_seq
             self.validation_cache.position_maps[transcript_id] = pos_map
 
@@ -2719,9 +2695,7 @@ class AlternativeProteinGenerator:
         except Exception as e:
             if self.debug:
                 print(f"        └─ ❌ Cache building failed for {transcript_id}: {e}")
-            # Set empty cache to prevent repeated failures
-            self.validation_cache.coding_sequences[transcript_id] = ""
-            self.validation_cache.position_maps[transcript_id] = {}
+            # Don't cache empty values - let it fail cleanly
             raise
 
     def _build_canonical_position_map(self, transcript_id: str) -> Dict[int, int]:
@@ -2785,9 +2759,6 @@ class AlternativeProteinGenerator:
             for idx, (_, cds) in enumerate(cds_regions.iterrows()):
                 cds_start = int(cds["start"])
                 cds_end = int(cds["end"])
-
-                if self.debug and idx < 3:  # Show first few CDS regions
-                    print(f"        │  │  ├─ CDS {idx + 1}: {cds_start}-{cds_end}")
 
                 # Map positions from canonical start onward
                 if strand == "+":

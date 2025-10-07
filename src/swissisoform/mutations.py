@@ -2121,14 +2121,12 @@ class MutationHandler:
                     genome_handler=genome_handler,
                     alt_isoform_handler=alt_isoform_handler,
                     output_dir=output_dir,
-                    debug=False,
+                    debug=True,
                 )
 
             # Container for all transcript-feature analysis results
             pair_results = []
-            all_mutations_for_viz = (
-                pd.DataFrame()
-            )  # Collect all validated mutations for final visualization
+            all_mutations_for_viz = pd.DataFrame()
 
             # Process each transcript-feature pair individually
             print(
@@ -2190,10 +2188,6 @@ class MutationHandler:
                     continue
 
                 print(f"  │  │  ├─ Found {len(pair_mutations)} mutations")
-
-                # region_mutations = (
-                #     pair_mutations.copy()
-                # )  # Just copy, no additional filtering needed
 
                 # STEP 2: Filter to mutations in the specific alternative region
                 print(
@@ -2285,11 +2279,22 @@ class MutationHandler:
                         else None
                     )
 
+                    # Simple protein validation check
+                    if current_feature is not None:
+                        test_result = protein_generator.extract_alternative_protein(
+                            transcript_id, current_feature
+                        )
+                        if not test_result:
+                            print(
+                                f"  │  │  └─ 🛑 Protein extraction failed - skipping this pair"
+                            )
+                            continue
+
                     validated_mutations = await self._validate_mutation_consequences(
                         high_impact_mutations,
                         transcript_id,
                         protein_generator,
-                        current_feature,  # Pass feature!
+                        current_feature,
                     )
                     print(f"  │  │  ├─ Validation complete")
 
