@@ -31,6 +31,7 @@ import argparse
 import logging
 import warnings
 from typing import Optional, List
+from tqdm import tqdm
 
 # Suppress pandas FutureWarning
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -46,9 +47,6 @@ from swissisoform.utils import (
 )
 
 # Configure logger
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -83,20 +81,22 @@ async def main(
         Exception: If any gene fails processing, error is printed and gene is skipped.
     """
     start_time = datetime.now()
-    print(f"Starting mutation analysis at {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(
+        f"Starting mutation analysis at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    )
 
     # Create output directory
     output_dir_path = Path(output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)
 
     # Initialize handlers
-    print("\nInitializing components:")
-    print("  ├─ Loading genome data...")
+    logger.info("Initializing components...")
+    logger.info("  Loading genome data...")
     genome = GenomeHandler(genome_path, annotation_path)
-    print("  ├─ Loading alternative isoform data...")
+    logger.info("  Loading alternative isoform data...")
     alt_isoforms = AlternativeIsoform()
     alt_isoforms.load_bed(bed_path)
-    print("  └─ Initializing mutation handler...")
+    logger.info("  Initializing mutation handler...")
     mutation_handler = MutationHandler()
 
     # Set default values and create impact_types dict for compatibility
@@ -109,21 +109,20 @@ async def main(
     impact_types_dict = {sources[0]: impact_types}
 
     # Read gene list
-    print(f"\nReading gene list from {gene_list_path}")
+    logger.info(f"Reading gene list from {gene_list_path}")
     gene_names = parse_gene_list(gene_list_path)
 
     total_genes = len(gene_names)
-    print(f"\nStarting mutation analysis of {total_genes} genes")
-    print(f"Configuration:")
-    print(f"  ├─ Sources: {', '.join(sources)}")
-    print(f"  ├─ Impact types: {', '.join(impact_types)}")
-    print(f"  ├─ Visualizations: {visualize}")
+    logger.info(f"Starting mutation analysis of {total_genes} genes")
+    logger.info(f"Configuration:")
+    logger.info(f"  Sources: {', '.join(sources)}")
+    logger.info(f"  Impact types: {', '.join(impact_types)}")
+    logger.info(f"  Visualizations: {visualize}")
 
     # Process all genes
     results = []
 
-    for idx, gene_name in enumerate(gene_names, 1):
-        print(f"\nProcessing gene {idx}/{total_genes}: {gene_name}")
+    for gene_name in tqdm(gene_names, desc="Analyzing genes", unit="gene"):
         result = await mutation_handler.analyze_gene_mutations_comprehensive(
             gene_name=gene_name,
             genome_handler=genome,
@@ -148,8 +147,8 @@ async def main(
     results_df = pd.DataFrame(results)
     print_mutation_summary(results_df, output_dir)
 
-    print(
-        f"  └─ Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+    logger.info(
+        f"Analysis completed in {duration} at {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
     )
 
 
@@ -199,8 +198,29 @@ if __name__ == "__main__":
         default=1,
         help="Number of top alternative start sites to keep per type (Truncated/Extended) per transcript",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="count",
+        default=0,
+        help="Increase verbosity (use -v, -vv, or -vvv for more detail)",
+    )
 
     args = parser.parse_args()
+
+    # Configure logging based on verbosity
+    if args.verbose == 0:
+        log_level = logging.WARNING
+    elif args.verbose == 1:
+        log_level = logging.INFO
+    else:
+        log_level = logging.DEBUG
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     # Create output directory if it doesn't exist
     output_dir = Path(args.output_dir)

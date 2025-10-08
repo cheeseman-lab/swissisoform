@@ -3,12 +3,15 @@
 
 import pandas as pd
 import numpy as np
+import logging
 from pathlib import Path
 from collections import defaultdict
 import warnings
 
 # Suppress pandas warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
+
+logger = logging.getLogger(__name__)
 
 
 class SummaryAnalyzer:
@@ -68,13 +71,13 @@ class SummaryAnalyzer:
 
         if gene_file.exists():
             gene_results = pd.read_csv(gene_file)
-            print(
+            logger.info(
                 f"Loaded {len(gene_results)} gene-level mutation results for {dataset}"
             )
 
         if pair_file.exists():
             pair_results = pd.read_csv(pair_file)
-            print(
+            logger.info(
                 f"Loaded {len(pair_results)} transcript-truncation pair results for {dataset}"
             )
 
@@ -91,7 +94,7 @@ class SummaryAnalyzer:
 
         if pairs_file.exists():
             pairs_df = pd.read_csv(pairs_file)
-            print(f"Loaded {len(pairs_df)} protein sequence pairs for {dataset}")
+            logger.info(f"Loaded {len(pairs_df)} protein sequence pairs for {dataset}")
             # Index by sequence identifier
             for _, row in pairs_df.iterrows():
                 seq_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
@@ -99,7 +102,7 @@ class SummaryAnalyzer:
 
         if mutations_file.exists():
             mutations_df = pd.read_csv(mutations_file)
-            print(
+            logger.info(
                 f"Loaded {len(mutations_df)} protein sequence mutations for {dataset}"
             )
             # Index by sequence identifier
@@ -138,21 +141,21 @@ class SummaryAnalyzer:
                     df = df.rename(columns=column_mapping)
 
                     results[key] = df
-                    print(
+                    logger.info(
                         f"Loaded {len(df)} {key} localization predictions for {dataset}"
                     )
 
                 except Exception as e:
-                    print(f"Error loading {filename}: {e}")
+                    logger.error(f"Error loading {filename}: {e}")
                     continue
             else:
-                print(f"Missing {key} localization predictions for {dataset}")
+                logger.warning(f"Missing {key} localization predictions for {dataset}")
 
         return results
 
     def analyze_mutations(self, dataset, gene_results, pair_results):
         """Analyze mutation results for a specific dataset."""
-        print(f"\n=== ANALYZING MUTATIONS FOR {dataset.upper()} DATASET ===")
+        logger.info(f"\n=== ANALYZING MUTATIONS FOR {dataset.upper()} DATASET ===")
 
         summary_lines = []
         summary_lines.append(f"MUTATION ANALYSIS SUMMARY - {dataset.upper()} DATASET")
@@ -289,7 +292,7 @@ class SummaryAnalyzer:
         self, dataset, loc_results, protein_data, model_type
     ):
         """Analyze localization predictions for a specific dataset and model."""
-        print(
+        logger.info(
             f"\n=== ANALYZING LOCALIZATIONS FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ==="
         )
 
@@ -590,7 +593,7 @@ class SummaryAnalyzer:
         self, dataset, loc_results, protein_data, model_type
     ):
         """Create a detailed analysis of all localization predictions for a specific dataset and model."""
-        print(
+        logger.info(
             f"\n=== CREATING DETAILED LOCALIZATION ANALYSIS FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ==="
         )
 
@@ -706,7 +709,7 @@ class SummaryAnalyzer:
         self, dataset, loc_results, protein_data, model_type, pair_results=None
     ):
         """Create a gene-level summary showing prioritized targets for a specific model."""
-        print(
+        logger.info(
             f"\n=== CREATING GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ==="
         )
 
@@ -943,14 +946,14 @@ class SummaryAnalyzer:
 
     def analyze_dataset(self, dataset):
         """Analyze a complete dataset and save all results for both models when available."""
-        print(f"\nAnalyzing {dataset} dataset...")
+        logger.info(f"\nAnalyzing {dataset} dataset...")
 
         # Create summary directory for this dataset
         summary_dir = Path(f"../results/{dataset}/summary")
         summary_dir.mkdir(parents=True, exist_ok=True)
 
         # Load shared data for this dataset
-        print(f"\nLoading data for {dataset} dataset...")
+        logger.info(f"\nLoading data for {dataset} dataset...")
         gene_results, pair_results = self.load_mutation_results(dataset)
         protein_data = self.load_protein_sequences(dataset)
         loc_results = self.load_localization_results(dataset)
@@ -962,14 +965,14 @@ class SummaryAnalyzer:
         available_models = self.get_available_models(dataset)
 
         if not available_models:
-            print(f"No localization models available for {dataset} dataset")
+            logger.warning(f"No localization models available for {dataset} dataset")
             return
 
-        print(f"Available models for {dataset}: {', '.join(available_models)}")
+        logger.info(f"Available models for {dataset}: {', '.join(available_models)}")
 
         # Analyze each available model separately
         for model_type in available_models:
-            print(
+            logger.info(
                 f"\n=== ANALYZING {model_type.upper()} MODEL FOR {dataset.upper()} DATASET ==="
             )
 
@@ -997,14 +1000,14 @@ class SummaryAnalyzer:
             )
 
             # Save model-specific results
-            print(
+            logger.info(
                 f"\n=== SAVING {model_type.upper()} MODEL RESULTS FOR {dataset.upper()} DATASET ==="
             )
 
             # Save localization summary
             with open(model_summary_dir / "localization_summary.txt", "w") as f:
                 f.write("\n".join(localization_summary))
-            print(f"Saved {model_type} localization summary")
+            logger.info(f"Saved {model_type} localization summary")
 
             # Save genes with localization changes (only variants with changes)
             if localization_comparisons:
@@ -1013,7 +1016,7 @@ class SummaryAnalyzer:
                     model_summary_dir / "genes_with_localization_changes.csv",
                     index=False,
                 )
-                print(
+                logger.info(
                     f"Saved {len(localization_changes_df)} {model_type} localization changes"
                 )
             else:
@@ -1022,7 +1025,7 @@ class SummaryAnalyzer:
                     model_summary_dir / "genes_with_localization_changes.csv",
                     index=False,
                 )
-                print(f"No {model_type} localization changes found")
+                logger.info(f"No {model_type} localization changes found")
 
             # Save detailed localization analysis (all variants assessed)
             if not detailed_localization_df.empty:
@@ -1030,7 +1033,7 @@ class SummaryAnalyzer:
                     model_summary_dir / "detailed_localization_analysis.csv",
                     index=False,
                 )
-                print(
+                logger.info(
                     f"Saved detailed {model_type} analysis of {len(detailed_localization_df)} localization predictions"
                 )
             else:
@@ -1039,14 +1042,14 @@ class SummaryAnalyzer:
                     model_summary_dir / "detailed_localization_analysis.csv",
                     index=False,
                 )
-                print(f"No detailed {model_type} localization data available")
+                logger.info(f"No detailed {model_type} localization data available")
 
             # Save gene-level summary (prioritized targets)
             if not gene_summary_df.empty:
                 gene_summary_df.to_csv(
                     model_summary_dir / "gene_level_summary.csv", index=False
                 )
-                print(
+                logger.info(
                     f"Saved {model_type} gene-level summary for {len(gene_summary_df)} genes"
                 )
             else:
@@ -1054,21 +1057,21 @@ class SummaryAnalyzer:
                 pd.DataFrame().to_csv(
                     model_summary_dir / "gene_level_summary.csv", index=False
                 )
-                print(f"No {model_type} gene-level summary data available")
+                logger.info(f"No {model_type} gene-level summary data available")
 
             # Print brief summary of gene-level results for this model
             if not gene_summary_df.empty:
-                print(
+                logger.info(
                     f"\n=== GENE-LEVEL SUMMARY FOR {dataset.upper()} DATASET - {model_type.upper()} MODEL ==="
                 )
 
                 # Top genes by total variants with localization changes
                 top_genes = gene_summary_df.head(10)
-                print(
+                logger.info(
                     f"Top 10 genes by variants with localization changes ({model_type} model):"
                 )
                 for _, gene in top_genes.iterrows():
-                    print(
+                    logger.info(
                         f"  {gene['gene']}: {gene['total_variants_with_localization_change']} variants with loc changes "
                         f"({gene['truncating_isoforms_with_localization_change']} truncating, "
                         f"{gene['missense_variants_with_localization_change']} missense) | "
@@ -1086,22 +1089,24 @@ class SummaryAnalyzer:
                 total_genes_with_mutations = len(
                     gene_summary_df[gene_summary_df["total_mutations_all_types"] > 0]
                 )
-                print(
+                logger.info(
                     f"\n{model_type} model summary: {total_genes_with_changes} out of {total_genes} genes have variants with localization changes"
                 )
-                print(
+                logger.info(
                     f"{model_type} model summary: {total_genes_with_mutations} out of {total_genes} genes have clinical mutations in dataset"
                 )
 
         # Save mutation summary to main summary directory (shared across models)
         with open(summary_dir / "mutation_summary.txt", "w") as f:
             f.write("\n".join(mutation_summary))
-        print("Saved mutation summary (shared)")
+        logger.info("Saved mutation summary (shared)")
 
-        print(f"\nSummary analysis for {dataset} dataset completed!")
-        print(f"Results saved to: {summary_dir}")
+        logger.info(f"\nSummary analysis for {dataset} dataset completed!")
+        logger.info(f"Results saved to: {summary_dir}")
         for model_type in available_models:
-            print(f"  {model_type} model results: {summary_dir / model_type.lower()}/")
+            logger.info(
+                f"  {model_type} model results: {summary_dir / model_type.lower()}/"
+            )
 
     # Keep original methods for backward compatibility (they now use the first available model)
     def analyze_localizations(self, dataset, loc_results, protein_data):

@@ -25,6 +25,7 @@ import argparse
 import logging
 import warnings
 from typing import Optional, List, Dict, Set
+from tqdm import tqdm
 
 # Suppress pandas FutureWarning
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -39,9 +40,6 @@ from swissisoform.utils import (
 )
 
 # Configure logger
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -85,7 +83,7 @@ async def main(
         impact_types = ["missense variant", "nonsense variant", "frameshift variant"]
 
     start_time = datetime.now()
-    print(
+    logger.info(
         f"Starting fast protein sequence generation at {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
     )
 
@@ -94,18 +92,18 @@ async def main(
     output_dir_path.mkdir(parents=True, exist_ok=True)
 
     # Initialize handlers
-    print("\nInitializing components:")
-    print("  ├─ Loading genome data...")
+    logger.info("Initializing components...")
+    logger.info("  Loading genome data...")
     genome = GenomeHandler(genome_path, annotation_path)
 
-    print("  ├─ Loading alternative isoform data...")
+    logger.info("  Loading alternative isoform data...")
     alt_isoforms = AlternativeIsoform()
     alt_isoforms.load_bed(bed_path)
 
-    print("  ├─ Initializing mutation handler...")
+    logger.info("  Initializing mutation handler...")
     mutation_handler = MutationHandler()
 
-    print("  └─ Initializing protein generator...")
+    logger.info("  Initializing protein generator...")
     protein_generator = AlternativeProteinGenerator(
         genome_handler=genome,
         alt_isoform_handler=alt_isoforms,
@@ -115,28 +113,28 @@ async def main(
     )
 
     # Load pre-validated variant IDs
-    print(f"\nLoading pre-validated variant IDs from {mutations_file}...")
+    logger.info(f"Loading pre-validated variant IDs from {mutations_file}...")
     pre_validated_variants = load_pre_validated_variants(mutations_file)
 
     # Read gene list
-    print(f"\nReading gene list from {gene_list_path}")
+    logger.info(f"Reading gene list from {gene_list_path}")
     gene_names = parse_gene_list(gene_list_path)
 
     total_genes = len(gene_names)
-    print(f"\nStarting fast protein sequence generation for {total_genes} genes")
-    print(f"Configuration:")
-    print(f"  ├─ Fast mode: {fast_mode} (skip validation)")
-    print(f"  ├─ Pre-validated variants file: {mutations_file}")
-    print(f"  ├─ Sources: {', '.join(sources)}")
-    print(f"  ├─ Impact types: {', '.join(impact_types)}")
-    print(f"  ├─ Length range: {min_length}-{max_length} amino acids")
-    print(f"  └─ Output format: {output_format}")
+    logger.info(f"Starting fast protein sequence generation for {total_genes} genes")
+    logger.info(f"Configuration:")
+    logger.info(f"  Fast mode: {fast_mode} (skip validation)")
+    logger.info(f"  Pre-validated variants file: {mutations_file}")
+    logger.info(f"  Sources: {', '.join(sources)}")
+    logger.info(f"  Impact types: {', '.join(impact_types)}")
+    logger.info(f"  Length range: {min_length}-{max_length} amino acids")
+    logger.info(f"  Output format: {output_format}")
 
     # Generate datasets
-    print(f"\nGenerating datasets...")
+    logger.info("Generating datasets...")
 
     # Generate pairs dataset (canonical + alternative)
-    print(f"\n1. Generating canonical + alternative pairs dataset...")
+    logger.info("1. Generating canonical + alternative pairs dataset...")
     pairs_dataset = protein_generator.create_protein_sequence_dataset_pairs(
         gene_list=gene_names,
         output_format=output_format,
@@ -145,7 +143,7 @@ async def main(
     )
 
     # Generate mutations dataset using pre-validated variants
-    print(f"\n2. Generating mutations dataset with pre-validated variants...")
+    logger.info("2. Generating mutations dataset with pre-validated variants...")
     mutations_dataset = await protein_generator.create_protein_sequence_dataset_with_mutations(
         gene_list=gene_names,
         include_mutations=True,
@@ -162,13 +160,13 @@ async def main(
     end_time = datetime.now()
     duration = end_time - start_time
 
-    print(f"\n🎉 Fast protein sequence generation completed!")
-    print(f"  ├─ Duration: {duration}")
-    print(f"  ├─ Pairs dataset: {len(pairs_dataset)} sequences")
-    print(f"  ├─ Mutations dataset: {len(mutations_dataset)} sequences")
-    print(f"  └─ Performance: ⚡ Used pre-validated variants (skipped validation)")
+    logger.info(f"Fast protein sequence generation completed!")
+    logger.info(f"  Duration: {duration}")
+    logger.info(f"  Pairs dataset: {len(pairs_dataset)} sequences")
+    logger.info(f"  Mutations dataset: {len(mutations_dataset)} sequences")
+    logger.info(f"  Performance: Used pre-validated variants (skipped validation)")
 
-    print(f"\nGeneration completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Generation completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 
 if __name__ == "__main__":
@@ -231,8 +229,29 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable fast mode using pre-validated mutations",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="count",
+        default=0,
+        help="Increase verbosity (use -v, -vv, or -vvv for more detail)",
+    )
 
     args = parser.parse_args()
+
+    # Configure logging based on verbosity
+    if args.verbose == 0:
+        log_level = logging.WARNING
+    elif args.verbose == 1:
+        log_level = logging.INFO
+    else:
+        log_level = logging.DEBUG
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     # Create output directory if it doesn't exist
     output_dir = Path(args.output_dir)

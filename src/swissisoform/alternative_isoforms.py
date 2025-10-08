@@ -7,8 +7,11 @@ and supporting efficiency-based filtering.
 
 import pandas as pd
 import numpy as np
+import logging
 from typing import Optional, Dict, List, Tuple, Set
 from itertools import product
+
+logger = logging.getLogger(__name__)
 
 
 class AlternativeIsoform:
@@ -40,7 +43,7 @@ class AlternativeIsoform:
             message (str): Message to print.
         """
         if self.debug:
-            print(f"DEBUG: {message}")
+            logger.debug(message)
 
     def load_bed(self, file_path: str) -> None:
         """Load data from BED format file with flexible column support.
@@ -222,8 +225,8 @@ class AlternativeIsoform:
         multiple_annotated = []
         missing_annotated = []
 
-        print("Checking data quality...")
-        print("=" * 50)
+        logger.info("Checking data quality...")
+        logger.info("=" * 50)
 
         # Check each gene
         for gene_name in all_genes:
@@ -250,51 +253,51 @@ class AlternativeIsoform:
         missing_percent = (missing_annotated_count / total_genes) * 100
 
         # Print summary
-        print(f"Total genes: {total_genes}")
-        print(
+        logger.info(f"Total genes: {total_genes}")
+        logger.info(
             f"Genes with multiple Annotated starts: {multiple_annotated_count} ({multiple_percent:.1f}%)"
         )
-        print(
+        logger.info(
             f"Genes missing Annotated start: {missing_annotated_count} ({missing_percent:.1f}%)"
         )
-        print()
+        logger.info("")
 
         # Show examples of problematic genes
         if multiple_annotated:
-            print("GENES WITH MULTIPLE ANNOTATED STARTS:")
-            print("-" * 40)
+            logger.info("GENES WITH MULTIPLE ANNOTATED STARTS:")
+            logger.info("-" * 40)
             for gene_info in multiple_annotated[:10]:  # Show first 10
                 gene = gene_info["gene"]
                 positions = gene_info["positions"]
                 efficiencies = gene_info["efficiencies"]
-                print(f"{gene}: {len(positions)} Annotated starts")
+                logger.info(f"{gene}: {len(positions)} Annotated starts")
                 for pos, eff in zip(positions, efficiencies):
-                    print(f"  Position {pos}, efficiency {eff:.3f}")
+                    logger.info(f"  Position {pos}, efficiency {eff:.3f}")
 
             if len(multiple_annotated) > 10:
-                print(f"... and {len(multiple_annotated) - 10} more genes")
-            print()
+                logger.info(f"... and {len(multiple_annotated) - 10} more genes")
+            logger.info("")
 
         if missing_annotated:
-            print("GENES MISSING ANNOTATED START:")
-            print("-" * 32)
+            logger.info("GENES MISSING ANNOTATED START:")
+            logger.info("-" * 32)
             for gene in missing_annotated[:10]:  # Show first 10
                 gene_sites = self.start_sites[self.start_sites["gene_name"] == gene]
                 available_types = gene_sites["start_type"].unique()
-                print(f"{gene}: has {list(available_types)}")
+                logger.info(f"{gene}: has {list(available_types)}")
 
             if len(missing_annotated) > 10:
-                print(f"... and {len(missing_annotated) - 10} more genes")
-            print()
+                logger.info(f"... and {len(missing_annotated) - 10} more genes")
+            logger.info("")
 
         # Additional statistics
         start_type_counts = self.start_sites["start_type"].value_counts()
-        print("START TYPE DISTRIBUTION:")
-        print("-" * 23)
+        logger.info("START TYPE DISTRIBUTION:")
+        logger.info("-" * 23)
         for start_type, count in start_type_counts.items():
             percentage = (count / len(self.start_sites)) * 100
-            print(f"{start_type}: {count} ({percentage:.1f}%)")
-        print()
+            logger.info(f"{start_type}: {count} ({percentage:.1f}%)")
+        logger.info("")
 
         # Check for very distant Annotated starts within genes
         distant_annotated = []
@@ -314,14 +317,14 @@ class AlternativeIsoform:
                     )
 
         if distant_annotated:
-            print("GENES WITH VERY DISTANT ANNOTATED STARTS (>10kb):")
-            print("-" * 45)
+            logger.info("GENES WITH VERY DISTANT ANNOTATED STARTS (>10kb):")
+            logger.info("-" * 45)
             for gene_info in distant_annotated:
                 gene = gene_info["gene"]
                 distance = gene_info["distance"]
                 positions = gene_info["positions"]
-                print(f"{gene}: {distance:,} bp apart (positions: {positions})")
-            print()
+                logger.info(f"{gene}: {distance:,} bp apart (positions: {positions})")
+            logger.info("")
 
         # Return structured data
         return {

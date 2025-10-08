@@ -7,7 +7,10 @@ and GTF annotation files.
 
 from Bio import SeqIO
 import pandas as pd
+import logging
 from typing import Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class GenomeHandler:
@@ -236,10 +239,10 @@ class GenomeHandler:
 
             # Print filtering info if any transcripts were filtered
             if filtered_count < original_count:
-                print(
+                logger.info(
                     f"Note: Filtered out {original_count - filtered_count} transcript(s) on non-standard chromosomes"
                 )
-                print(
+                logger.info(
                     "Non-standard chromosomes:",
                     set(transcripts["chromosome"].unique()) - standard_chromosomes,
                 )
