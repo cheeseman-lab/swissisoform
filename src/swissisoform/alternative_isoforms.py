@@ -40,7 +40,7 @@ class AlternativeIsoform:
         """Print debug message if debug mode is enabled.
 
         Args:
-            message (str): Message to print.
+            message (str): Debug message to print.
         """
         if self.debug:
             logger.debug(message)

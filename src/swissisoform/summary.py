@@ -22,7 +22,14 @@ class SummaryAnalyzer:
         pass
 
     def dataset_has_data(self, dataset):
-        """Check if a dataset has any data available for analysis."""
+        """Check if a dataset has any data available for analysis.
+
+        Args:
+            dataset (str): Name of the dataset to check.
+
+        Returns:
+            bool: True if the dataset has mutation or localization data available.
+        """
         # Check for mutation data
         mutation_gene_file = Path(
             f"../results/{dataset}/mutations/gene_level_results.csv"
@@ -44,7 +51,14 @@ class SummaryAnalyzer:
         return has_mutation_data or has_localization_data
 
     def get_available_models(self, dataset):
-        """Determine which models have data available for a dataset."""
+        """Determine which models have data available for a dataset.
+
+        Args:
+            dataset (str): Name of the dataset to check.
+
+        Returns:
+            List[str]: List of available model names (e.g., ['Accurate', 'Fast']).
+        """
         loc_results = self.load_localization_results(dataset)
 
         available_models = []
@@ -60,7 +74,15 @@ class SummaryAnalyzer:
         return available_models
 
     def load_mutation_results(self, dataset):
-        """Load mutation analysis results for a dataset."""
+        """Load mutation analysis results for a dataset.
+
+        Args:
+            dataset (str): Name of the dataset to load results for.
+
+        Returns:
+            Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]: Tuple containing
+                gene-level results DataFrame and pair-level results DataFrame.
+        """
         base_path = Path(f"../results/{dataset}/mutations")
 
         gene_results = None
@@ -84,7 +106,14 @@ class SummaryAnalyzer:
         return gene_results, pair_results
 
     def load_protein_sequences(self, dataset):
-        """Load protein sequence data to get variant metadata."""
+        """Load protein sequence data to get variant metadata.
+
+        Args:
+            dataset (str): Name of the dataset to load protein sequences for.
+
+        Returns:
+            Dict[str, Dict]: Dictionary mapping sequence IDs to protein metadata.
+        """
         base_path = Path(f"../results/{dataset}/proteins")
 
         pairs_file = base_path / "protein_sequences_pairs.csv"
@@ -113,7 +142,15 @@ class SummaryAnalyzer:
         return protein_data
 
     def load_localization_results(self, dataset):
-        """Load localization prediction results for a dataset."""
+        """Load localization prediction results for a dataset.
+
+        Args:
+            dataset (str): Name of the dataset to load localization results for.
+
+        Returns:
+            Dict[str, pd.DataFrame]: Dictionary mapping result types to DataFrames
+                (e.g., 'pairs_accurate', 'pairs_fast', 'mutations_accurate', 'mutations_fast').
+        """
         base_path = Path(f"../results/{dataset}/localization")
 
         results = {}
@@ -154,7 +191,16 @@ class SummaryAnalyzer:
         return results
 
     def analyze_mutations(self, dataset, gene_results, pair_results):
-        """Analyze mutation results for a specific dataset."""
+        """Analyze mutation results for a specific dataset.
+
+        Args:
+            dataset (str): Name of the dataset being analyzed.
+            gene_results (Optional[pd.DataFrame]): Gene-level mutation results DataFrame.
+            pair_results (Optional[pd.DataFrame]): Transcript-truncation pair results DataFrame.
+
+        Returns:
+            List[str]: List of summary lines describing the mutation analysis.
+        """
         logger.info(f"\n=== ANALYZING MUTATIONS FOR {dataset.upper()} DATASET ===")
 
         summary_lines = []
@@ -240,7 +286,15 @@ class SummaryAnalyzer:
         return summary_lines
 
     def parse_sequence_id(self, seq_id):
-        """Parse a sequence ID to extract gene, transcript, and variant information."""
+        """Parse a sequence ID to extract gene, transcript, and variant information.
+
+        Args:
+            seq_id (str): Sequence identifier to parse.
+
+        Returns:
+            Tuple[Optional[str], Optional[str], Optional[str]]: Tuple containing gene name,
+                transcript ID, and variant identifier.
+        """
         if pd.isna(seq_id) or not seq_id:
             return None, None, None
 
@@ -263,7 +317,14 @@ class SummaryAnalyzer:
             return None, None, None
 
     def normalize_localization(self, localization):
-        """Normalize localization by sorting multiple locations."""
+        """Normalize localization by sorting multiple locations.
+
+        Args:
+            localization (str): Localization string (may contain multiple locations separated by '|').
+
+        Returns:
+            str: Normalized localization string with sorted location names.
+        """
         if pd.isna(localization) or not localization:
             return "Unknown"
 
@@ -278,7 +339,15 @@ class SummaryAnalyzer:
         return localization
 
     def are_localizations_different(self, loc1, loc2):
-        """Check if two localizations are different, accounting for multi-location predictions."""
+        """Check if two localizations are different, accounting for multi-location predictions.
+
+        Args:
+            loc1 (str): First localization string.
+            loc2 (str): Second localization string.
+
+        Returns:
+            bool: True if the normalizations are different.
+        """
         if pd.isna(loc1) or pd.isna(loc2):
             return True
 
@@ -945,7 +1014,11 @@ class SummaryAnalyzer:
         return gene_summary_df
 
     def analyze_dataset(self, dataset):
-        """Analyze a complete dataset and save all results for both models when available."""
+        """Analyze a complete dataset and save all results for both models when available.
+
+        Args:
+            dataset (str): Name of the dataset to analyze.
+        """
         logger.info(f"\nAnalyzing {dataset} dataset...")
 
         # Create summary directory for this dataset

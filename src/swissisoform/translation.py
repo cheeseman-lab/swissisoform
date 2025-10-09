@@ -13,10 +13,13 @@ import pandas as pd
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+import logging
 
 from swissisoform.genome import GenomeHandler
 from swissisoform.alternative_isoforms import AlternativeIsoform
 from swissisoform.mutations import MutationHandler
+
+logger = logging.getLogger(__name__)
 
 
 class AlternativeProteinGenerator:
@@ -52,13 +55,13 @@ class AlternativeProteinGenerator:
             """Generate a unique cache key for a variant.
 
             Args:
-                transcript_id: Identifier of the transcript.
-                pos: Genomic position of the variant.
-                ref: Reference allele.
-                alt: Alternate allele.
+                transcript_id (str): Identifier of the transcript.
+                pos (int): Genomic position of the variant.
+                ref (str): Reference allele.
+                alt (str): Alternate allele.
 
             Returns:
-                A string key encoding the transcript, position, and allele change.
+                str: A string key encoding the transcript, position, and allele change.
             """
             return f"{transcript_id}:{pos}:{ref}>{alt}"
 
@@ -66,13 +69,13 @@ class AlternativeProteinGenerator:
             """Retrieve a cached consequence for a variant, if available.
 
             Args:
-                transcript_id: Identifier of the transcript.
-                pos: Genomic position of the variant.
-                ref: Reference allele.
-                alt: Alternate allele.
+                transcript_id (str): Identifier of the transcript.
+                pos (int): Genomic position of the variant.
+                ref (str): Reference allele.
+                alt (str): Alternate allele.
 
             Returns:
-                The cached consequence string, or None if not cached.
+                Optional[str]: The cached consequence string, or None if not cached.
             """
             return self.results.get(self.get_key(transcript_id, pos, ref, alt))
 
@@ -82,11 +85,11 @@ class AlternativeProteinGenerator:
             """Store the consequence of a variant in the cache.
 
             Args:
-                transcript_id: Identifier of the transcript.
-                pos: Genomic position of the variant.
-                ref: Reference allele.
-                alt: Alternate allele.
-                consequence: Predicted consequence to cache.
+                transcript_id (str): Identifier of the transcript.
+                pos (int): Genomic position of the variant.
+                ref (str): Reference allele.
+                alt (str): Alternate allele.
+                consequence (str): Predicted consequence to cache.
             """
             self.results[self.get_key(transcript_id, pos, ref, alt)] = consequence
 
@@ -105,10 +108,7 @@ class AlternativeProteinGenerator:
             alt_isoform_handler (AlternativeIsoform): Initialized AlternativeIsoform instance.
             output_dir (str): Directory to save output files.
             mutation_handler (Optional[MutationHandler]): Optional MutationHandler for mutation integration.
-            debug (bool): Enable debug mode for detailed output.
-
-        Returns:
-            None
+            debug (bool): Enable debug mode for detailed output. Defaults to False.
         """
         self.genome = genome_handler
         self.alt_isoforms = alt_isoform_handler
@@ -122,13 +122,10 @@ class AlternativeProteinGenerator:
         """Print debug message if debug mode is enabled.
 
         Args:
-            message (str): Message to print.
-
-        Returns:
-            None
+            message (str): Debug message to print.
         """
         if self.debug:
-            print(f"DEBUG: {message}")
+            logger.debug(f"{message}")
 
     def extract_canonical_protein(self, transcript_id: str) -> Optional[Dict]:
         """Extract canonical (full) protein sequence using start/stop codon annotations.
@@ -267,7 +264,15 @@ class AlternativeProteinGenerator:
     def _extract_extension_protein(
         self, transcript_id: str, extension_feature: pd.Series
     ) -> Optional[Dict]:
-        """Extract full extended protein sequence with improved region detection."""
+        """Extract full extended protein sequence with improved region detection.
+
+        Args:
+            transcript_id (str): Transcript ID to process.
+            extension_feature (pd.Series): Series containing extension region information.
+
+        Returns:
+            Optional[Dict]: Dictionary with coding_sequence, protein, and metadata, or None if failed.
+        """
         # Get features and transcript data
         features = self.genome.get_transcript_features(transcript_id)
         transcript_data = self.genome.get_transcript_features_with_sequence(
@@ -840,16 +845,16 @@ class AlternativeProteinGenerator:
     ) -> Optional[Dict]:
         """Apply mutation to canonical or extension sequence with improved multi-base handling."""
         if self.debug:
-            print(
-                f"            ├─ Applying mutation {ref_allele}>{alt_allele} at position {genomic_pos} to {sequence_type} sequence"
+            logger.debug(
+                f"Applying mutation {ref_allele}>{alt_allele} at position {genomic_pos} to {sequence_type} sequence"
             )
 
         # Get the base sequence and metadata
         if sequence_type == "extension":
             if extension_feature is None:
                 if self.debug:
-                    print(
-                        "            └─ ❌ Extension feature required for extension mutations"
+                    logger.debug(
+                        "❌ Error: Extension feature required for extension mutations"
                     )
                 return None
             base_result = self.extract_alternative_protein(
@@ -857,13 +862,13 @@ class AlternativeProteinGenerator:
             )
             if not base_result:
                 if self.debug:
-                    print("            └─ ❌ Could not extract base extension protein")
+                    logger.debug("[DEBUG_EMOJI] ❌ Error: Could not extract base extension protein")
                 return None
         else:
             base_result = self.extract_canonical_protein(transcript_id)
             if not base_result:
                 if self.debug:
-                    print("            └─ ❌ Could not extract base canonical protein")
+                    logger.debug("[DEBUG_EMOJI] ❌ Error: Could not extract base canonical protein")
                 return None
 
         original_coding_sequence = base_result["coding_sequence"]
@@ -871,10 +876,10 @@ class AlternativeProteinGenerator:
         strand = base_result["strand"]
 
         if self.debug:
-            print(
-                f"            ├─ Base sequence: {len(original_coding_sequence)} bp CDS, {len(original_protein)} AA"
+            logger.debug(
+                f"Base sequence: {len(original_coding_sequence)}bp CDS, {len(original_protein)}AA"
             )
-            print(f"            ├─ Transcript strand: {strand}")
+            logger.debug(f"Transcript strand: {strand}")
 
         # Get transcript data for validation and mapping
         transcript_data = self.genome.get_transcript_features_with_sequence(
@@ -882,7 +887,7 @@ class AlternativeProteinGenerator:
         )
         if not transcript_data:
             if self.debug:
-                print("            └─ ❌ No transcript data available")
+                logger.debug("[DEBUG_EMOJI] ❌ No transcript data available")
             return None
 
         chromosome = transcript_data["sequence"]["chromosome"]
@@ -896,22 +901,22 @@ class AlternativeProteinGenerator:
                 actual_genomic_forward = str(actual_genomic_forward).upper()
 
                 if self.debug:
-                    print(
-                        f"            ├─ Genomic sequence (+ strand): {actual_genomic_forward}"
+                    logger.debug(
+                        f"Genomic sequence (+ strand): {actual_genomic_forward}"
                     )
-                    print(f"            ├─ Expected reference: {ref_allele}")
+                    logger.debug(f"Expected reference: {ref_allele}")
 
                 if actual_genomic_forward != ref_allele.upper():
                     if self.debug:
-                        print(
-                            f"            └─ ❌ Reference allele mismatch: expected {ref_allele}, found {actual_genomic_forward}"
+                        logger.debug(
+                            f"❌ Genomic mismatch: Expected {ref_allele}, found {actual_genomic_forward} at chr{chromosome}:{genomic_pos}"
                         )
                     return None
 
             except Exception as e:
                 if self.debug:
-                    print(
-                        f"            └─ ❌ Could not get sequence at position {genomic_pos}: {e}"
+                    logger.debug(
+                        f"❌ Error: Could not retrieve genomic sequence at {genomic_pos}: {e}"
                     )
                 return None
 
@@ -935,14 +940,25 @@ class AlternativeProteinGenerator:
             )
 
         if self.debug:
-            print(
-                f"            ├─ Transcript alleles: {transcript_ref}>{transcript_alt}"
-            )
+            logger.debug(f"Transcript alleles: {transcript_ref}>{transcript_alt}")
 
         # Map genomic position to coding position
+        # FIX: For negative strand multi-bp mutations, we need to map the LAST genomic position
+        # because on negative strand, higher genomic positions come FIRST in the transcript
+        ref_len = len(ref_allele)
+        if strand == "-" and ref_len > 1:
+            # Use the last position of the mutation (highest genomic coordinate)
+            map_position = genomic_pos + ref_len - 1
+            if self.debug:
+                logger.debug(
+                    f"Negative strand multi-bp: mapping from last position {map_position} (not {genomic_pos})"
+                )
+        else:
+            map_position = genomic_pos
+
         mutation_coding_pos = self._map_genomic_to_coding_position(
             transcript_id,
-            genomic_pos,
+            map_position,
             original_coding_sequence,
             sequence_type,
             extension_feature,
@@ -950,20 +966,34 @@ class AlternativeProteinGenerator:
 
         if mutation_coding_pos is None:
             if self.debug:
-                print(
-                    f"            └─ ❌ Could not map genomic position {genomic_pos} to coding sequence"
+                # Get all CDS and UTR regions for IGV debugging
+                features = self.genome.get_transcript_features(transcript_id)
+                cds_features = features[features["feature_type"] == "CDS"].sort_values("start")
+                utr_features = features[features["feature_type"].str.contains("UTR", na=False)].sort_values("start")
+
+                logger.debug(
+                    f"🚫 Intronic variant: Position {map_position} not in coding sequence"
                 )
+                logger.debug(f"   CDS regions ({len(cds_features)} total):")
+                for _, cds in cds_features.iterrows():
+                    logger.debug(f"     {chromosome}:{cds['start']}-{cds['end']}")
+
+                if not utr_features.empty:
+                    logger.debug(f"   UTR regions ({len(utr_features)} total):")
+                    for _, utr in utr_features.iterrows():
+                        utr_type = utr['feature_type']
+                        logger.debug(f"     {chromosome}:{utr['start']}-{utr['end']} ({utr_type})")
             return None
 
         if self.debug:
-            print(f"            ├─ Mapped to coding position: {mutation_coding_pos}")
+            logger.debug(f"Mapped to coding position: {mutation_coding_pos}")
 
-        # FIX: For negative strand multi-base mutations, we need to be more careful about validation
+        # Validate bounds
         ref_len = len(transcript_ref)
         if mutation_coding_pos + ref_len > len(original_coding_sequence):
             if self.debug:
-                print(
-                    f"            └─ ❌ Coding position {mutation_coding_pos}+{ref_len} beyond sequence length {len(original_coding_sequence)}"
+                logger.debug(
+                    f"❌ Out of bounds: Coding position {mutation_coding_pos}+{ref_len} exceeds sequence length {len(original_coding_sequence)}"
                 )
             return None
 
@@ -975,74 +1005,22 @@ class AlternativeProteinGenerator:
 
             if current_bases != transcript_ref:
                 if self.debug:
-                    print(
-                        f"            ├─ ❌ Transcript reference mismatch at coding pos {mutation_coding_pos}"
+                    logger.debug(
+                        f"❌ Transcript mismatch at coding pos {mutation_coding_pos}"
                     )
-                    print(
-                        f"            ├─     Expected: {transcript_ref} (from genomic {ref_allele})"
+                    logger.debug(
+                        f"   Expected: {transcript_ref} (from genomic {ref_allele})"
                     )
-                    print(f"            ├─     Found: {current_bases}")
-                    print(f"            ├─     Strand: {strand}")
-
-                    # FIX: For multi-base negative strand, try adjusting position by 1
-                    if (
-                        strand == "-"
-                        and len(ref_allele) > 1
-                        and mutation_coding_pos > 0
-                    ):
-                        # Try position - 1
-                        alt_pos = mutation_coding_pos - 1
-                        if alt_pos + ref_len <= len(original_coding_sequence):
-                            alt_current_bases = original_coding_sequence[
-                                alt_pos : alt_pos + ref_len
-                            ].upper()
-                            if alt_current_bases == transcript_ref:
-                                if self.debug:
-                                    print(
-                                        f"            ├─ ✅ Found match at adjusted position {alt_pos}"
-                                    )
-                                mutation_coding_pos = alt_pos
-                                current_bases = alt_current_bases
-                            else:
-                                if self.debug:
-                                    print(
-                                        f"            ├─     Tried pos-1 ({alt_pos}): {alt_current_bases}"
-                                    )
-
-                    # If still no match, try other positions within a small window
-                    if current_bases != transcript_ref and len(ref_allele) > 1:
-                        for offset in [-2, -1, 1, 2]:
-                            test_pos = mutation_coding_pos + offset
-                            if 0 <= test_pos and test_pos + ref_len <= len(
-                                original_coding_sequence
-                            ):
-                                test_bases = original_coding_sequence[
-                                    test_pos : test_pos + ref_len
-                                ].upper()
-                                if test_bases == transcript_ref:
-                                    if self.debug:
-                                        print(
-                                            f"            ├─ ✅ Found match at offset {offset} (position {test_pos})"
-                                        )
-                                    mutation_coding_pos = test_pos
-                                    current_bases = test_bases
-                                    break
-                                elif self.debug:
-                                    print(
-                                        f"            ├─     Tried offset {offset} (pos {test_pos}): {test_bases}"
-                                    )
-
-                    # If we still don't have a match, fail
-                    if current_bases != transcript_ref:
-                        if self.debug:
-                            print(
-                                f"            └─ ❌ Could not find matching sequence after position adjustments"
-                            )
-                        return None
+                    logger.debug(f"   Found:    {current_bases}")
+                    logger.debug(f"   Strand:   {strand}")
+                    logger.debug(
+                        f"   This indicates a potential annotation/assembly mismatch"
+                    )
+                return None
 
             if self.debug:
-                print(
-                    f"            ├─ Coding sequence reference validated: {current_bases} == {transcript_ref}"
+                logger.debug(
+                    f"Reference validated: {current_bases} == {transcript_ref}"
                 )
 
         # Apply mutation in transcript orientation
@@ -1053,8 +1031,8 @@ class AlternativeProteinGenerator:
         )
 
         if self.debug:
-            print(
-                f"            ├─ Applied mutation at coding pos {mutation_coding_pos}: {current_bases}>{transcript_alt}"
+            logger.debug(
+                f"Applied mutation at coding pos {mutation_coding_pos}: {current_bases}>{transcript_alt}"
             )
 
         # Translate mutated sequence
@@ -1069,15 +1047,15 @@ class AlternativeProteinGenerator:
         # Check if protein actually changed
         if mutated_protein == original_protein:
             if self.debug:
-                print(f"            └─ Synonymous mutation - protein unchanged")
+                logger.debug(f"Synonymous mutation - protein unchanged")
             return None
 
         # Calculate amino acid difference
         aa_change = self._calculate_aa_difference(original_protein, mutated_protein)
 
         if self.debug:
-            print(f"            ├─ Protein changed! AA change: {aa_change}")
-            print(f"            └─ ✅ Mutation application successful")
+            logger.debug(f"Protein changed! AA change: {aa_change}")
+            logger.debug(f"Mutation application successful")
 
         return {
             "coding_sequence": mutated_coding_sequence,
@@ -1155,8 +1133,8 @@ class AlternativeProteinGenerator:
             else:
                 region_type = "CDS"
 
-            print(
-                f"            ├─ Position {genomic_pos} mapped to coding pos {coding_pos} ({region_type})"
+            logger.debug(
+                f"Position mapping: genomic {genomic_pos} → coding {coding_pos} ({region_type})"
             )
 
             # Show sequence context
@@ -1170,7 +1148,7 @@ class AlternativeProteinGenerator:
                     + f"[{context[marker_pos]}]"
                     + context[marker_pos + 1 :]
                 )
-                print(f"            ├─ Coding sequence context: {context_with_marker}")
+                logger.debug(f"Coding sequence context: {context_with_marker}")
 
         return coding_pos
 
@@ -1241,14 +1219,12 @@ class AlternativeProteinGenerator:
                         final_pos = extension_offset + coding_pos + offset_in_cds
 
                         if self.debug:
-                            print(
-                                f"            ├─ Mapped to coding position: {final_pos}"
-                            )
+                            logger.debug(f"Mapped to coding position: {final_pos}")
                             if final_pos < len(coding_sequence):
                                 context = coding_sequence[
                                     max(0, final_pos - 5) : final_pos + 6
                                 ]
-                                print(f"            ├─ Sequence context: {context}")
+                                logger.debug(f"Sequence context: {context}")
 
                         return final_pos
                 else:
@@ -1260,14 +1236,12 @@ class AlternativeProteinGenerator:
                         final_pos = extension_offset + coding_pos + offset_in_cds
 
                         if self.debug:
-                            print(
-                                f"            ├─ Mapped to coding position: {final_pos}"
-                            )
+                            logger.debug(f"Mapped to coding position: {final_pos}")
                             if final_pos < len(coding_sequence):
                                 context = coding_sequence[
                                     max(0, final_pos - 5) : final_pos + 6
                                 ]
-                                print(f"            ├─ Sequence context: {context}")
+                                logger.debug(f"Sequence context: {context}")
 
                         return final_pos
 
@@ -1457,7 +1431,7 @@ class AlternativeProteinGenerator:
                     else None,
                 )
 
-                # NEW: Filter to only pre-validated variants if provided
+                # Filter to only pre-validated variants if provided
                 if (
                     not mutations.empty
                     and pre_validated_variants
@@ -1480,7 +1454,7 @@ class AlternativeProteinGenerator:
                     for _, mutation in mutations.iterrows():
                         try:
                             variant_id = mutation.get("variant_id", "unknown")
-                            print(f"            ├─ Processing variant: {variant_id}")
+                            logger.debug(f"Processing variant: {variant_id}")
                             # Extract mutation data
                             genomic_pos = int(mutation["position"])
                             ref_allele = str(mutation["reference"]).upper()
@@ -1527,7 +1501,7 @@ class AlternativeProteinGenerator:
                                         "hgvsc": hgvsc,
                                         "hgvsp": hgvsp,
                                         "impact": impact,
-                                        # NEW: Use original impact if skipping validation
+                                        # Use original impact if skipping validation
                                         "impact_validated": impact
                                         if skip_validation
                                         else mutation_result_data.get(
@@ -1538,7 +1512,7 @@ class AlternativeProteinGenerator:
                                         "calculated_aa_change": mutation_result_data.get(
                                             "aa_change", ""
                                         ),
-                                        # NEW: Add validation status
+                                        # Add validation status
                                         "validation_skipped": skip_validation,
                                     },
                                 }
@@ -1643,7 +1617,7 @@ class AlternativeProteinGenerator:
             return result
 
         except Exception as e:
-            print(f"Error generating sequences for gene {gene_name}: {str(e)}")
+            logger.error(f"Error generating sequences for gene {gene_name}: {str(e)}")
             return result
 
     async def create_protein_sequence_dataset_with_mutations(
@@ -2003,11 +1977,11 @@ class AlternativeProteinGenerator:
                 output_file = self.output_dir / "protein_sequences_pairs.csv"
                 dataset.to_csv(output_file, index=False)
 
-        print(
+        logger.info(
             f"Generated {total_pairs} canonical-alternative pairs from {successful_genes}/{len(gene_list)} genes"
         )
         if skipped_genes:
-            print(
+            logger.info(
                 f"Skipped {len(skipped_genes)} genes due to missing data or constraints"
             )
 
@@ -2036,15 +2010,13 @@ class AlternativeProteinGenerator:
             str: Predicted consequence type.
         """
         if self.debug:
-            print(
-                f"        ├─ Predicting consequence for {ref_allele}>{alt_allele} at {genomic_pos}"
+            logger.debug(
+                f"Predicting consequence for {ref_allele}>{alt_allele}at {genomic_pos}"
             )
             if current_feature is not None:
                 feature_type = current_feature.get("region_type", "unknown")
                 feature_range = f"{current_feature.get('start', '?')}-{current_feature.get('end', '?')}"
-                print(
-                    f"        │  ├─ Context: {feature_type} feature at {feature_range}"
-                )
+                logger.debug(f"Context: {feature_type} feature at {feature_range}")
 
         try:
             # Clean up alleles
@@ -2061,8 +2033,8 @@ class AlternativeProteinGenerator:
 
             if not ref_clean or not alt_clean:
                 if self.debug:
-                    print(
-                        f"        └─ Skipping mutation: empty alleles (ref='{ref_clean}', alt='{alt_clean}')"
+                    logger.debug(
+                        f"Skipping mutation: empty alleles (ref='{ref_clean}', alt='{alt_clean}')"
                     )
                 return "unknown"
 
@@ -2071,10 +2043,10 @@ class AlternativeProteinGenerator:
             length_change = alt_len - ref_len
 
             if self.debug:
-                print(
-                    f"        │  ├─ Allele lengths: ref={ref_len} ({ref_clean}), alt={alt_len} ({alt_clean})"
+                logger.debug(
+                    f"Allele lengths: ref={ref_len}({ref_clean}), alt={alt_len}({alt_clean})"
                 )
-                print(f"        │  ├─ Length change: {length_change}")
+                logger.debug(f"Length change: {length_change}")
 
             # Simple length-based classification for indels
             if length_change != 0:
@@ -2084,21 +2056,21 @@ class AlternativeProteinGenerator:
                         "inframe insertion" if length_change > 0 else "inframe deletion"
                     )
                     if self.debug:
-                        print(
-                            f"        │  └─ In-frame indel: {consequence} ({length_change} bp change)"
+                        logger.debug(
+                            f"In-frame indel: {consequence}({length_change}bp change)"
                         )
                     return consequence
                 else:
                     # Frameshift - length change not divisible by 3
                     if self.debug:
-                        print(
-                            f"        │  └─ Frameshift variant ({length_change} bp change, not divisible by 3)"
+                        logger.debug(
+                            f"Frameshift variant ({length_change}bp change, not divisible by 3)"
                         )
                     return "frameshift variant"
 
             # Same length variants - use protein translation for detailed analysis
             if self.debug:
-                print(f"        │  ├─ Same length variant - using protein translation")
+                logger.debug(f"Same length variant - using protein translation")
 
             # Determine sequence type based on current feature context
             if (
@@ -2106,16 +2078,14 @@ class AlternativeProteinGenerator:
                 and current_feature.get("region_type") == "extension"
             ):
                 if self.debug:
-                    print(f"        │  ├─ Using EXTENSION sequence")
+                    logger.debug(f"Using EXTENSION sequence")
 
                 base_result = self.extract_alternative_protein(
                     transcript_id, current_feature
                 )
                 if not base_result:
                     if self.debug:
-                        print(
-                            f"        │  └─ ❌ Could not extract base extension protein"
-                        )
+                        logger.debug(f"[DEBUG_EMOJI] ❌ Could not extract base extension protein")
                     return "unknown"
 
                 mutated_result = self._apply_mutation_to_sequence(
@@ -2129,12 +2099,12 @@ class AlternativeProteinGenerator:
 
             else:
                 if self.debug:
-                    print(f"        │  ├─ Using CANONICAL sequence")
+                    logger.debug(f"Using CANONICAL sequence")
 
                 base_result = self.extract_canonical_protein(transcript_id)
                 if not base_result:
                     if self.debug:
-                        print(f"        │  └─ ❌ Could not extract canonical protein")
+                        logger.debug(f"[DEBUG_EMOJI] ❌ Could not extract canonical protein")
                     return "unknown"
 
                 mutated_result = self._apply_mutation_to_sequence(
@@ -2142,16 +2112,16 @@ class AlternativeProteinGenerator:
                 )
 
             if self.debug:
-                print(f"        │  ├─ Base protein: {len(base_result['protein'])} AA")
+                logger.debug(f"Base protein: {len(base_result['protein'])} AA")
                 if mutated_result:
-                    print(
-                        f"        │  ├─ Mutated protein: {len(mutated_result['protein'])} AA"
+                    logger.debug(
+                        f"Mutated protein: {len(mutated_result['protein'])} AA"
                     )
 
             # Classify the change
             if not mutated_result:
                 if self.debug:
-                    print(f"        │  └─ No protein change detected - synonymous")
+                    logger.debug(f"No protein change detected - synonymous")
                 return "synonymous variant"
 
             consequence = self.classify_protein_change(
@@ -2162,16 +2132,16 @@ class AlternativeProteinGenerator:
             )
 
             if self.debug:
-                print(f"        │  └─ Protein-based classification: {consequence}")
+                logger.debug(f"Protein-based classification: {consequence}")
 
             return consequence
 
         except Exception as e:
             if self.debug:
-                print(f"        │  └─ ❌ Exception during prediction: {str(e)}")
+                logger.debug(f"[DEBUG_EMOJI] ❌ Exception during prediction: {str(e)}")
                 import traceback
 
-                print(f"        │     └─ Traceback: {traceback.format_exc()}")
+                logger.debug(f"Traceback: {traceback.format_exc()}")
 
             return "unknown"
 
@@ -2190,18 +2160,16 @@ class AlternativeProteinGenerator:
             str: Consequence type (e.g., 'synonymous variant', 'missense variant', 'nonsense variant', 'frameshift variant', 'inframe deletion', 'inframe insertion').
         """
         if self.debug:
-            print(f"          ├─ Classifying protein change:")
-            print(f"          │  ├─ Original protein: {len(orig_protein)} AA")
-            print(f"          │  ├─ Mutated protein: {len(mut_protein)} AA")
-            print(f"          │  ├─ Original CDS: {len(orig_cds)} bp")
-            print(f"          │  └─ Mutated CDS: {len(mut_cds)} bp")
+            logger.debug(f"Classifying protein change:")
+            logger.debug(f"Original protein: {len(orig_protein)} AA")
+            logger.debug(f"Mutated protein: {len(mut_protein)} AA")
+            logger.debug(f"Original CDS: {len(orig_cds)} bp")
+            logger.debug(f"Mutated CDS: {len(mut_cds)} bp")
 
         # No protein change
         if mut_protein == orig_protein:
             if self.debug:
-                print(
-                    f"          └─ Classification: synonymous variant (no protein change)"
-                )
+                logger.debug(f"Classification: synonymous variant (no protein change)")
             return "synonymous variant"
 
         # Check for premature stop codon
@@ -2209,8 +2177,8 @@ class AlternativeProteinGenerator:
             # Find position of stop codon
             stop_pos = mut_protein.find("*")
             if self.debug:
-                print(
-                    f"          └─ Classification: nonsense variant (stop codon at position {stop_pos + 1})"
+                logger.debug(
+                    f"Classification: nonsense variant (stop codon at position {stop_pos + 1})"
                 )
             return "nonsense variant"
 
@@ -2220,27 +2188,27 @@ class AlternativeProteinGenerator:
             protein_length_change = len(mut_protein) - len(orig_protein)
 
             if self.debug:
-                print(f"          │  ├─ Length change detected:")
-                print(f"          │  │  ├─ CDS change: {cds_length_change} bp")
-                print(f"          │  │  └─ Protein change: {protein_length_change} AA")
+                logger.debug(f"Length change detected:")
+                logger.debug(f"CDS change: {cds_length_change} bp")
+                logger.debug(f"Protein change: {protein_length_change} AA")
 
             if cds_length_change % 3 != 0:
                 if self.debug:
-                    print(
-                        f"          └─ Classification: frameshift variant (CDS change not divisible by 3)"
+                    logger.debug(
+                        f"Classification: frameshift variant (CDS change not divisible by 3)"
                     )
                 return "frameshift variant"
             else:
                 if len(mut_protein) < len(orig_protein):
                     if self.debug:
-                        print(
-                            f"          └─ Classification: inframe deletion ({-protein_length_change} AA deleted)"
+                        logger.debug(
+                            f"Classification: inframe deletion ({-protein_length_change}AA deleted)"
                         )
                     return "inframe deletion"
                 else:
                     if self.debug:
-                        print(
-                            f"          └─ Classification: inframe insertion ({protein_length_change} AA inserted)"
+                        logger.debug(
+                            f"Classification: inframe insertion ({protein_length_change}AA inserted)"
                         )
                     return "inframe insertion"
 
@@ -2252,17 +2220,114 @@ class AlternativeProteinGenerator:
                 if orig_aa != mut_aa:
                     differences_found += 1
                     if differences_found <= 3:  # Show first 3 differences
-                        print(
-                            f"          │  ├─ AA change at position {i + 1}: {orig_aa}>{mut_aa}"
+                        logger.debug(
+                            f"AA change at position {i + 1}: {orig_aa}>{mut_aa}"
                         )
                     elif differences_found == 4:
-                        print(f"          │  ├─ ... (more differences)")
+                        logger.debug(f"... (more differences)")
                         break
 
-            print(f"          │  ├─ Total differences: {differences_found}")
-            print(f"          └─ Classification: missense variant")
+            logger.debug(f"Total differences: {differences_found}")
+            logger.debug(f"Classification: missense variant")
 
         return "missense variant"
+
+    def _is_position_in_transcript_regions(
+        self,
+        transcript_id: str,
+        genomic_pos: int,
+        current_feature: Optional[pd.Series] = None,
+        ref_allele: str = "",
+    ) -> bool:
+        """Check if a genomic position (and all positions spanned by variant) fall within coding or UTR regions.
+
+        For multi-bp variants, checks ALL positions spanned by the reference allele.
+        This prevents boundary-spanning variants from being incorrectly validated.
+
+        This is critical for filtering out intronic variants before classification.
+        Includes detailed debug logging showing all CDS/UTR regions for IGV navigation.
+
+        Args:
+            transcript_id: Transcript ID
+            genomic_pos: Genomic position (start) to check
+            current_feature: Optional feature context (for extensions)
+            ref_allele: Reference allele (to determine span length)
+
+        Returns:
+            bool: True if ALL positions are in CDS or UTR, False if any position is intronic
+        """
+        try:
+            features = self.genome.get_transcript_features(transcript_id)
+
+            # Get CDS and UTR regions
+            cds_regions = features[features["feature_type"] == "CDS"]
+            utr_regions = features[features["feature_type"].str.contains("UTR", na=False)]
+
+            # Determine positions to check based on ref_allele length
+            ref_len = len(ref_allele) if ref_allele else 1
+            positions_to_check = [genomic_pos + i for i in range(ref_len)]
+
+            if self.debug and ref_len > 1:
+                logger.debug(f"Multi-bp variant: checking positions {genomic_pos} to {genomic_pos + ref_len - 1}")
+
+            # Check if ALL positions are in CDS or UTR regions
+            for pos in positions_to_check:
+                position_valid = False
+
+                # Check CDS regions
+                for _, cds in cds_regions.iterrows():
+                    if int(cds["start"]) <= pos <= int(cds["end"]):
+                        position_valid = True
+                        if self.debug and len(positions_to_check) == 1:
+                            logger.debug(f"✓ Position {pos} is in CDS region {cds['start']}-{cds['end']}")
+                        break
+
+                # If not in CDS, check UTR regions
+                if not position_valid:
+                    for _, utr in utr_regions.iterrows():
+                        if int(utr["start"]) <= pos <= int(utr["end"]):
+                            position_valid = True
+                            if self.debug and len(positions_to_check) == 1:
+                                utr_type = utr['feature_type']
+                                logger.debug(f"✓ Position {pos} is in {utr_type} region {utr['start']}-{utr['end']}")
+                            break
+
+                # If ANY position is not in CDS/UTR, the variant is intronic or boundary-spanning
+                if not position_valid:
+                    if self.debug:
+                        # Get transcript data for chromosome info
+                        transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
+                        chrom = transcript_data["sequence"]["chromosome"] if transcript_data else "?"
+
+                        if ref_len > 1:
+                            logger.debug(
+                                f"🚫 Boundary-spanning variant: Position {pos} (part of {genomic_pos}-{genomic_pos + ref_len - 1}) not in coding/UTR"
+                            )
+                        else:
+                            logger.debug(
+                                f"🚫 Intronic variant: Position {pos} not in coding/UTR sequence"
+                            )
+                        logger.debug(f"   CDS regions ({len(cds_regions)} total):")
+                        for _, cds in cds_regions.sort_values("start").iterrows():
+                            logger.debug(f"     {chrom}:{cds['start']}-{cds['end']}")
+
+                        if not utr_regions.empty:
+                            logger.debug(f"   UTR regions ({len(utr_regions)} total):")
+                            for _, utr in utr_regions.sort_values("start").iterrows():
+                                utr_type = utr['feature_type']
+                                logger.debug(f"     {chrom}:{utr['start']}-{utr['end']} ({utr_type})")
+                    return False
+
+            # All positions are valid
+            if self.debug and ref_len > 1:
+                logger.debug(f"✓ All {ref_len} positions are in coding/UTR regions")
+            return True
+
+        except Exception as e:
+            if self.debug:
+                logger.debug(f"Error checking position in regions: {e}")
+            # Conservative: if we can't check, assume it's valid
+            return True
 
     async def predict_consequence_fast(
         self,
@@ -2276,7 +2341,7 @@ class AlternativeProteinGenerator:
         # Input validation - only exclude truly invalid cases
         if genomic_pos is None:
             if self.debug:
-                print(f"        └─ ❌ Invalid genomic position: None")
+                logger.debug(f"[DEBUG_EMOJI] ❌ Invalid genomic position: None")
             return "unknown"
 
         # Ensure genomic_pos is integer
@@ -2284,9 +2349,7 @@ class AlternativeProteinGenerator:
             genomic_pos = int(genomic_pos)
         except (ValueError, TypeError):
             if self.debug:
-                print(
-                    f"        └─ ❌ Invalid genomic position type: {type(genomic_pos)}"
-                )
+                logger.debug(f"[DEBUG_EMOJI] ❌ Invalid genomic position type: {type(genomic_pos)}")
             return "unknown"
 
         # Check cache first
@@ -2294,8 +2357,7 @@ class AlternativeProteinGenerator:
             transcript_id, genomic_pos, ref_allele, alt_allele
         )
         if cached:
-            if self.debug:
-                print(f"        └─ ⚡ Cached result: {cached}")
+            # Don't log cached results - it's just noise
             return cached
 
         try:
@@ -2318,10 +2380,19 @@ class AlternativeProteinGenerator:
                 or alt_allele == "NAN"
             ):
                 if self.debug:
-                    print(
-                        f"        └─ ❌ Both alleles invalid: '{ref_allele}', '{alt_allele}'"
+                    logger.debug(
+                        f"❌ Both alleles invalid: '{ref_allele}', '{alt_allele}'"
                     )
                 return "unknown"
+
+            # CRITICAL: Check if position (and all spanned positions) are in coding/UTR sequence BEFORE quick classification
+            # This prevents us from validating intronic variants and boundary-spanning variants
+            if not self._is_position_in_transcript_regions(transcript_id, genomic_pos, current_feature, ref_allele):
+                if self.debug:
+                    logger.debug(
+                        f"Position {genomic_pos} not in coding/UTR regions - skipping validation"
+                    )
+                return "intronic variant"
 
             # Quick classification for obvious cases
             ref_len = len(ref_allele)
@@ -2329,8 +2400,12 @@ class AlternativeProteinGenerator:
             length_diff = alt_len - ref_len
 
             if self.debug:
-                print(
-                    f"        ├─ Analyzing {ref_allele}>{alt_allele} (lengths: {ref_len}→{alt_len}, diff: {length_diff})"
+                # Truncate long alleles for readable logging
+                def truncate(s: str, max_len: int = 10) -> str:
+                    return s if len(s) <= max_len else f"{s[:max_len]}...[{len(s)}bp]"
+
+                logger.debug(
+                    f"Analyzing {truncate(ref_allele)}>{truncate(alt_allele)} (lengths: {ref_len}→{alt_len}, diff: {length_diff})"
                 )
 
             # RULE 1: Length changes (including cases where one allele is empty)
@@ -2346,17 +2421,17 @@ class AlternativeProteinGenerator:
                     transcript_id, genomic_pos, ref_allele, alt_allele, consequence
                 )
                 if self.debug:
-                    print(f"        ├─ ⚡ Length-based classification: {consequence}")
-                    print(
-                        f"        │  └─ Reason: {abs(length_diff)} bp change {'in-frame' if length_diff % 3 == 0 else 'causes frameshift'}"
+                    logger.debug(f"⚡ Length-based classification: {consequence}")
+                    logger.debug(
+                        f"Reason: {abs(length_diff)} bp change {'in-frame' if length_diff % 3 == 0 else 'causes frameshift'}"
                     )
                 return consequence
 
             # RULE 2: Single BP substitutions - use codon analysis
             if ref_len == 1 and alt_len == 1:
                 if self.debug:
-                    print(
-                        f"        ├─ ⚡ Single BP substitution - analyzing codon context..."
+                    logger.debug(
+                        f"⚡ Single BP substitution - analyzing codon context..."
                     )
 
                 consequence = self._analyze_single_bp_fast(
@@ -2367,7 +2442,7 @@ class AlternativeProteinGenerator:
                     transcript_id, genomic_pos, ref_allele, alt_allele, consequence
                 )
                 if self.debug:
-                    print(f"        └─ ⚡ Codon-based classification: {consequence}")
+                    logger.debug(f"⚡ Codon-based classification: {consequence}")
                 return consequence
 
             # RULE 3: No change (both empty or identical)
@@ -2377,13 +2452,13 @@ class AlternativeProteinGenerator:
                     transcript_id, genomic_pos, ref_allele, alt_allele, consequence
                 )
                 if self.debug:
-                    print(f"        └─ ⚡ No change: {consequence}")
+                    logger.debug(f"⚡ No change: {consequence}")
                 return consequence
 
             # RULE 4: Complex cases - fallback to full translation
             if self.debug:
-                print(
-                    f"        ├─ Complex variant ({ref_len}→{alt_len} bp), using full translation..."
+                logger.debug(
+                    f"Complex variant ({ref_len}→{alt_len}bp), using full translation..."
                 )
 
             consequence = await self.predict_consequence_by_translation(
@@ -2394,15 +2469,15 @@ class AlternativeProteinGenerator:
                 transcript_id, genomic_pos, ref_allele, alt_allele, consequence
             )
             if self.debug:
-                print(f"        └─ Full translation result: {consequence}")
+                logger.debug(f"Full translation result: {consequence}")
             return consequence
 
         except Exception as e:
             if self.debug:
-                print(f"        └─ ❌ Fast validation failed: {str(e)}")
+                logger.debug(f"[DEBUG_EMOJI] ❌ Fast validation failed: {str(e)}")
                 import traceback
 
-                print(f"        └─ Traceback: {traceback.format_exc()}")
+                logger.debug(f"Traceback: {traceback.format_exc()}")
             return "unknown"
 
     def _analyze_single_bp_fast(
@@ -2421,12 +2496,8 @@ class AlternativeProteinGenerator:
             )
             strand = transcript_data["sequence"]["strand"] if transcript_data else "?"
 
-            if self.debug:
-                print(f"        │  ├─ 🧬 MUTATION CLASSIFICATION DEBUG")
-                print(f"        │  │  ├─ Transcript: {transcript_id} ({strand} strand)")
-                print(
-                    f"        │  │  ├─ Genomic mutation: {ref_allele}>{alt_allele} at position {genomic_pos}"
-                )
+            # Debug logging is very verbose - only enable for deep troubleshooting
+            # Most validation info is now shown in mutations.py at INFO level
 
             # Create context-aware cache key
             if current_feature is not None:
@@ -2436,16 +2507,8 @@ class AlternativeProteinGenerator:
                 feature_type = "canonical"
                 cache_key = f"{transcript_id}_canonical"
 
-            if self.debug:
-                print(f"        │  │  ├─ Cache key: {cache_key}")
-
             # Check if we need to build sequence cache
             if cache_key not in self.validation_cache.coding_sequences:
-                if self.debug:
-                    print(
-                        f"        │  │  ├─ Building {feature_type} sequence cache for {transcript_id}..."
-                    )
-
                 # Build sequence cache with error handling
                 try:
                     self._build_sequence_cache(transcript_id, current_feature)
@@ -2460,18 +2523,14 @@ class AlternativeProteinGenerator:
                         )
                     else:
                         if self.debug:
-                            print(f"        │  │  ├─ ❌ Failed to build sequence cache")
+                            logger.debug(f"Failed to build sequence cache")
                         return "unknown"
 
                 except Exception as e:
                     if self.debug:
-                        print(f"        │  │  ├─ ❌ Error building cache: {str(e)}")
+                        logger.debug(f"Error building cache: {str(e)}")
                     return "unknown"
-            else:
-                if self.debug:
-                    print(
-                        f"        │  │  ├─ Using cached {feature_type} sequence for {transcript_id}"
-                    )
+            # No need to log using cached sequence - it's the common case
 
             # Retrieve from context-aware cache
             coding_seq = self.validation_cache.coding_sequences.get(cache_key)
@@ -2479,58 +2538,51 @@ class AlternativeProteinGenerator:
 
             if not coding_seq or not pos_map:
                 if self.debug:
-                    print(f"        │  │  ├─ ❌ Empty cache data")
+                    logger.debug(f"Empty cache data")
                 return "unknown"
-
-            if self.debug:
-                print(f"        │  │  ├─ Coding sequence: {len(coding_seq)} bp")
-                print(f"        │  │  ├─ Position map: {len(pos_map)} positions")
-                if pos_map:
-                    min_pos = min(pos_map.keys()) if pos_map.keys() else None
-                    max_pos = max(pos_map.keys()) if pos_map.keys() else None
-                    print(f"        │  │  ├─ Position range: {min_pos} to {max_pos}")
 
             # Map genomic position to coding position
             coding_pos = pos_map.get(genomic_pos)
 
-            if self.debug:
-                print(
-                    f"        │  │  ├─ Position mapping: {genomic_pos} → {coding_pos}"
+            if self.debug and coding_pos is not None:
+                # Only log successful mappings
+                min_pos = min(pos_map.keys()) if pos_map.keys() else None
+                max_pos = max(pos_map.keys()) if pos_map.keys() else None
+                logger.debug(
+                    f"Mapped {genomic_pos}→{coding_pos} | Seq: {len(coding_seq)} bp | Range: {min_pos}-{max_pos}"
                 )
 
             if coding_pos is None:
-                # Enhanced debugging for mapping failures
+                # This is important - position not in coding sequence
                 if self.debug:
-                    print(f"        │  │  ├─ ⭕️ Position mapping failed")
-
-                    # Show all CDS and UTR ranges for verification
+                    # Get all CDS and UTR regions for IGV debugging
                     features = self.genome.get_transcript_features(transcript_id)
+                    cds_features = features[features["feature_type"] == "CDS"].sort_values("start")
+                    utr_features = features[features["feature_type"].str.contains("UTR", na=False)].sort_values("start")
 
-                    cds_features = features[features["feature_type"] == "CDS"]
-                    utr_features = features[
-                        features["feature_type"].str.contains("UTR", na=False)
-                    ]
+                    # Get chromosome from transcript data
+                    chrom = transcript_data["sequence"]["chromosome"] if transcript_data else "?"
 
-                    print(f"        │  │  ├─ All CDS regions in transcript:")
-                    for _, cds in cds_features.iterrows():
-                        print(f"        │  │  │  ├─ CDS: {cds['start']}-{cds['end']}")
-
-                    print(f"        │  │  ├─ All UTR regions in transcript:")
-                    for _, utr in utr_features.iterrows():
-                        print(f"        │  │  │  ├─ UTR: {utr['start']}-{utr['end']}")
-
-                    print(
-                        f"        │  │  └─ Position {genomic_pos} not in any CDS/UTR → intronic"
+                    logger.debug(
+                        f"🚫 Intronic variant: Position {genomic_pos} not in coding sequence"
                     )
+                    logger.debug(f"   CDS regions ({len(cds_features)} total):")
+                    for _, cds in cds_features.iterrows():
+                        logger.debug(f"     {chrom}:{cds['start']}-{cds['end']}")
+
+                    if not utr_features.empty:
+                        logger.debug(f"   UTR regions ({len(utr_features)} total):")
+                        for _, utr in utr_features.iterrows():
+                            utr_type = utr['feature_type']
+                            logger.debug(f"     {chrom}:{utr['start']}-{utr['end']} ({utr_type})")
 
                 return "intronic variant"
 
             # Validate coding position bounds
             if coding_pos >= len(coding_seq):
-                if self.debug:
-                    print(
-                        f"        │  │  ├─ ❌ BOUNDS ERROR: coding_pos {coding_pos} >= sequence length {len(coding_seq)}"
-                    )
+                logger.warning(
+                    f"ERROR: coding position {coding_pos} exceeds sequence length {len(coding_seq)}"
+                )
                 return "unknown"
 
             # Find the codon
@@ -2540,10 +2592,9 @@ class AlternativeProteinGenerator:
 
             # Extract original codon from coding sequence
             if codon_start + 3 > len(coding_seq):
-                if self.debug:
-                    print(
-                        f"        │  │  ├─ ❌ Incomplete codon at position {codon_start}"
-                    )
+                logger.warning(
+                    f"ERROR: Incomplete codon at position {codon_start} (sequence length {len(coding_seq)})"
+                )
                 return "unknown"
 
             original_codon = coding_seq[codon_start : codon_start + 3]
@@ -2554,8 +2605,8 @@ class AlternativeProteinGenerator:
                 transcript_ref = complement_map.get(ref_allele, ref_allele)
                 transcript_alt = complement_map.get(alt_allele, alt_allele)
                 if self.debug:
-                    print(
-                        f"        │  │  ├─ Negative strand conversion: {ref_allele}>{alt_allele} → {transcript_ref}>{transcript_alt}"
+                    logger.debug(
+                        f"Negative strand conversion: {ref_allele}>{alt_allele}:{transcript_ref}>{transcript_alt}"
                     )
             else:
                 transcript_ref = ref_allele
@@ -2566,18 +2617,10 @@ class AlternativeProteinGenerator:
             reference_match = expected_base.upper() == transcript_ref.upper()
 
             if self.debug:
-                print(f"        │  │  ├─ Codon analysis:")
-                print(f"        │  │  │  ├─ Codon {codon_number}: {original_codon}")
-                print(f"        │  │  │  ├─ Position {codon_offset + 1} in codon")
-                print(f"        │  │  │  ├─ Expected base: {expected_base}")
-                print(f"        │  │  │  ├─ Mutation ref: {transcript_ref}")
-                print(f"        │  │  │  └─ Reference match: {reference_match}")
-
-            if not reference_match:
-                if self.debug:
-                    print(
-                        f"        │  │  ├─ ⚠️  Reference mismatch - proceeding with analysis"
-                    )
+                ref_status = "match" if reference_match else "MISMATCH"
+                logger.debug(
+                    f"Codon {codon_number}: {original_codon} | Pos {codon_offset + 1} | Expected {expected_base}, got {transcript_ref} ({ref_status})"
+                )
 
             # Apply mutation to codon
             mutated_codon = (
@@ -2592,12 +2635,12 @@ class AlternativeProteinGenerator:
                 mutated_aa = str(Seq(mutated_codon).translate())
 
                 if self.debug:
-                    print(f"        │  │  ├─ Translation:")
-                    print(f"        │  │  │  ├─ {original_codon} → {original_aa}")
-                    print(f"        │  │  │  └─ {mutated_codon} → {mutated_aa}")
+                    logger.debug(
+                        f"Translation: {original_codon}→{original_aa} | {mutated_codon}→{mutated_aa}"
+                    )
             except Exception as e:
                 if self.debug:
-                    print(f"        │  │  ├─ Translation failed: {e}")
+                    logger.debug(f"Translation failed: {e}")
                 return "unknown"
 
             # Classify the change
@@ -2615,17 +2658,17 @@ class AlternativeProteinGenerator:
                 reason = f"amino acid change {original_aa}{codon_number}{mutated_aa}"
 
             if self.debug:
-                print(f"        │  │  └─ FINAL CLASSIFICATION: {consequence}")
-                print(f"        │  │     └─ Reason: {reason}")
+                logger.debug(f"FINAL CLASSIFICATION: {consequence}")
+                logger.debug(f"Reason: {reason}")
 
             return consequence
 
         except Exception as e:
             if self.debug:
-                print(f"        │  │  └─ ❌ Single BP analysis failed: {str(e)}")
+                logger.debug(f"[DEBUG_EMOJI] ❌ Single BP analysis failed: {str(e)}")
                 import traceback
 
-                print(f"        │  │     └─ Traceback: {traceback.format_exc()}")
+                logger.debug(f"Traceback: {traceback.format_exc()}")
             return "unknown"
 
     def _build_sequence_cache(
@@ -2635,7 +2678,7 @@ class AlternativeProteinGenerator:
     ):
         """Build cached coding sequence and position mapping with consistent coordinate systems."""
         if self.debug:
-            print(f"        ├─ Building cache for {transcript_id}")
+            logger.debug(f"Building cache for {transcript_id}")
 
         try:
             # Determine sequence type
@@ -2649,7 +2692,7 @@ class AlternativeProteinGenerator:
                 )
                 if not result:
                     if self.debug:
-                        print(f"        ├─ ❌ Extension sequence extraction failed")
+                        logger.debug(f"[DEBUG_EMOJI] ❌ Extension sequence extraction failed")
                     raise ValueError(
                         f"Extension sequence extraction failed for {transcript_id} - cannot proceed with mutation analysis"
                     )
@@ -2662,7 +2705,7 @@ class AlternativeProteinGenerator:
                 )
                 if not pos_map:
                     if self.debug:
-                        print(f"        ├─ ❌ Extension position mapping failed")
+                        logger.debug(f"[DEBUG_EMOJI] ❌ Extension position mapping failed")
                     raise ValueError(
                         f"Extension position mapping failed for {transcript_id}"
                     )
@@ -2689,12 +2732,12 @@ class AlternativeProteinGenerator:
             self.validation_cache.position_maps[transcript_id] = pos_map
 
             if self.debug:
-                print(f"        ├─ Cached sequence: {len(coding_seq)} bp")
-                print(f"        └─ Cached positions: {len(pos_map)} mapped")
+                logger.debug(f"Cached sequence: {len(coding_seq)} bp")
+                logger.debug(f"Cached positions: {len(pos_map)} mapped")
 
         except Exception as e:
             if self.debug:
-                print(f"        └─ ❌ Cache building failed for {transcript_id}: {e}")
+                logger.debug(f"[DEBUG_EMOJI] ❌ Cache building failed for {transcript_id}: {e}")
             # Don't cache empty values - let it fail cleanly
             raise
 
@@ -2708,7 +2751,7 @@ class AlternativeProteinGenerator:
 
             if not transcript_data:
                 if self.debug:
-                    print(f"        │  ├─ ❌ No transcript data for {transcript_id}")
+                    logger.debug(f"[DEBUG_EMOJI] ❌ No transcript data for {transcript_id}")
                 return {}
 
             strand = transcript_data["sequence"]["strand"]
@@ -2719,14 +2762,12 @@ class AlternativeProteinGenerator:
 
             if cds_regions.empty:
                 if self.debug:
-                    print(f"        │  ├─ ❌ No CDS regions for {transcript_id}")
+                    logger.debug(f"[DEBUG_EMOJI] ❌ No CDS regions for {transcript_id}")
                 return {}
 
             if start_codons.empty:
                 if self.debug:
-                    print(
-                        f"        │  ├─ ⚠️  No start codon annotation for {transcript_id}"
-                    )
+                    logger.debug(f"[DEBUG_EMOJI] ⚠️ No start codon annotation for {transcript_id}")
                 # Use first CDS as start
                 canonical_start = (
                     cds_regions["start"].min()
@@ -2741,11 +2782,11 @@ class AlternativeProteinGenerator:
                 )
 
             if self.debug:
-                print(
-                    f"            ├  ├─ Building position map for {transcript_id} ({strand} strand)"
+                logger.debug(
+                    f"Building position map for {transcript_id} ({strand} strand)"
                 )
-                print(f"            ├  │  ├─ Canonical start: {canonical_start}")
-                print(f"            ├  │  ├─ CDS regions: {len(cds_regions)}")
+                logger.debug(f"Canonical start: {canonical_start}")
+                logger.debug(f"CDS regions: {len(cds_regions)}")
 
             # Sort CDS regions
             if strand == "+":
@@ -2779,20 +2820,18 @@ class AlternativeProteinGenerator:
                             coding_pos += 1
 
             if self.debug:
-                print(
-                    f"        │  │  └─ Final position map: {len(pos_map)} positions mapped"
-                )
+                logger.debug(f"Final position map: {len(pos_map)} positions mapped")
                 # Show a few example mappings
                 if pos_map:
                     example_positions = list(pos_map.items())[:3]
                     for genomic_pos, coding_pos in example_positions:
-                        print(f"        │  │     ├─ {genomic_pos} → {coding_pos}")
+                        logger.debug(f"{genomic_pos}{coding_pos}")
 
             return pos_map
 
         except Exception as e:
             if self.debug:
-                print(f"        │  └─ ❌ Position mapping failed: {e}")
+                logger.debug(f"[DEBUG_EMOJI] ❌ Position mapping failed: {e}")
             return {}
 
     def _build_extension_position_map(
@@ -2813,7 +2852,7 @@ class AlternativeProteinGenerator:
         start_codons = features[features["feature_type"] == "start_codon"]
         if start_codons.empty:
             if self.debug:
-                print(f"        │  ├─ ❌ No start codon found for {transcript_id}")
+                logger.debug(f"[DEBUG_EMOJI] ❌ No start codon found for {transcript_id}")
             return {}
 
         canonical_start_pos = (
@@ -2827,10 +2866,10 @@ class AlternativeProteinGenerator:
         extension_end = int(extension_feature["end"])
 
         if self.debug:
-            print(f"        │  ├─ Building EXTENSION position map:")
-            print(f"        │  │  ├─ Extension: {extension_start}-{extension_end}")
-            print(f"        │  │  ├─ Canonical start: {canonical_start_pos}")
-            print(f"        │  │  └─ Strand: {strand}")
+            logger.debug(f"Building EXTENSION position map:")
+            logger.debug(f"Extension: {extension_start}-{extension_end}")
+            logger.debug(f"Canonical start: {canonical_start_pos}")
+            logger.debug(f"Strand: {strand}")
 
         pos_map = {}
         coding_pos = 0
@@ -2877,13 +2916,13 @@ class AlternativeProteinGenerator:
 
         extension_length = coding_pos
         if self.debug:
-            print(f"        │  │  ├─ Extension sequence mapped: {extension_length} bp")
+            logger.debug(f"Extension sequence mapped: {extension_length} bp")
 
         # STEP 2: Map CDS regions starting from canonical start
         cds_regions = features[features["feature_type"] == "CDS"].copy()
         if cds_regions.empty:
             if self.debug:
-                print(f"        │  │  └─ ❌ No CDS regions found")
+                logger.debug(f"[DEBUG_EMOJI] ❌ No CDS regions found")
             return pos_map
 
         # Sort CDS regions
@@ -2915,20 +2954,8 @@ class AlternativeProteinGenerator:
         total_cds_length = coding_pos - extension_length
 
         if self.debug:
-            print(f"        │  │  ├─ CDS sequence mapped: {total_cds_length} bp")
-            print(f"        │  │  └─ Total positions mapped: {len(pos_map)}")
-
-            # Show mapping examples
-            if pos_map:
-                examples = list(pos_map.items())[:5]
-                print(f"        │  │     Examples:")
-                for genomic_pos, coding_pos in examples:
-                    region_type = (
-                        "extension" if coding_pos < extension_length else "CDS"
-                    )
-                    print(
-                        f"        │  │     ├─ {genomic_pos} → {coding_pos} ({region_type})"
-                    )
+            logger.debug(f"CDS sequence mapped: {total_cds_length} bp")
+            logger.debug(f"Total positions mapped: {len(pos_map)}")
 
         return pos_map
 
@@ -2949,7 +2976,9 @@ class AlternativeProteinGenerator:
         # Basic checks - these should still fail validation
         if not extended_protein or not canonical_protein:
             if verbose:
-                print(f"    ❌ Empty protein sequence for {gene_name}:{transcript_id}")
+                logger.warning(
+                    f"❌ Empty protein sequence for {gene_name}:{transcript_id}"
+                )
             return False  # This is a real failure
 
         # All other checks become warnings but don't fail validation
@@ -2958,11 +2987,11 @@ class AlternativeProteinGenerator:
         # Extended should be longer than canonical
         if len(extended_protein) <= len(canonical_protein):
             if verbose:
-                print(
-                    f"    ⚠️  WARNING: Extension shorter than canonical for {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"⚠️ WARNING: Extension shorter than canonical for {gene_name}:{transcript_id}"
                 )
-                print(
-                    f"        Canonical: {len(canonical_protein)} AA, Extended: {len(extended_protein)} AA"
+                logger.warning(
+                    f"Canonical: {len(canonical_protein)} AA, Extended: {len(extended_protein)} AA"
                 )
             warnings_found = True
 
@@ -2970,21 +2999,21 @@ class AlternativeProteinGenerator:
         premature_stops = self._count_premature_stops(extended_protein)
         if premature_stops > 0:
             if verbose:
-                print(
-                    f"    ⚠️  WARNING: Extension has {premature_stops} premature stop codon(s) for {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"⚠️ WARNING: Extension has {premature_stops}premature stop codon(s) for {gene_name}:{transcript_id}"
                 )
                 stop_positions = [
                     i for i, aa in enumerate(extended_protein) if aa == "*"
                 ]
-                print(f"        Stop positions: {stop_positions}")
+                logger.warning(f"Stop positions: {stop_positions}")
             warnings_found = True
 
         # Check for reasonable extension length
         extension_length = len(extended_protein) - len(canonical_protein)
         if extension_length > 200:
             if verbose:
-                print(
-                    f"    ⚠️  WARNING: Very long extension ({extension_length} AA) for {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"⚠️ WARNING: Very long extension ({extension_length}AA) for {gene_name}:{transcript_id}"
                 )
             warnings_found = True
 
@@ -2996,8 +3025,8 @@ class AlternativeProteinGenerator:
 
         # Always return True but log if warnings were found
         if warnings_found and verbose:
-            print(
-                f"    📝 Extension sequence generated despite warnings for {gene_name}:{transcript_id}"
+            logger.info(
+                f"📝 Extension sequence generated despite warnings for {gene_name}:{transcript_id}"
             )
 
         return True  # Always proceed with sequence generation
@@ -3017,7 +3046,9 @@ class AlternativeProteinGenerator:
         # Basic checks - these should still fail validation
         if not truncated_protein or not canonical_protein:
             if verbose:
-                print(f"    ❌ Empty protein sequence for {gene_name}:{transcript_id}")
+                logger.warning(
+                    f"❌ Empty protein sequence for {gene_name}:{transcript_id}"
+                )
             return False  # This is a real failure
 
         # All other checks become warnings but don't fail validation
@@ -3026,11 +3057,11 @@ class AlternativeProteinGenerator:
         # Truncated should be shorter than canonical
         if len(truncated_protein) >= len(canonical_protein):
             if verbose:
-                print(
-                    f"    ⚠️  WARNING: Truncation longer than canonical for {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"⚠️ WARNING: Truncation longer than canonical for {gene_name}:{transcript_id}"
                 )
-                print(
-                    f"        Canonical: {len(canonical_protein)} AA, Truncated: {len(truncated_protein)} AA"
+                logger.warning(
+                    f"Canonical: {len(canonical_protein)} AA, Truncated: {len(truncated_protein)} AA"
                 )
             warnings_found = True
 
@@ -3038,20 +3069,20 @@ class AlternativeProteinGenerator:
         premature_stops = self._count_premature_stops(truncated_protein)
         if premature_stops > 0:
             if verbose:
-                print(
-                    f"    ⚠️  WARNING: Truncation has {premature_stops} premature stop codon(s) for {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"⚠️ WARNING: Truncation has {premature_stops}premature stop codon(s) for {gene_name}:{transcript_id}"
                 )
                 stop_positions = [
                     i for i, aa in enumerate(truncated_protein) if aa == "*"
                 ]
-                print(f"        Stop positions: {stop_positions}")
+                logger.warning(f"Stop positions: {stop_positions}")
             warnings_found = True
 
         # Check for very short proteins
         if len(truncated_protein) < 20:
             if verbose:
-                print(
-                    f"    ⚠️  WARNING: Very short truncation ({len(truncated_protein)} AA) for {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"⚠️ WARNING: Very short truncation ({len(truncated_protein)} AA) for {gene_name}:{transcript_id}"
                 )
             warnings_found = True
 
@@ -3065,20 +3096,28 @@ class AlternativeProteinGenerator:
         truncation_length = len(canonical_protein) - len(truncated_protein)
         if truncation_length > len(canonical_protein) * 0.8:
             if verbose:
-                print(
-                    f"    ⚠️  WARNING: Extreme truncation ({truncation_length} AA removed, {truncation_length / len(canonical_protein) * 100:.1f}%) for {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"⚠️ WARNING: Extreme truncation ({truncation_length}AA removed, {truncation_length / len(canonical_protein) * 100:.1f}%) for {gene_name}:{transcript_id}"
                 )
             warnings_found = True
 
         # Always return True but log if warnings were found
         if warnings_found and verbose:
-            print(
-                f"    📝 Truncation sequence generated despite warnings for {gene_name}:{transcript_id}"
+            logger.info(
+                f"📝 Truncation sequence generated despite warnings for {gene_name}:{transcript_id}"
             )
 
         return True  # Always proceed with sequence generation
 
     def _count_premature_stops(self, protein_sequence: str) -> int:
+        """Count the number of premature stop codons in a protein sequence.
+
+        Args:
+            protein_sequence (str): Protein amino acid sequence.
+
+        Returns:
+            int: Number of stop codons before the final position.
+        """
         """Count premature stop codons in protein sequence.
 
         A stop codon is considered premature if it's not at the very end.
@@ -3126,8 +3165,8 @@ class AlternativeProteinGenerator:
         unusual_count = protein_sequence.count("X")
         if unusual_count > 0:
             if verbose:
-                print(
-                    f"    ❌ {unusual_count} unknown amino acid(s) (X) in {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"❌ {unusual_count}unknown amino acid(s) (X) in {gene_name}:{transcript_id}"
                 )
             if not warn_only:
                 return False
@@ -3138,8 +3177,8 @@ class AlternativeProteinGenerator:
         proline_percent = (proline_count / sequence_length) * 100
         if proline_percent > 15:
             if verbose:
-                print(
-                    f"    ⚠️  WARNING: High proline content ({proline_percent:.1f}%) in {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"⚠️ WARNING: High proline content ({proline_percent:.1f}%) in {gene_name}:{transcript_id}"
                 )
             warnings_found = True
 
@@ -3148,8 +3187,8 @@ class AlternativeProteinGenerator:
         invalid_aas = set(protein_sequence) - valid_aas
         if invalid_aas:
             if verbose:
-                print(
-                    f"    ❌ Invalid amino acid characters in {gene_name}:{transcript_id}: {invalid_aas}"
+                logger.warning(
+                    f"❌ Invalid amino acid characters in {gene_name}:{transcript_id}: {invalid_aas}"
                 )
             if not warn_only:
                 return False
@@ -3182,8 +3221,8 @@ class AlternativeProteinGenerator:
         # Check for identical sequences (no real alternative)
         if canonical_protein == alternative_protein:
             if verbose:
-                print(
-                    f"    ⚠️  Identical canonical and alternative sequences for {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"⚠️ Identical canonical and alternative sequences for {gene_name}:{transcript_id}"
                 )
             return False
 
@@ -3206,8 +3245,8 @@ class AlternativeProteinGenerator:
             )
         else:
             if verbose:
-                print(
-                    f"    ⚠️  Unknown region type '{region_type}' for {gene_name}:{transcript_id}"
+                logger.warning(
+                    f"Unknown region type '{region_type}' for {gene_name}:{transcript_id}"
                 )
             # For unknown types, just do basic checks
             return (
@@ -3389,8 +3428,8 @@ class AlternativeProteinGenerator:
         Returns:
             None
         """
-        print(f"\nProtein Sequence Generation Summary:")
-        print(f"  ├─ Genes processed successfully: {successful_genes}/{total_genes}")
+        logger.info(f"\nProtein Sequence Generation Summary:")
+        logger.info(f"Genes processed successfully: {successful_genes}/{total_genes}")
 
         if not dataset.empty:
             if include_mutations and "variant_type" in dataset.columns:
@@ -3401,42 +3440,42 @@ class AlternativeProteinGenerator:
                     dataset[dataset["variant_type"] == "canonical_mutated"]
                 )
 
-                print(f"  ├─ Total sequences: {len(dataset)}")
-                print(f"  ├─ Canonical sequences: {canonical_count}")
-                print(f"  ├─ Truncation sequences: {truncation_count}")
-                print(f"  ├─ Extension sequences: {extension_count}")
-                print(f"  ├─ Mutated sequences: {mutated_count}")
+                logger.info(f"Total sequences: {len(dataset)}")
+                logger.info(f"Canonical sequences: {canonical_count}")
+                logger.info(f"Truncation sequences: {truncation_count}")
+                logger.info(f"Extension sequences: {extension_count}")
+                logger.info(f"Mutated sequences: {mutated_count}")
             else:
                 alternative_count = len(dataset[dataset.get("is_alternative", 0) == 1])
                 canonical_count = len(dataset[dataset.get("is_alternative", 0) == 0])
 
-                print(f"  ├─ Total sequences: {len(dataset)}")
-                print(f"  ├─ Canonical sequences: {canonical_count}")
-                print(f"  ├─ Alternative sequences: {alternative_count}")
+                logger.info(f"Total sequences: {len(dataset)}")
+                logger.info(f"Canonical sequences: {canonical_count}")
+                logger.info(f"Alternative sequences: {alternative_count}")
 
                 # Break down by region type
                 if "region_type" in dataset.columns:
                     region_counts = dataset["region_type"].value_counts()
-                    print(f"  ├─ By region type:")
+                    logger.info(f"By region type:")
                     for region_type, count in region_counts.items():
-                        print(f"  │  ├─ {region_type}: {count}")
+                        logger.info(f"{region_type}: {count}")
 
-            print(f"  ├─ Average sequence length: {dataset['length'].mean():.1f}")
-            print(
-                f"  ├─ Sequence length range: {dataset['length'].min()}-{dataset['length'].max()}"
+            logger.info(f"Average sequence length: {dataset['length'].mean():.1f}")
+            logger.info(
+                f"Sequence length range: {dataset['length'].min()}-{dataset['length'].max()}"
             )
 
             genes_with_data = dataset["gene"].nunique()
-            print(f"  └─ Genes with valid sequences: {genes_with_data}/{total_genes}")
+            logger.info(f"Genes with valid sequences: {genes_with_data}/{total_genes}")
         else:
-            print("  └─ No valid sequences generated")
+            logger.info("No valid sequences generated")
 
         if skipped_genes:
-            print(
+            logger.info(
                 f"\nSkipped genes ({len(skipped_genes)}): {', '.join(skipped_genes[:10])}"
             )
             if len(skipped_genes) > 10:
-                print(f"  ... and {len(skipped_genes) - 10} more")
+                logger.info(f"... and {len(skipped_genes) - 10} more")
 
     def _print_dataset_summary_with_comparison_sets(
         self,
@@ -3447,45 +3486,45 @@ class AlternativeProteinGenerator:
         include_mutations: bool = False,
     ) -> None:
         """Print summary with comparison set breakdown."""
-        print(f"\nProtein Sequence Generation Summary:")
-        print(f"  ├─ Genes processed successfully: {successful_genes}/{total_genes}")
+        logger.info(f"\nProtein Sequence Generation Summary:")
+        logger.info(f"Genes processed successfully: {successful_genes}/{total_genes}")
 
         if not dataset.empty:
-            print(f"  ├─ Total sequences: {len(dataset)}")
+            logger.info(f"Total sequences: {len(dataset)}")
 
             # Show comparison sets
             if "comparison_set" in dataset.columns:
                 comparison_counts = dataset["comparison_set"].value_counts()
-                print(f"  ├─ Comparison sets:")
+                logger.info(f"Comparison sets:")
                 for comp_set, count in comparison_counts.items():
-                    print(f"  │  ├─ {comp_set}: {count} sequences")
+                    logger.info(f"{comp_set}: {count} sequences")
 
             # Show variant types within each comparison set
             if (
                 "variant_type" in dataset.columns
                 and "comparison_set" in dataset.columns
             ):
-                print(f"  ├─ Variant breakdown by comparison set:")
+                logger.info(f"Variant breakdown by comparison set:")
                 for comp_set in dataset["comparison_set"].unique():
                     subset = dataset[dataset["comparison_set"] == comp_set]
                     variant_counts = subset["variant_type"].value_counts()
-                    print(f"  │  ├─ {comp_set}:")
+                    logger.info(f"{comp_set}:")
                     for variant, count in variant_counts.items():
-                        print(f"  │  │  ├─ {variant}: {count}")
+                        logger.info(f"{variant}: {count}")
 
-            print(f"  ├─ Average sequence length: {dataset['length'].mean():.1f}")
-            print(
-                f"  ├─ Sequence length range: {dataset['length'].min()}-{dataset['length'].max()}"
+            logger.info(f"Average sequence length: {dataset['length'].mean():.1f}")
+            logger.info(
+                f"Sequence length range: {dataset['length'].min()}-{dataset['length'].max()}"
             )
 
             genes_with_data = dataset["gene"].nunique()
-            print(f"  └─ Genes with valid sequences: {genes_with_data}/{total_genes}")
+            logger.info(f"Genes with valid sequences: {genes_with_data}/{total_genes}")
         else:
-            print("  └─ No valid sequences generated")
+            logger.info("No valid sequences generated")
 
         if skipped_genes:
-            print(
+            logger.info(
                 f"\nSkipped genes ({len(skipped_genes)}): {', '.join(skipped_genes[:10])}"
             )
             if len(skipped_genes) > 10:
-                print(f"  ... and {len(skipped_genes) - 10} more")
+                logger.info(f"... and {len(skipped_genes) - 10} more")

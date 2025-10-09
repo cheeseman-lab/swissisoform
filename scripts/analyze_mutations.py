@@ -32,6 +32,7 @@ import logging
 import warnings
 from typing import Optional, List
 from tqdm import tqdm
+import sys
 
 # Suppress pandas FutureWarning
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -48,6 +49,30 @@ from swissisoform.utils import (
 
 # Configure logger
 logger = logging.getLogger(__name__)
+
+
+class TqdmLoggingHandler(logging.Handler):
+    """Logging handler that uses tqdm.write() to avoid interfering with progress bars.
+
+    Only uses tqdm.write() when output is to a TTY (interactive terminal).
+    For file/pipe output, uses regular stderr to avoid repeated progress bars.
+    """
+
+    def __init__(self, level=logging.NOTSET):
+        super().__init__(level)
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            # Only use tqdm.write() if we're in an interactive terminal
+            # Otherwise, write directly to stderr to avoid progress bar duplication in logs
+            if sys.stderr.isatty():
+                tqdm.write(msg, file=sys.stderr)
+            else:
+                sys.stderr.write(msg + "\n")
+                sys.stderr.flush()
+        except Exception:
+            self.handleError(record)
 
 
 async def main(
@@ -97,7 +122,7 @@ async def main(
     alt_isoforms = AlternativeIsoform()
     alt_isoforms.load_bed(bed_path)
     logger.info("  Initializing mutation handler...")
-    mutation_handler = MutationHandler()
+    mutation_handler = MutationHandler(genome_handler=genome)
 
     # Set default values and create impact_types dict for compatibility
     if sources is None:
@@ -122,7 +147,23 @@ async def main(
     # Process all genes
     results = []
 
-    for gene_name in tqdm(gene_names, desc="Analyzing genes", unit="gene"):
+    # Disable progress bar if output is not a TTY (e.g., piped to file)
+    show_progress = sys.stderr.isatty()
+    for idx, gene_name in enumerate(
+        tqdm(
+            gene_names,
+            desc="Analyzing genes",
+            unit="gene",
+            disable=not show_progress,
+            file=sys.stderr,
+            leave=True,
+        ),
+        start=1,
+    ):
+        # Log progress for non-TTY output (e.g., when piped to file)
+        if not show_progress:
+            logger.info(f"Processing gene {idx}/{total_genes}: {gene_name}")
+
         result = await mutation_handler.analyze_gene_mutations_comprehensive(
             gene_name=gene_name,
             genome_handler=genome,
@@ -216,11 +257,30 @@ if __name__ == "__main__":
     else:
         log_level = logging.DEBUG
 
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%H:%M:%S",
+    # Configure root logger with TqdmLoggingHandler to avoid conflicts with progress bars
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+
+    # Add TqdmLoggingHandler
+    handler = TqdmLoggingHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s - %(levelname)s - %(message)s",
+            datefmt="%H:%M:%S",
+        )
     )
+    root_logger.addHandler(handler)
+
+    # Suppress verbose logging from external libraries
+    logging.getLogger("matplotlib").setLevel(logging.WARNING)
+    logging.getLogger("PIL").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     # Create output directory if it doesn't exist
     output_dir = Path(args.output_dir)

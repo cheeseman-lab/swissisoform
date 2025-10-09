@@ -25,7 +25,7 @@ class GenomeVisualizer:
         """Initialize the GenomeVisualizer.
 
         Args:
-            genome_handler: Initialized GenomeHandler instance
+            genome_handler (GenomeHandler): Initialized GenomeHandler instance.
         """
         self.genome = genome_handler
 
@@ -79,10 +79,10 @@ class GenomeVisualizer:
         """Get color for mutation impact, handling various format cases.
 
         Args:
-            impact: Impact type string
+            impact (str): Impact type string.
 
         Returns:
-            Hex color code
+            str: Hex color code for the mutation impact.
         """
         if pd.isna(impact) or impact is None:
             return self.mutation_colors["unknown"]
@@ -99,10 +99,10 @@ class GenomeVisualizer:
         """Create legend elements for mutation impacts.
 
         Args:
-            unique_impacts: List of unique impact types
+            unique_impacts (List[str]): List of unique impact types.
 
         Returns:
-            List of legend elements
+            List[Line2D]: List of legend elements for visualization.
         """
         # Simplified legend groups matching standardized categories
         legend_groups = {
@@ -143,12 +143,17 @@ class GenomeVisualizer:
         return legend_elements
 
     def _preprocess_features(self, features):
-        """Preprocess features to ensure proper visualization with connected elements. Makes minimal adjustments to maintain biological accuracy while enhancing visualization.
+        """Preprocess features to ensure proper visualization with connected elements.
+
+        Makes minimal adjustments to maintain biological accuracy while enhancing
+        visualization by connecting adjacent features when they are within acceptable
+        distance thresholds.
 
         Args:
-            features: DataFrame of transcript features
+            features (pd.DataFrame): DataFrame of transcript features.
+
         Returns:
-            Preprocessed features DataFrame
+            pd.DataFrame: Preprocessed features DataFrame with adjusted coordinates.
         """
         # Make a copy to avoid modifying the original
         features = features.copy()
@@ -297,11 +302,11 @@ class GenomeVisualizer:
         """Visualize transcript with optional alternative start sites and mutations.
 
         Args:
-            gene_name: Name of the gene
-            transcript_id: Transcript ID to visualize
-            alt_features: Alternative start features
-            mutations_df: Mutations data
-            output_file: Path to save the visualization
+            gene_name (str): Name of the gene.
+            transcript_id (str): Transcript ID to visualize.
+            alt_features (Optional[pd.DataFrame]): Alternative start features DataFrame.
+            mutations_df (Optional[pd.DataFrame]): Mutations data DataFrame.
+            output_file (Optional[str]): Path to save the visualization PDF file.
         """
         transcript_data = self.genome.get_transcript_features_with_sequence(
             transcript_id
@@ -709,12 +714,15 @@ class GenomeVisualizer:
         """Visualize a zoomed-in region of the transcript centered on alt_features.
 
         Args:
-            gene_name: Name of the gene
-            transcript_id: Transcript ID to visualize
-            alt_features: Alternative start features defining zoom region
-            mutations_df: Mutations data
-            output_file: Path to save the visualization
-            padding: Number of bases to add as padding on each side
+            gene_name (str): Name of the gene.
+            transcript_id (str): Transcript ID to visualize.
+            alt_features (pd.DataFrame): Alternative start features DataFrame defining zoom region.
+            mutations_df (Optional[pd.DataFrame]): Mutations data DataFrame.
+            output_file (Optional[str]): Path to save the visualization PDF file.
+            padding (int): Number of bases to add as padding on each side. Defaults to 50.
+
+        Raises:
+            ValueError: If alt_features is None or empty.
         """
         if alt_features is None or alt_features.empty:
             raise ValueError("alt_features is required for zoomed visualization")

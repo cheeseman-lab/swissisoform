@@ -1,7 +1,7 @@
 """Mutation data handling and analysis module.
 
 This module provides the MutationHandler class for fetching, processing, and
-analyzing mutation data from various sources including gnomAD and ClinVar.
+analyzing mutation data from various sources including gnomAD, ClinVar, and COSMIC.
 """
 
 from gql import gql, Client
@@ -26,29 +26,26 @@ class MutationHandler:
     - COSMIC
     """
 
-    def __init__(self, api_key: Optional[str] = "26214372a9ab53b26a43ba8546f4a5195308"):
+    def __init__(self, api_key: Optional[str] = "26214372a9ab53b26a43ba8546f4a5195308", genome_handler=None):
         """Initialize the mutation handler with API endpoints.
 
         Args:
-            api_key (Optional[str]): Optional API key for NCBI E-utilities.
-
-        Returns:
-            None
+            api_key (Optional[str]): Optional API key for NCBI E-utilities. Defaults to a preset key.
+            genome_handler (Optional[GenomeHandler]): Genome handler for sequence extraction (needed for ClinVar deletion inference).
         """
         self._setup_gnomad_client()
         self._setup_clinvar_endpoints(api_key)
         self._setup_mutation_categories()
         self.cached_data = {}
+        self.genome_handler = genome_handler
 
     def _setup_gnomad_client(self):
-        """Get processed variant data from gnomAD.
+        """Initialize the gnomAD GraphQL client with appropriate logging configuration."""
+        # Suppress GQL library logging
+        logging.getLogger("gql").setLevel(logging.WARNING)
+        logging.getLogger("gql.transport").setLevel(logging.WARNING)
+        logging.getLogger("gql.transport.aiohttp").setLevel(logging.WARNING)
 
-        Args:
-            gene_name (str): Gene symbol to query.
-
-        Returns:
-            pd.DataFrame: DataFrame of gnomAD variants.
-        """
         transport = AIOHTTPTransport(url="https://gnomad.broadinstitute.org/api")
         self.gnomad_client = Client(
             transport=transport, fetch_schema_from_transport=True
@@ -59,9 +56,6 @@ class MutationHandler:
 
         Args:
             api_key (str): API key for NCBI E-utilities.
-
-        Returns:
-            None
         """
         self.clinvar_base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
         self.clinvar_endpoints = {
@@ -73,18 +67,7 @@ class MutationHandler:
         self.api_key = api_key
 
     def _setup_mutation_categories(self):
-        """Fetch variant data from gnomAD API for a specific gene using GraphQL.
-
-        Args:
-            gene_name (str): Gene symbol (e.g., 'BRCA1').
-            reference_genome (str): Reference genome version (default: 'GRCh38').
-
-        Returns:
-            Dict: Processed gnomAD data for the gene.
-
-        Raises:
-            ConnectionError: If the API request fails.
-        """
+        """Initialize mutation category mappings for variant classification."""
         self.mutation_categories = {
             # UTR impact first
             "utr_5prime": [
@@ -132,10 +115,10 @@ class MutationHandler:
         """Get processed variant data from gnomAD.
 
         Args:
-            gene_name: Gene symbol to query
+            gene_name (str): Gene symbol to query.
 
         Returns:
-            DataFrame of gnomAD variants
+            pd.DataFrame: DataFrame of gnomAD variants with standardized columns.
         """
         gnomad_data = await self.fetch_gnomad_data(gene_name)
         return self.process_gnomad_variants(gnomad_data)
@@ -144,28 +127,16 @@ class MutationHandler:
         """Get summary statistics for gnomAD variants.
 
         Args:
-            gene_name: Gene symbol to query
+            gene_name (str): Gene symbol to query.
 
         Returns:
-            Dictionary of summary statistics
+            Dict: Dictionary of summary statistics including variant counts and frequencies.
         """
         gnomad_df = await self.get_gnomad_variants(gene_name)
 
-        # Log detailed raw data structure
+        # Log summary
         if not gnomad_df.empty:
-            self._log_raw_dataframe_structure(gnomad_df, "gnomAD", gene_name)
-        else:
-            logger.info(f"No gnomAD variants found for {gene_name}")
-
-        # Log raw data before processing
-        if not gnomad_df.empty:
-            logger.info(f"Raw gnomAD data for {gene_name}:")
-            logger.info(f"  Total variants: {len(gnomad_df)}")
-            logger.info(f"  Columns: {list(gnomad_df.columns)}")
-            logger.info(
-                f"  Consequence types: {gnomad_df['consequence'].value_counts().to_dict()}"
-            )
-            logger.info(f"  Sample rows:\n{gnomad_df.head()}")
+            logger.info(f"Found {len(gnomad_df)} gnomAD variants for {gene_name}")
         else:
             logger.info(f"No gnomAD variants found for {gene_name}")
 
@@ -183,7 +154,11 @@ class MutationHandler:
         }
 
     def _get_empty_gnomad_summary(self) -> Dict:
-        """Return empty gnomAD summary structure."""
+        """Return empty gnomAD summary structure.
+
+        Returns:
+            Dict: Empty summary dictionary with default values.
+        """
         return {
             "total_variants": 0,
             "consequence_types": {},
@@ -197,11 +172,14 @@ class MutationHandler:
         """Fetch variant data from gnomAD API for a specific gene using GraphQL.
 
         Args:
-            gene_name: Gene symbol (e.g., 'BRCA1')
-            reference_genome: Reference genome version (default: 'GRCh38')
+            gene_name (str): Gene symbol (e.g., 'BRCA1').
+            reference_genome (str): Reference genome version. Defaults to 'GRCh38'.
 
         Returns:
-            Processed gnomAD data for the gene
+            Dict: Processed gnomAD data for the gene.
+
+        Raises:
+            ConnectionError: If the API request fails.
         """
         cache_key = f"gnomad_{gene_name}_{reference_genome}"
         if cache_key in self.cached_data:
@@ -224,7 +202,11 @@ class MutationHandler:
             raise ConnectionError(f"Failed to fetch gnomAD data: {str(e)}")
 
     def _get_gnomad_query(self):
-        """Get the GraphQL query for gnomAD data."""
+        """Get the GraphQL query for gnomAD data.
+
+        Returns:
+            gql.Document: GraphQL query document for fetching gnomAD variant data.
+        """
         return gql("""
             query VariantsInGene($geneSymbol: String!, $referenceGenome: ReferenceGenomeId!) {
               gene(gene_symbol: $geneSymbol, reference_genome: $referenceGenome) {
@@ -310,13 +292,29 @@ class MutationHandler:
         return pd.DataFrame(processed_variants)
 
     def _validate_gnomad_data(self, data: Dict) -> bool:
-        """Validate gnomAD data structure."""
+        """Validate gnomAD data structure.
+
+        Args:
+            data (Dict): Raw gnomAD API response data.
+
+        Returns:
+            bool: True if data structure is valid, False otherwise.
+        """
         return data and "gene" in data and data["gene"] and "variants" in data["gene"]
 
     def _should_skip_variant(
         self, variant: Dict, filter_field: str, filter_value: str
     ) -> bool:
-        """Check if variant should be skipped based on filters."""
+        """Check if variant should be skipped based on filters.
+
+        Args:
+            variant (Dict): Variant data dictionary.
+            filter_field (str): Field name to filter on.
+            filter_value (str): Value to filter for.
+
+        Returns:
+            bool: True if variant should be skipped, False otherwise.
+        """
         if filter_field and filter_value:
             variant_field_value = variant.get(filter_field)
             if variant_field_value != filter_value:
@@ -324,7 +322,14 @@ class MutationHandler:
         return False
 
     def _process_gnomad_variant(self, variant: Dict) -> Optional[Dict]:
-        """Process a single gnomAD variant."""
+        """Process a single gnomAD variant.
+
+        Args:
+            variant (Dict): Raw variant data from gnomAD API.
+
+        Returns:
+            Optional[Dict]: Processed variant information, or None if no frequency data available.
+        """
         exome_data = variant.get("exome", {})
         genome_data = variant.get("genome", {})
         freq_data = exome_data or genome_data
@@ -332,9 +337,14 @@ class MutationHandler:
         if not freq_data:
             return None
 
+        # Extract chromosome from variant_id (format: "chr-pos-ref-alt")
+        variant_id = variant["variant_id"]
+        chromosome = variant_id.split("-")[0] if "-" in variant_id else ""
+
         variant_info = {
             "position": variant["pos"],
-            "variant_id": variant["variant_id"],
+            "variant_id": variant_id,
+            "chromosome": chromosome,
             "reference": variant["ref"],
             "alternate": variant["alt"],
             "consequence": variant["consequence"],
@@ -358,7 +368,12 @@ class MutationHandler:
         return variant_info
 
     def _add_population_data(self, variant_info: Dict, freq_data: Dict):
-        """Add population-specific frequency data to variant info."""
+        """Add population-specific frequency data to variant info.
+
+        Args:
+            variant_info (Dict): Variant information dictionary to update.
+            freq_data (Dict): Frequency data containing population-specific information.
+        """
         if "populations" in freq_data:
             for pop in freq_data["populations"]:
                 pop_id = pop["id"]
@@ -600,15 +615,40 @@ class MutationHandler:
                     3
                 ]  # insertion (alternate allele)
 
-        # Extract location from GRCh38
+        # Extract location from GRCh38 (prioritize current, fallback to any GRCh38, then any location)
         locations = var_set.get("variation_loc", [])
+        location_found = False
+
+        # Try 1: GRCh38 with current status
         for loc in locations:
             if loc.get("assembly_name") == "GRCh38" and loc.get("status") == "current":
                 variant_info["chromosome"] = loc.get("chr", "")
                 variant_info["start"] = loc.get("start", "")
                 variant_info["stop"] = loc.get("stop", "")
                 variant_info["cytogenic_location"] = loc.get("band", "")
+                location_found = True
                 break
+
+        # Try 2: Any GRCh38 location
+        if not location_found:
+            for loc in locations:
+                if loc.get("assembly_name") == "GRCh38":
+                    variant_info["chromosome"] = loc.get("chr", "")
+                    variant_info["start"] = loc.get("start", "")
+                    variant_info["stop"] = loc.get("stop", "")
+                    variant_info["cytogenic_location"] = loc.get("band", "")
+                    location_found = True
+                    break
+
+        # Try 3: Any location with chromosome info
+        if not location_found:
+            for loc in locations:
+                if loc.get("chr"):
+                    variant_info["chromosome"] = loc.get("chr", "")
+                    variant_info["start"] = loc.get("start", "")
+                    variant_info["stop"] = loc.get("stop", "")
+                    variant_info["cytogenic_location"] = loc.get("band", "")
+                    break
 
     def _convert_clinvar_columns(self, df: pd.DataFrame) -> pd.DataFrame:
         """Convert ClinVar columns to appropriate types."""
@@ -628,24 +668,9 @@ class MutationHandler:
         """
         variants_df = await self.get_clinvar_variants(gene_name)
 
-        # Log detailed raw data structure
+        # Log summary
         if not variants_df.empty:
-            self._log_raw_dataframe_structure(variants_df, "ClinVar", gene_name)
-        else:
-            logger.info(f"No ClinVar variants found for {gene_name}")
-
-        # Log raw data before processing
-        if not variants_df.empty:
-            logger.info(f"Raw ClinVar data for {gene_name}:")
-            logger.info(f"  Total variants: {len(variants_df)}")
-            logger.info(f"  Columns: {list(variants_df.columns)}")
-            logger.info(
-                f"  Clinical significance types: {variants_df['clinical_significance'].value_counts().to_dict()}"
-            )
-            logger.info(
-                f"  Molecular consequences: {variants_df['molecular_consequences'].value_counts().to_dict()}"
-            )
-            logger.info(f"  Sample rows:\n{variants_df.head()}")
+            logger.info(f"Found {len(variants_df)} ClinVar variants for {gene_name}")
         else:
             logger.info(f"No ClinVar variants found for {gene_name}")
 
@@ -901,7 +926,7 @@ class MutationHandler:
         cosmic_df = await self.get_cosmic_variants(gene_name)
 
         if not cosmic_df.empty:
-            self._log_raw_dataframe_structure(cosmic_df, "COSMIC", gene_name)
+            logger.info(f"Found {len(cosmic_df)} COSMIC variants for {gene_name}")
         else:
             logger.info(f"No COSMIC variants found for {gene_name}")
 
@@ -1184,13 +1209,14 @@ class MutationHandler:
         return change
 
     def standardize_mutation_data(
-        self, variants_df: pd.DataFrame, source: str
+        self, variants_df: pd.DataFrame, source: str, gene_name: str = None
     ) -> pd.DataFrame:
         """Standardize mutation data from different sources into a consistent format.
 
         Args:
             variants_df (pd.DataFrame): Raw variants DataFrame from any source.
             source (str): Source of the data ('gnomad', 'clinvar', or 'cosmic').
+            gene_name (str, optional): Gene name to add to variants missing this field.
 
         Returns:
             pd.DataFrame: Standardized mutation data.
@@ -1201,7 +1227,7 @@ class MutationHandler:
         source_lower = source.lower()
 
         if source_lower == "gnomad":
-            standardized_df = self._standardize_gnomad_data(variants_df)
+            standardized_df = self._standardize_gnomad_data(variants_df, gene_name)
         elif source_lower == "clinvar":
             standardized_df = self._standardize_clinvar_data(variants_df)
         elif source_lower == "cosmic":
@@ -1228,7 +1254,7 @@ class MutationHandler:
         ]
         return pd.DataFrame(columns=standard_columns)
 
-    def _standardize_gnomad_data(self, variants_df: pd.DataFrame) -> pd.DataFrame:
+    def _standardize_gnomad_data(self, variants_df: pd.DataFrame, gene_name: str = None) -> pd.DataFrame:
         """Standardize gnomAD data."""
         return pd.DataFrame(
             {
@@ -1245,8 +1271,97 @@ class MutationHandler:
                 "allele_frequency": variants_df["allele_frequency"],
                 "allele_count_hom": variants_df["allele_count_hom"],
                 "clinical_significance": None,
+                "chromosome": variants_df["chromosome"] if "chromosome" in variants_df.columns else "",
+                "gene_name": gene_name if gene_name else "",
             }
         )
+
+    def _infer_clinvar_alleles(self, variants_df: pd.DataFrame) -> pd.DataFrame:
+        """Infer missing reference and alternate alleles for ClinVar variants.
+
+        When ClinVar doesn't provide SPDI format (canonical_spdi is empty),
+        we need to infer the alleles from the genomic coordinates and the genome sequence.
+        This commonly happens for deletions and insertions.
+
+        Args:
+            variants_df: DataFrame with ClinVar variant data
+
+        Returns:
+            DataFrame with inferred ref_allele and alt_allele filled in
+        """
+        if self.genome_handler is None:
+            logger.debug("No genome handler available for allele inference")
+            return variants_df
+
+        variants_df = variants_df.copy()
+        inferred_count = 0
+
+        for idx, row in variants_df.iterrows():
+            # Skip if alleles are already present
+            ref_allele = str(row.get("ref_allele", ""))
+            alt_allele = str(row.get("alt_allele", ""))
+
+            if ref_allele and alt_allele:
+                continue
+
+            # Need chromosome, start, and stop to infer alleles
+            chrom = row.get("chromosome", "")
+            start = row.get("start", "")
+            stop = row.get("stop", "")
+
+            if not chrom or not start or not stop:
+                continue
+
+            try:
+                start = int(start)
+                stop = int(stop)
+            except (ValueError, TypeError):
+                continue
+
+            # Infer variant type based on coordinates
+            if start == stop:
+                # Single nucleotide variant - extract 1bp reference
+                try:
+                    ref_seq = str(self.genome_handler.get_sequence(chrom, start, start))
+                    if ref_seq and not alt_allele:
+                        # This is likely an SNV but we don't know the alt
+                        # Keep the reference, alt will stay empty
+                        variants_df.at[idx, "ref_allele"] = ref_seq
+                except Exception as e:
+                    logger.debug(f"Could not extract sequence for {chrom}:{start}: {e}")
+
+            elif stop > start:
+                # Deletion or complex variant
+                # For deletions in VCF format, we need the base BEFORE the deletion
+                # plus the deleted sequence as reference, and just the base before as alternate
+                try:
+                    # Get the base before the deletion
+                    anchor_base = str(self.genome_handler.get_sequence(chrom, start - 1, start - 1))
+                    # Get the deleted sequence
+                    deleted_seq = str(self.genome_handler.get_sequence(chrom, start, stop))
+
+                    if anchor_base and deleted_seq:
+                        # VCF-style deletion format:
+                        # Reference = anchor base + deleted sequence
+                        # Alternate = anchor base only
+                        ref_vcf = anchor_base + deleted_seq
+                        alt_vcf = anchor_base
+
+                        variants_df.at[idx, "ref_allele"] = ref_vcf
+                        variants_df.at[idx, "alt_allele"] = alt_vcf
+                        # Adjust position to the anchor base
+                        variants_df.at[idx, "start"] = start - 1
+                        inferred_count += 1
+                except Exception as e:
+                    logger.debug(
+                        f"Could not infer deletion alleles for {row.get('accession', 'unknown')}: {e}"
+                    )
+
+        # Log summary if any alleles were inferred
+        if inferred_count > 0:
+            logger.debug(f"Inferred alleles for {inferred_count} ClinVar variant(s)")
+
+        return variants_df
 
     def _standardize_clinvar_data(self, variants_df: pd.DataFrame) -> pd.DataFrame:
         """Standardize ClinVar data."""
@@ -1268,6 +1383,10 @@ class MutationHandler:
             axis=1,
         )
 
+        # Fix missing ref/alt alleles for deletions and insertions
+        # This happens when ClinVar doesn't provide SPDI format
+        variants_df = self._infer_clinvar_alleles(variants_df)
+
         return pd.DataFrame(
             {
                 "position": variants_df["start"],
@@ -1281,6 +1400,8 @@ class MutationHandler:
                 "allele_frequency": None,
                 "allele_count_hom": None,
                 "clinical_significance": variants_df["clinical_significance"],
+                "chromosome": variants_df["chromosome"],
+                "gene_name": variants_df["gene_name"],
             }
         )
 
@@ -1302,6 +1423,8 @@ class MutationHandler:
                 "allele_frequency": None,  # COSMIC doesn't have population frequency
                 "allele_count_hom": None,  # COSMIC doesn't have this field
                 "clinical_significance": None,  # COSMIC doesn't have clinical significance
+                "chromosome": variants_df["chromosome"],
+                "gene_name": variants_df["gene_name"],
             }
         )
 
@@ -1461,39 +1584,6 @@ class MutationHandler:
 
         return filtered_df
 
-    def _log_raw_dataframe_structure(
-        self, df: pd.DataFrame, source: str, gene_name: str
-    ):
-        """Log detailed information about raw DataFrame structure."""
-        logger.info(f"=== Raw {source} DataFrame structure for {gene_name} ===")
-        logger.info(f"Shape: {df.shape}")
-        logger.info(f"Columns ({len(df.columns)}): {list(df.columns)}")
-
-        # Log data types
-        logger.info("Data types:")
-        for col in df.columns:
-            dtype = df[col].dtype
-            non_null_count = df[col].notna().sum()
-            logger.info(f"  {col}: {dtype} ({non_null_count}/{len(df)} non-null)")
-
-        # Log sample of actual data for key columns
-        if not df.empty:
-            sample_size = min(3, len(df))
-            logger.info(f"Sample data (first {sample_size} rows):")
-            for idx in range(sample_size):
-                logger.info(f"  Row {idx}:")
-                for col in df.columns:
-                    value = df.iloc[idx][col]
-                    if pd.isna(value):
-                        logger.info(f"    {col}: <NA>")
-                    else:
-                        # Truncate long values
-                        str_val = str(value)
-                        if len(str_val) > 100:
-                            str_val = str_val[:97] + "..."
-                        logger.info(f"    {col}: {str_val}")
-        logger.info("=" * 50)
-
     async def _async_get_request(self, url: str, params: Dict = None) -> str:
         """Make an async GET request.
 
@@ -1552,17 +1642,19 @@ class MutationHandler:
         # Fetch and combine data from sources
         dfs_to_combine = []
         if verbose:
-            print(f"Fetching mutations from sources: {', '.join(sources)}...")
+            logger.info(f"Fetching mutations from sources: {', '.join(sources)}...")
 
         for source in sources:
             try:
                 df = await self._fetch_source_data(source, gene_name, refseq_id)
-                standardized_df = self.standardize_mutation_data(df, source)
+                standardized_df = self.standardize_mutation_data(df, source, gene_name)
 
                 if not standardized_df.empty:
                     dfs_to_combine.append(standardized_df)
                     if verbose:
-                        print(f"  Found {len(standardized_df)} variants from {source}")
+                        logger.info(
+                            f"Found {len(standardized_df)} variants from {source}"
+                        )
 
             except Exception as e:
                 logger.error(f"Error fetching {source} data: {str(e)}")
@@ -1588,13 +1680,13 @@ class MutationHandler:
                         axis=1,
                     )
                     dfs_to_combine.append(custom_df)
-                    print(f"  Found {len(custom_df)} variants from custom")
+                    logger.info(f"Found {len(custom_df)} variants from custom")
             except Exception as e:
                 logger.error(f"Error fetching custom data: {str(e)}")
 
         if not dfs_to_combine:
             if verbose:
-                print("No mutations found")
+                logger.info("No mutations found")
             return pd.DataFrame()
 
         # Process combined data
@@ -1642,7 +1734,7 @@ class MutationHandler:
             alt_features["mutation_end"] = pd.to_numeric(alt_features["mutation_end"])
 
         if verbose:
-            print("\nAnalyzing mutations in alternative features:")
+            logger.info("Analyzing mutations in alternative features:")
 
         filtered_dfs = []
 
@@ -1657,8 +1749,8 @@ class MutationHandler:
                 orig_start = feature["start"]
                 orig_end = feature["end"]
                 if start_pos != orig_start or end_pos != orig_end:
-                    print(
-                        f"  Feature {name}: {orig_start}-{orig_end} extended to {start_pos}-{end_pos} for mutation detection"
+                    logger.info(
+                        f"Feature {name}: {orig_start}-{orig_end} extended to {start_pos}-{end_pos} for mutation detection"
                     )
 
             # Filter mutations for this feature using mutation coordinates
@@ -1676,14 +1768,14 @@ class MutationHandler:
                 filtered_dfs.append(feature_mutations)
 
             if verbose:
-                print(
-                    f"  Feature {name} ({start_pos}-{end_pos}): {len(feature_mutations)} mutations"
+                logger.info(
+                    f"Feature {name}({start_pos}-{end_pos}): {len(feature_mutations)} mutations"
                 )
 
         if filtered_dfs:
             filtered_df = pd.concat(filtered_dfs, ignore_index=True)
             if verbose:
-                print(f"\nTotal mutations in all features: {len(filtered_df)}")
+                logger.info(f"Total mutations in all features: {len(filtered_df)}")
 
             # Calculate relative positions
             if len(filtered_df) > 0:
@@ -1692,7 +1784,7 @@ class MutationHandler:
             return filtered_df
         else:
             if verbose:
-                print("No mutations found in any feature")
+                logger.info("No mutations found in any feature")
             return pd.DataFrame()
 
     async def _validate_mutation_consequences(
@@ -1705,26 +1797,23 @@ class MutationHandler:
         """Validate mutation consequences using translation-based prediction."""
         validated_mutations = []
 
-        print(f"        └─ ⚡ MUTATION VALIDATION")
-        print(f"           ├─ Transcript: {transcript_id}")
-        print(f"           ├─ Mutations to validate: {len(mutations_df)}")
+        # Get gene name from first mutation if available
+        gene_name = (
+            mutations_df.iloc[0].get("gene_name", "unknown")
+            if not mutations_df.empty
+            else "unknown"
+        )
+
+        logger.info(
+            f"Validating {len(mutations_df)} mutations for {gene_name} ({transcript_id})"
+        )
 
         if current_feature is not None:
             feature_type = current_feature.get("region_type", "unknown")
             feature_range = (
                 f"{current_feature.get('start', '?')}-{current_feature.get('end', '?')}"
             )
-            print(f"           ├─ Feature context: {feature_type} at {feature_range}")
-
-        # Show a sample of mutations being processed
-        if not mutations_df.empty:
-            print(f"           ├─ Sample mutations:")
-            for idx, mutation in mutations_df.head(3).iterrows():
-                pos = mutation.get("position", "?")
-                ref = mutation.get("reference", "?")
-                alt = mutation.get("alternate", "?")
-                orig_impact = mutation.get("impact", "?")
-                print(f"              ├─ {pos}: {ref}>{alt} (original: {orig_impact})")
+            logger.info(f"  Region: {feature_type} at {feature_range}")
 
         validation_stats = {
             "total_processed": 0,
@@ -1740,19 +1829,34 @@ class MutationHandler:
             validation_stats["total_processed"] += 1
 
             try:
-                # Get mutation details
+                # Get mutation details for logging and validation
                 genomic_pos = int(mutation["position"])
                 ref_allele = str(mutation["reference"]).upper()
                 alt_allele = str(mutation["alternate"]).upper()
                 original_impact = mutation.get("impact", "unknown")
                 variant_id = mutation.get("variant_id", f"pos_{genomic_pos}")
+                source = mutation.get("source", "unknown")
+                chrom = mutation.get("chromosome", "?")
 
-                print(
-                    f"                 ├─ [{idx + 1}/{len(mutations_df)}] Validating {variant_id}"
+                # Create searchable variant identifier for databases (truncate long indels for display)
+                def truncate_allele(allele: str, max_len: int = 10) -> str:
+                    """Truncate long alleles for readable logging."""
+                    if len(allele) <= max_len:
+                        return allele
+                    return f"{allele[:max_len]}...[{len(allele)}bp]"
+
+                # Full variant for downstream use
+                variant_lookup = f"{chrom}:{genomic_pos}:{ref_allele}>{alt_allele}"
+
+                # Truncated variant for logging
+                ref_display = truncate_allele(ref_allele)
+                alt_display = truncate_allele(alt_allele)
+                variant_display = f"{chrom}:{genomic_pos}:{ref_display}>{alt_display}"
+
+                # Log mutation being evaluated at the start
+                logger.info(
+                    f"  Evaluating: {source}: {variant_id} | {variant_display} | Database impact: {original_impact}"
                 )
-                print(f"                    ├─ Position: {genomic_pos}")
-                print(f"                    ├─ Mutation: {ref_allele}>{alt_allele}")
-                print(f"                    ├─ Original impact: '{original_impact}'")
 
                 # Check if mutation is in alternative start site
                 in_alt_start_site = False
@@ -1784,20 +1888,13 @@ class MutationHandler:
                                 alt_start_note = (
                                     f" (in alternative start site {start_codon})"
                                 )
-
-                                print(
-                                    f"                    ├─ 🎯 MUTATION IN ALTERNATIVE START SITE: {start_codon} at {alt_start_pos} ({strand} strand)"
-                                )
-                                print(
-                                    f"                       ├─ Codon span: {codon_start}-{codon_end}"
-                                )
-                                print(
-                                    f"                       └─ Mutation at: {genomic_pos}"
+                                logger.info(
+                                    f"  {source}: {variant_id} | {variant_display} | Alt start site at {start_codon} codon"
                                 )
 
                         except (ValueError, TypeError):
-                            print(
-                                f"                    ├─ Warning: Invalid alt_start_pos '{alt_start_pos}'"
+                            logger.debug(
+                                f"Warning: Invalid alt_start_pos '{alt_start_pos}'"
                             )
 
                 # Use fast prediction
@@ -1810,10 +1907,6 @@ class MutationHandler:
                     validated_impact_with_note = f"{validated_impact}{alt_start_note}"
                 else:
                     validated_impact_with_note = validated_impact
-
-                print(
-                    f"                    ├─ Validated impact: '{validated_impact_with_note}'"
-                )
 
                 # Create validated mutation record - PRESERVE ORIGINAL IMPACT
                 validated_mutation = mutation.copy()
@@ -1832,10 +1925,11 @@ class MutationHandler:
                 if original_impact == validated_impact:
                     validated_mutation["impact_agreement"] = True
                     validation_stats["impact_agreements"] += 1
-                    agreement_note = "✅ AGREEMENT: Original and validated match"
-                    if in_alt_start_site:
-                        agreement_note += " [ALT START SITE]"
-                    print(f"                    └─ {agreement_note}")
+                    # Log all validated changes at INFO level
+                    alt_site_tag = " [alt start]" if in_alt_start_site else ""
+                    logger.info(
+                        f"  {source}: {variant_id} | {variant_display} | Validated: {validated_impact}{alt_site_tag}"
+                    )
                 else:
                     validated_mutation["impact_agreement"] = False
                     validation_stats["impact_disagreements"] += 1
@@ -1849,46 +1943,39 @@ class MutationHandler:
                         validation_stats["disagreement_patterns"][disagreement_key] = 0
                     validation_stats["disagreement_patterns"][disagreement_key] += 1
 
-                    disagreement_note = (
-                        f"🔄 DISAGREEMENT: {original_impact} → {validated_impact}"
+                    # Log disagreements at INFO level with full database lookup info
+                    alt_site_tag = " [alt start]" if in_alt_start_site else ""
+                    logger.info(
+                        f"  {source}: {variant_id} | {variant_display} | {original_impact} → {validated_impact}{alt_site_tag}"
                     )
-                    if in_alt_start_site:
-                        disagreement_note += " [ALT START SITE]"
-                    print(f"                    ├─ {disagreement_note}")
 
-                    # Add detailed explanation for disagreements
+                    # Add brief explanation for common disagreement types (DEBUG only)
                     if (
                         "missense" in original_impact
                         and "synonymous" in validated_impact
                     ):
-                        print(
-                            f"                    └─ 📝 Explanation: Database predicted protein change, but codon analysis shows silent mutation"
+                        logger.debug(
+                            f"    Database predicted protein change, validation shows silent"
                         )
                     elif (
                         "synonymous" in original_impact
                         and "missense" in validated_impact
                     ):
-                        print(
-                            f"                    └─ 📝 Explanation: Database predicted silent mutation, but codon analysis shows protein change"
+                        logger.debug(
+                            f"    Database predicted silent, validation shows protein change"
                         )
                     elif "nonsense" in validated_impact:
-                        print(
-                            f"                    └─ 📝 Explanation: Codon analysis detected premature stop codon"
-                        )
+                        logger.debug(f"    Validation detected premature stop codon")
                     elif "frameshift" in validated_impact:
-                        print(
-                            f"                    └─ 📝 Explanation: Length change causes reading frame shift"
-                        )
-                    else:
-                        print(
-                            f"                    └─ 📝 Explanation: Different functional interpretation"
-                        )
+                        logger.debug(f"    Length change causes frameshift")
 
                 validated_mutations.append(validated_mutation)
                 validation_stats["successful_validations"] += 1
 
             except Exception as e:
-                print(f"                    └─ ❌ VALIDATION FAILED: {str(e)}")
+                logger.warning(
+                    f"  {source}: {variant_id} | {variant_display} | Validation failed: {str(e)}"
+                )
 
                 # Keep original mutation with error info
                 validated_mutation = mutation.copy()
@@ -1907,40 +1994,37 @@ class MutationHandler:
         # Create final DataFrame
         result_df = pd.DataFrame(validated_mutations)
 
-        # Print comprehensive summary
-        print(f"        │  └─ Validation Summary:")
-        print(
-            f"              ├─ Total processed: {validation_stats['total_processed']}"
-        )
-        print(
-            f"              ├─ Successful validations: {validation_stats['successful_validations']}"
-        )
-        print(
-            f"              ├─ Validation failures: {validation_stats['validation_failures']}"
-        )
-        print(
-            f"              ├─ Impact agreements: {validation_stats['impact_agreements']}"
-        )
-        print(
-            f"              ├─ Impact disagreements: {validation_stats['impact_disagreements']}"
-        )
-        print(
-            f"              ├─ 🎯 Mutations in alt start sites: {validation_stats['alt_start_site_mutations']}"
+        # Print concise summary at INFO level
+        total = validation_stats["total_processed"]
+        agreements = validation_stats["impact_agreements"]
+        disagreements = validation_stats["impact_disagreements"]
+        failures = validation_stats["validation_failures"]
+        alt_start = validation_stats["alt_start_site_mutations"]
+
+        agreement_pct = (agreements / total * 100) if total > 0 else 0
+        logger.info(
+            f"Validation complete: {total} total, {agreements} agree ({agreement_pct:.1f}%), "
+            f"{disagreements} disagree, {failures} failed, {alt_start} in alt start sites"
         )
 
+        # Show disagreement patterns if any exist
         if validation_stats["disagreement_patterns"]:
-            print(f"              ├─ Disagreement patterns:")
-            for pattern, count in validation_stats["disagreement_patterns"].items():
-                print(f"              │  ├─ {pattern}: {count}")
+            logger.info(f"Disagreement breakdown:")
+            for pattern, count in sorted(
+                validation_stats["disagreement_patterns"].items(),
+                key=lambda x: x[1],
+                reverse=True,
+            ):
+                logger.info(f"  {pattern}: {count}")
 
         # Show final distributions
         if not result_df.empty:
-            print(f"              ├─ Final validated impact distribution:")
+            logger.debug(f"Final validated impact distribution:")
             if "impact_validated" in result_df.columns:
                 for impact, count in (
                     result_df["impact_validated"].value_counts().items()
                 ):
-                    print(f"                 ├─ {impact}: {count}")
+                    logger.debug(f"{impact}: {count}")
 
             # Show alternative start site breakdown
             if "in_alt_start_site" in result_df.columns:
@@ -1949,8 +2033,8 @@ class MutationHandler:
                 percentage = (
                     (alt_start_count / total_count * 100) if total_count > 0 else 0
                 )
-                print(
-                    f"              └─ Alternative start site mutations: {alt_start_count}/{total_count} ({percentage:.1f}%)"
+                logger.debug(
+                    f"Alternative start site mutations: {alt_start_count}/{total_count}({percentage:.1f}%)"
                 )
 
         return result_df
@@ -1986,24 +2070,24 @@ class MutationHandler:
         """
         try:
             # Get alternative isoform features
-            print(f"  ├─ Getting alternative features...", end="", flush=True)
+            logger.debug(f"  Getting alternative features...")
             alt_features = alt_isoform_handler.get_mutation_features(
                 gene_name, top_n_per_type_per_transcript
             )
             if alt_features.empty:
-                print(f"\r  ├─ No alternative features found")
+                logger.debug(f"  No alternative features found")
                 return {"gene_name": gene_name, "status": "no_features", "error": None}
-            print(f"\r  ├─ Found {len(alt_features)} alternative features")
+            logger.debug(f"  Found {len(alt_features)} alternative features")
 
             # Get unique transcript IDs from the BED file (alt_features)
-            print(f"  ├─ Using transcript IDs from BED file...", end="", flush=True)
+            logger.debug(f"  Using transcript IDs from BED file...")
             transcript_ids_from_bed = alt_features["transcript_id"].unique()
             # Filter out any "NA" assignments
             transcript_ids_from_bed = [
                 tid for tid in transcript_ids_from_bed if tid != "NA"
             ]
             if not transcript_ids_from_bed:
-                print(f"\r  ├─ No valid transcript assignments in BED file")
+                logger.debug(f"  No valid transcript assignments in BED file")
                 return {
                     "gene_name": gene_name,
                     "status": "no_transcript_assignments",
@@ -2013,7 +2097,7 @@ class MutationHandler:
             # Get transcript info for only the transcripts specified in BED file
             transcript_info = genome_handler.get_transcript_ids(gene_name)
             if transcript_info.empty:
-                print(f"\r  ├─ No transcript info found in genome")
+                logger.debug(f"  No transcript info found in genome")
                 return {
                     "gene_name": gene_name,
                     "status": "no_transcripts",
@@ -2025,24 +2109,20 @@ class MutationHandler:
                 transcript_info["transcript_id"].isin(transcript_ids_from_bed)
             ]
             if transcript_info.empty:
-                print(
-                    f"\r  ├─ None of the BED transcript IDs found in genome annotation"
+                logger.debug(
+                    f"  None of the BED transcript IDs found in genome annotation"
                 )
                 return {
                     "gene_name": gene_name,
                     "status": "no_matching_transcripts",
                     "error": None,
                 }
-            print(
-                f"\r  ├─ Using {len(transcript_info)} transcripts from BED file assignments"
+            logger.debug(
+                f"  Using {len(transcript_info)} transcripts from BED file assignments"
             )
 
             # Create transcript-alternative feature pairs directly from BED file assignments
-            print(
-                f"  ├─ Creating transcript-feature pairs from BED assignments...",
-                end="",
-                flush=True,
-            )
+            logger.debug(f"  Creating transcript-feature pairs from BED assignments...")
             transcript_feature_pairs = []
             # Process each alternative feature (which already has transcript assignment)
             for idx, feature in alt_features.iterrows():
@@ -2091,14 +2171,16 @@ class MutationHandler:
                 )
 
             if not transcript_feature_pairs:
-                print(f"\r  ├─ No valid transcript-feature pairs from BED assignments")
+                logger.debug(
+                    f"  No valid transcript-feature pairs from BED assignments"
+                )
                 return {
                     "gene_name": gene_name,
                     "status": "no_valid_pairs",
                     "error": None,
                 }
-            print(
-                f"\r  ├─ Created {len(transcript_feature_pairs)} transcript-feature pairs from BED assignments"
+            logger.debug(
+                f"  Created {len(transcript_feature_pairs)} transcript-feature pairs from BED assignments"
             )
 
             # Determine sources to use
@@ -2114,7 +2196,7 @@ class MutationHandler:
             # Initialize validation components once if needed
             protein_generator = None
             if validate_consequences:
-                print(f"  ├─ Initializing consequence validation...")
+                logger.info(f"Initializing mutation validation for {gene_name}")
                 from swissisoform.translation import AlternativeProteinGenerator
 
                 protein_generator = AlternativeProteinGenerator(
@@ -2129,8 +2211,8 @@ class MutationHandler:
             all_mutations_for_viz = pd.DataFrame()
 
             # Process each transcript-feature pair individually
-            print(
-                f"  ├─ Processing {len(transcript_feature_pairs)} transcript-feature pairs..."
+            logger.debug(
+                f"Processing {len(transcript_feature_pairs)} transcript-feature pairs..."
             )
             for pair_idx, pair in enumerate(transcript_feature_pairs, 1):
                 transcript_id = pair["transcript_id"]
@@ -2141,14 +2223,12 @@ class MutationHandler:
                 feature_start = pair["feature_start"]
                 feature_end = pair["feature_end"]
 
-                print(
-                    f"  │  ├─ Processing pair {pair_idx}/{len(transcript_feature_pairs)}: {transcript_id} × {feature_id}"
+                logger.debug(
+                    f"Processing pair {pair_idx}/{len(transcript_feature_pairs)}: {transcript_id} × {feature_id}"
                 )
 
                 # STEP 1: Get mutations specifically for this transcript-feature pair
-                print(
-                    f"  │  │  ├─ Fetching mutations for {refseq_id or 'gene-level'}..."
-                )
+                logger.debug(f"Fetching mutations for {refseq_id or 'gene-level'}...")
                 pair_mutations = await self.get_visualization_ready_mutations(
                     gene_name=gene_name,
                     alt_features=alt_features.loc[[feature_idx]],  # Only this feature
@@ -2159,7 +2239,7 @@ class MutationHandler:
                 )
 
                 if pair_mutations is None or pair_mutations.empty:
-                    print(f"  │  │  ├─ No mutations found for this pair")
+                    logger.debug(f"No mutations found for this pair")
                     # Still record the pair with zero counts
                     mutation_categories = {}
                     if impact_types:
@@ -2173,6 +2253,13 @@ class MutationHandler:
                             )
                             mutation_categories[impact_key] = ""
 
+                    # Initialize per-source counts
+                    source_categories = {}
+                    if sources:
+                        for source in sources:
+                            source_key = f"mutations_{source.lower()}"
+                            source_categories[source_key] = 0
+
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
@@ -2181,17 +2268,19 @@ class MutationHandler:
                             "feature_start": feature_start,
                             "feature_end": feature_end,
                             "mutation_count_total": 0,
+                            "mutation_sources": "",  # NEW
                             "variant_ids": "",
                             **mutation_categories,
+                            **source_categories,  # NEW
                         }
                     )
                     continue
 
-                print(f"  │  │  ├─ Found {len(pair_mutations)} mutations")
+                logger.debug(f"Found {len(pair_mutations)} mutations")
 
                 # STEP 2: Filter to mutations in the specific alternative region
-                print(
-                    f"  │  │  ├─ Filtering to feature region ({feature_start}-{feature_end})..."
+                logger.debug(
+                    f"Filtering to feature region ({feature_start}-{feature_end})..."
                 )
                 region_mutations = pair_mutations[
                     (pair_mutations["position"] >= feature_start)
@@ -2199,7 +2288,7 @@ class MutationHandler:
                 ].copy()
 
                 if region_mutations.empty:
-                    print(f"  │  │  ├─ No mutations in feature region")
+                    logger.debug(f"No mutations in feature region")
                     mutation_categories = {}
                     if impact_types:
                         for impact_type in desired_impact_types:
@@ -2212,6 +2301,13 @@ class MutationHandler:
                             )
                             mutation_categories[impact_key] = ""
 
+                    # Initialize per-source counts
+                    source_categories = {}
+                    if sources:
+                        for source in sources:
+                            source_key = f"mutations_{source.lower()}"
+                            source_categories[source_key] = 0
+
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
@@ -2220,25 +2316,27 @@ class MutationHandler:
                             "feature_start": feature_start,
                             "feature_end": feature_end,
                             "mutation_count_total": 0,
+                            "mutation_sources": "",  # NEW
                             "variant_ids": "",
                             **mutation_categories,
+                            **source_categories,  # NEW
                         }
                     )
                     continue
 
-                print(f"  │  │  ├─ {len(region_mutations)} mutations in feature region")
+                logger.debug(f"{len(region_mutations)} mutations in feature region")
 
                 # STEP 3: Filter out low impact variants
-                print(f"  │  │  ├─ Filtering out low impact variants...")
+                logger.debug(f"Filtering out low impact variants...")
                 high_impact_mutations = self._filter_out_low_impact_variants(
                     region_mutations
                 )
-                print(
-                    f"  │  │  ├─ {len(high_impact_mutations)} high-impact mutations remain"
+                logger.debug(
+                    f"{len(high_impact_mutations)} high-impact mutations remain"
                 )
 
                 if high_impact_mutations.empty:
-                    print(f"  │  │  ├─ No high-impact mutations remain")
+                    logger.debug(f"No high-impact mutations remain")
                     mutation_categories = {}
                     if impact_types:
                         for impact_type in desired_impact_types:
@@ -2251,6 +2349,13 @@ class MutationHandler:
                             )
                             mutation_categories[impact_key] = ""
 
+                    # Initialize per-source counts
+                    source_categories = {}
+                    if sources:
+                        for source in sources:
+                            source_key = f"mutations_{source.lower()}"
+                            source_categories[source_key] = 0
+
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
@@ -2259,8 +2364,10 @@ class MutationHandler:
                             "feature_start": feature_start,
                             "feature_end": feature_end,
                             "mutation_count_total": 0,
+                            "mutation_sources": "",
                             "variant_ids": "",
                             **mutation_categories,
+                            **source_categories,
                         }
                     )
                     continue
@@ -2268,8 +2375,8 @@ class MutationHandler:
                 # STEP 4: Validate consequences for this specific subset
                 validated_mutations = high_impact_mutations.copy()
                 if validate_consequences and protein_generator is not None:
-                    print(
-                        f"  │  │  ├─ Validating consequences for {len(high_impact_mutations)} mutations..."
+                    logger.debug(
+                        f"Validating consequences for {len(high_impact_mutations)} mutations..."
                     )
 
                     # Get the current feature for context
@@ -2285,8 +2392,8 @@ class MutationHandler:
                             transcript_id, current_feature
                         )
                         if not test_result:
-                            print(
-                                f"  │  │  └─ 🛑 Protein extraction failed - skipping this pair"
+                            logger.debug(
+                                f"[DEBUG_EMOJI] 🛑 Protein extraction failed - skipping this pair"
                             )
                             continue
 
@@ -2296,7 +2403,7 @@ class MutationHandler:
                         protein_generator,
                         current_feature,
                     )
-                    print(f"  │  │  ├─ Validation complete")
+                    logger.debug(f"Validation complete")
 
                     # Apply user-specified impact filtering on VALIDATED impacts
                     if (
@@ -2309,8 +2416,8 @@ class MutationHandler:
                                 desired_impact_types
                             )
                         ]
-                        print(
-                            f"  │  │  ├─ User impact filtering: {pre_filter_count} → {len(validated_mutations)} mutations"
+                        logger.debug(
+                            f"User impact filtering: {pre_filter_count}{len(validated_mutations)} mutations"
                         )
 
                 # STEP 5: Collect results for this pair
@@ -2318,6 +2425,7 @@ class MutationHandler:
 
                 # Initialize default counts for all desired impact types
                 mutation_categories = {}
+                source_categories = {}  # Track per-source counts
                 if impact_types:
                     for impact_type in desired_impact_types:
                         category_key = (
@@ -2329,7 +2437,14 @@ class MutationHandler:
                         )
                         mutation_categories[impact_key] = ""
 
+                # Initialize per-source counts for each requested source
+                if sources:
+                    for source in sources:
+                        source_key = f"mutations_{source.lower()}"
+                        source_categories[source_key] = 0
+
                 variant_ids = []
+                mutation_sources = set()  # Track which sources have mutations
                 if pair_mutation_count > 0:
                     # Count by impact category
                     impact_column = (
@@ -2370,6 +2485,17 @@ class MutationHandler:
                                         impact_ids
                                     )
 
+                    # Count by source
+                    if "source" in validated_mutations.columns:
+                        for source in validated_mutations["source"].unique():
+                            if pd.notna(source):
+                                mutation_sources.add(str(source))
+                                source_mutations = validated_mutations[
+                                    validated_mutations["source"] == source
+                                ]
+                                source_key = f"mutations_{str(source).lower()}"
+                                source_categories[source_key] = len(source_mutations)
+
                     # Collect all variant IDs
                     if "variant_id" in validated_mutations.columns:
                         variant_ids = (
@@ -2395,10 +2521,14 @@ class MutationHandler:
                     "feature_start": feature_start,
                     "feature_end": feature_end,
                     "mutation_count_total": pair_mutation_count,
+                    "mutation_sources": ",".join(sorted(mutation_sources))
+                    if mutation_sources
+                    else "",  # List of sources
                     "variant_ids": ",".join(variant_ids) if variant_ids else "",
                     "mutations_in_alt_start_site": 0,
                     "alt_start_site_variant_ids": "",
                     **mutation_categories,
+                    **source_categories,  # Add per-source counts
                 }
 
                 # Add validation metrics if available
@@ -2447,7 +2577,7 @@ class MutationHandler:
 
                 # Enhanced completion message
                 completion_msg = (
-                    f"  │  │  └─ Pair complete: {pair_mutation_count} final mutations"
+                    f"  Pair complete: {pair_mutation_count} final mutations"
                 )
                 if (
                     validate_consequences
@@ -2457,10 +2587,10 @@ class MutationHandler:
                     alt_start_count = validated_mutations["in_alt_start_site"].sum()
                     if alt_start_count > 0:
                         completion_msg += f" (🎯 {alt_start_count} in alt start site)"
-                print(completion_msg)
+                logger.debug(completion_msg)
 
-            print(
-                f"  ├─ All pairs processed. Total mutations for visualization: {len(all_mutations_for_viz)}"
+            logger.debug(
+                f"All pairs processed. Total mutations for visualization: {len(all_mutations_for_viz)}"
             )
 
             # Generate visualizations if requested
@@ -2470,8 +2600,8 @@ class MutationHandler:
                 visualizer = GenomeVisualizer(genome_handler)
                 gene_dir = Path(output_dir) / gene_name
                 gene_dir.mkdir(parents=True, exist_ok=True)
-                print(
-                    f"  ├─ Generating visualizations for each transcript-feature pair:"
+                logger.debug(
+                    f"Generating visualizations for each transcript-feature pair:"
                 )
 
                 for pair_idx, pair in enumerate(transcript_feature_pairs, 1):
@@ -2483,13 +2613,13 @@ class MutationHandler:
                     if feature_idx in alt_features.index:
                         feature_for_viz = alt_features.loc[[feature_idx]].copy()
                     else:
-                        print(
-                            f"  │  ├─ Warning: Invalid feature index {feature_idx}, skipping visualization"
+                        logger.debug(
+                            f"Warning: Invalid feature index {feature_idx}, skipping visualization"
                         )
                         continue
 
-                    print(
-                        f"  │  ├─ Visualizing pair {pair_idx}/{len(transcript_feature_pairs)}: {transcript_id} × {feature_id}"
+                    logger.debug(
+                        f"Visualizing pair {pair_idx}/{len(transcript_feature_pairs)}: {transcript_id} × {feature_id}"
                     )
 
                     # Create directories organized by transcript and feature
@@ -2510,13 +2640,13 @@ class MutationHandler:
                             & (all_mutations_for_viz["pair_feature_id"] == feature_id)
                         ].copy()
 
-                    print(
-                        f"  │  │  ├─ Creating view with {len(pair_viz_mutations)} validated mutations"
+                    logger.debug(
+                        f"Creating view with {len(pair_viz_mutations)} validated mutations"
                     )
 
                     if "impact_validated" in pair_viz_mutations.columns:
-                        print(
-                            f"  │  │  ├─ Validated impacts: {pair_viz_mutations['impact_validated'].unique()}"
+                        logger.debug(
+                            f"Validated impacts: {pair_viz_mutations['impact_validated'].unique()}"
                         )
 
                     # Always call visualizer, even with empty mutations DataFrame
@@ -2530,7 +2660,7 @@ class MutationHandler:
                         ),
                     )
 
-                    print(f"  │  │  └─ Creating zoomed view")
+                    logger.debug(f"Creating zoomed view")
                     visualizer.visualize_transcript_zoomed(
                         gene_name=gene_name,
                         transcript_id=transcript_id,
@@ -2549,7 +2679,7 @@ class MutationHandler:
                 else 0
             )
 
-            print("  └─ Processing complete")
+            logger.debug("Processing complete")
             return {
                 "gene_name": gene_name,
                 "status": "success",
@@ -2567,5 +2697,5 @@ class MutationHandler:
 
         except Exception as e:
             logger.error(f"Error processing gene {gene_name}: {str(e)}")
-            print(f"  └─ Error: {str(e)}")
+            logger.debug(f"Error: {str(e)}")
             return {"gene_name": gene_name, "status": "error", "error": str(e)}

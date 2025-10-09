@@ -38,7 +38,11 @@ class TranscriptDatabase:
     """Comprehensive transcript database with intelligent selection logic."""
 
     def __init__(self):
-        """Initialize transcript containers, mappings, and transcript sets."""
+        """Initialize transcript containers, mappings, and transcript sets.
+
+        Creates empty data structures for storing transcript information, gene mappings,
+        preferred transcripts, MANE Select transcripts, and Ensembl-RefSeq ID mappings.
+        """
         self.transcripts: Dict[str, TranscriptInfo] = {}
         self.gene_transcripts: Dict[str, List[str]] = defaultdict(list)
         self.gene_names: Dict[str, str] = {}
@@ -47,7 +51,12 @@ class TranscriptDatabase:
         self.ensembl_to_refseq: Dict[str, str] = {}
 
     def load_from_gtf(self, gtf_path: Union[str, Path], verbose: bool = True) -> None:
-        """Load transcript information from GENCODE GTF."""
+        """Load transcript information from GENCODE GTF.
+
+        Args:
+            gtf_path (Union[str, Path]): Path to the GENCODE GTF annotation file.
+            verbose (bool): If True, print progress information. Defaults to True.
+        """
         if verbose:
             logger.info(f"Loading transcripts from GTF: {gtf_path}")
 
@@ -100,7 +109,12 @@ class TranscriptDatabase:
     def load_preferred_transcripts(
         self, preferred_path: Union[str, Path], verbose: bool = True
     ) -> None:
-        """Load preferred transcript list."""
+        """Load preferred transcript list.
+
+        Args:
+            preferred_path (Union[str, Path]): Path to file containing preferred transcript IDs.
+            verbose (bool): If True, print progress information. Defaults to True.
+        """
         if verbose:
             logger.info(f"Loading preferred transcripts: {preferred_path}")
 
@@ -123,7 +137,12 @@ class TranscriptDatabase:
     def load_refseq_mapping(
         self, refseq_gtf_path: Union[str, Path], verbose: bool = True
     ) -> None:
-        """Load RefSeq mapping and MANE Select information from RefSeq GTF."""
+        """Load RefSeq mapping and MANE Select information from RefSeq GTF.
+
+        Args:
+            refseq_gtf_path (Union[str, Path]): Path to RefSeq GTF annotation file.
+            verbose (bool): If True, print progress information. Defaults to True.
+        """
         if verbose:
             logger.info(f"Loading RefSeq mappings: {refseq_gtf_path}")
 
@@ -175,7 +194,19 @@ class TranscriptDatabase:
     def select_best_transcript_for_position(
         self, gene_id: str, target_pos: int, strand: str, max_distance: int = 100
     ) -> Optional[str]:
-        """Select the best transcript for a given genomic position with intelligent ranking."""
+        """Select the best transcript for a given genomic position with intelligent ranking.
+
+        Prioritizes transcripts based on position proximity, preferred status, and MANE Select status.
+
+        Args:
+            gene_id (str): Gene identifier.
+            target_pos (int): Genomic position to match.
+            strand (str): Strand direction ('+' or '-').
+            max_distance (int): Maximum distance to consider for matching. Defaults to 100.
+
+        Returns:
+            Optional[str]: Best matching transcript ID, or None if no match found.
+        """
         if gene_id not in self.gene_transcripts:
             return None
 
@@ -231,7 +262,17 @@ class TranscriptDatabase:
         return None
 
     def get_refseq_id(self, transcript_id: str) -> str:
-        """Get RefSeq ID for a given Ensembl transcript with comprehensive fallback logic."""
+        """Get RefSeq ID for a given Ensembl transcript with comprehensive fallback logic.
+
+        Attempts multiple strategies to find RefSeq mappings including direct mapping,
+        base ID matching, unique reverse mapping, and gene-level fallback.
+
+        Args:
+            transcript_id (str): Ensembl transcript identifier.
+
+        Returns:
+            str: RefSeq transcript ID if found, 'NA' otherwise.
+        """
         # Method 1: Check if it's already stored in transcript info
         if (
             transcript_id in self.transcripts
@@ -316,13 +357,21 @@ class BedProcessor:
         """Initialize the processor with a transcript database and statistics tracker.
 
         Args:
-            transcript_db: TranscriptDatabase instance used for mapping BED entries.
+            transcript_db (TranscriptDatabase): TranscriptDatabase instance used for mapping BED entries.
         """
         self.transcript_db = transcript_db
         self.stats = defaultdict(int)
 
     def parse_bed_entry(self, line: str, line_num: int) -> Optional[BedEntry]:
-        """Parse a BED line into a BedEntry object."""
+        """Parse a BED line into a BedEntry object.
+
+        Args:
+            line (str): BED format line to parse.
+            line_num (int): Line number in the file.
+
+        Returns:
+            Optional[BedEntry]: Parsed BED entry, or None if parsing failed or entry should be filtered.
+        """
         fields = line.strip().split("\t")
         if len(fields) < 6:
             self.stats["invalid_format"] += 1
@@ -386,7 +435,17 @@ class BedProcessor:
     def select_relevant_annotated_start(
         self, gene_id: str, alternative_pos: int, alternative_type: str, strand: str
     ) -> Optional[BedEntry]:
-        """Select biologically relevant annotated start for pairing with alternative."""
+        """Select biologically relevant annotated start for pairing with alternative.
+
+        Args:
+            gene_id (str): Gene identifier.
+            alternative_pos (int): Position of the alternative start site.
+            alternative_type (str): Type of alternative start ('Extended' or 'Truncated').
+            strand (str): Strand direction ('+' or '-').
+
+        Returns:
+            Optional[BedEntry]: Best matching annotated start entry, or None if not found.
+        """
         gene_entries = self.gene_entries[
             gene_id
         ]  # You'll need to store this in BedProcessor
@@ -432,7 +491,14 @@ class BedProcessor:
             return max(annotated_entries, key=lambda x: x.efficiency)
 
     def _parse_alternative_start_name(self, name: str) -> Dict[str, str]:
-        """Parse alternative start site name field."""
+        """Parse alternative start site name field.
+
+        Args:
+            name (str): Name field from BED file in format GENE_ENSEMBL_TYPE_CODON_EFFICIENCY.
+
+        Returns:
+            Dict[str, str]: Dictionary with gene_name, gene_id, start_type, start_codon, and efficiency.
+        """
         parts = name.split("_")
 
         if len(parts) >= 5:
@@ -457,7 +523,14 @@ class BedProcessor:
     def add_missing_annotated_starts(
         self, gene_entries: Dict[str, List[BedEntry]]
     ) -> int:
-        """Add missing annotated starts for genes that have alternatives but no annotated."""
+        """Add missing annotated starts for genes that have alternatives but no annotated.
+
+        Args:
+            gene_entries (Dict[str, List[BedEntry]]): Dictionary mapping gene IDs to lists of BED entries.
+
+        Returns:
+            int: Number of annotated starts added.
+        """
         added_count = 0
 
         for gene_id, entries in gene_entries.items():
@@ -547,13 +620,13 @@ class BedProcessor:
 
         if verbose:
             logger.info(
-                f"  ├─ Valid entries: {self.stats['valid_entries']} / {self.stats['total_entries']}"
+                f"  Valid entries: {self.stats['valid_entries']} / {self.stats['total_entries']}"
             )
 
         # Add missing annotated starts
         added_annotated = self.add_missing_annotated_starts(gene_entries)
         if verbose:
-            logger.info(f"  ├─ Added annotated starts: {added_annotated}")
+            logger.info(f"  Added annotated starts: {added_annotated}")
 
         # Store gene entries for pairing logic
         self.gene_entries = gene_entries
@@ -648,9 +721,9 @@ class BedProcessor:
         )
 
         if verbose:
-            logger.info(f"  ├─ Enhanced entries: {len(enhanced_entries)}")
-            logger.info(f"  ├─ Transcript assignments: {transcript_assignments}")
-            logger.info(f"  └─ Output saved: {output_bed_path}")
+            logger.info(f"  Enhanced entries: {len(enhanced_entries)}")
+            logger.info(f"  Transcript assignments: {transcript_assignments}")
+            logger.info(f"  Output saved: {output_bed_path}")
 
         return final_stats
 
@@ -686,10 +759,10 @@ def comprehensive_cleanup_bed_with_intelligent_selection(
         logger.info(
             "🔧 Starting comprehensive BED cleanup with intelligent transcript selection..."
         )
-        logger.info(f"  ├─ Input BED: {input_bed_path}")
-        logger.info(f"  ├─ GENCODE GTF: {gtf_path}")
-        logger.info(f"  ├─ Preferred transcripts: {preferred_transcripts_path}")
-        logger.info(f"  └─ Output BED: {output_bed_path}")
+        logger.info(f"  Input BED: {input_bed_path}")
+        logger.info(f"  GENCODE GTF: {gtf_path}")
+        logger.info(f"  Preferred transcripts: {preferred_transcripts_path}")
+        logger.info(f"  Output BED: {output_bed_path}")
 
     # Auto-detect RefSeq GTF if not provided
     if refseq_gtf_path is None:
@@ -704,7 +777,7 @@ def comprehensive_cleanup_bed_with_intelligent_selection(
                 )
 
     if verbose and refseq_gtf_path:
-        logger.info(f"  ├─ RefSeq GTF: {refseq_gtf_path}")
+        logger.info(f"  RefSeq GTF: {refseq_gtf_path}")
 
     # Build comprehensive transcript database
     if verbose:
@@ -730,13 +803,13 @@ def comprehensive_cleanup_bed_with_intelligent_selection(
 
     if verbose:
         logger.info(f"\n✅ BED cleanup complete!")
-        logger.info(f"  ├─ Enhanced entries: {final_stats['enhanced_entries']}")
+        logger.info(f"  Enhanced entries: {final_stats['enhanced_entries']}")
         logger.info(
-            f"  ├─ Transcript assignments: {final_stats['transcript_assignments']}"
+            f"  Transcript assignments: {final_stats['transcript_assignments']}"
         )
-        logger.info(f"  ├─ Final genes: {final_stats['final_genes']}")
+        logger.info(f"  Final genes: {final_stats['final_genes']}")
         logger.info(
-            f"  └─ Success rate: {final_stats['transcript_assignments'] / final_stats['enhanced_entries'] * 100:.1f}%"
+            f"  Success rate: {final_stats['transcript_assignments'] / final_stats['enhanced_entries'] * 100:.1f}%"
         )
 
     return final_stats
@@ -746,7 +819,14 @@ def comprehensive_cleanup_bed_with_intelligent_selection(
 
 
 def find_refseq_gtf_file(genome_data_dir: Union[str, Path]) -> Optional[Path]:
-    """Find available RefSeq GTF file in the genome data directory."""
+    """Find available RefSeq GTF file in the genome data directory.
+
+    Args:
+        genome_data_dir (Union[str, Path]): Directory to search for RefSeq GTF files.
+
+    Returns:
+        Optional[Path]: Path to RefSeq GTF file if found, None otherwise.
+    """
     genome_data_dir = Path(genome_data_dir)
 
     possible_files = [
@@ -783,20 +863,20 @@ def print_translation_summary(
         output_dir: Output directory path
     """
     logger.info(f"\nProtein Sequence Generation Summary:")
-    logger.info(f"  ├─ Total genes processed: {total_genes}")
+    logger.info(f"  Total genes processed: {total_genes}")
 
     # Status breakdown
-    logger.info(f"\n  ├─ Status breakdown:")
-    logger.info(f"  │  ├─ Success: {successful_genes}")
+    logger.info(f"\n  Status breakdown:")
+    logger.info(f"  Success: {successful_genes}")
     if failed_genes:
-        logger.info(f"  │  └─ Failed: {len(failed_genes)}")
+        logger.info(f"  Failed: {len(failed_genes)}")
     else:
-        logger.info(f"  │  └─ Failed: 0")
+        logger.info(f"  Failed: 0")
 
     # Dataset statistics
     if not dataset.empty:
-        logger.info(f"\n  ├─ Sequence Generation:")
-        logger.info(f"  │  ├─ Total sequences generated: {len(dataset):,}")
+        logger.info(f"\n  Sequence Generation:")
+        logger.info(f"  Total sequences generated: {len(dataset):,}")
 
         # Calculate transcript-isoform pairs
         genes_with_data = dataset["gene"].nunique()
@@ -819,103 +899,95 @@ def print_translation_summary(
             )
 
         logger.info(
-            f"  │  ├─ Transcript-isoform pairs: {unique_pairs}"
+            f"  Transcript-isoform pairs: {unique_pairs}"
         )  # Updated terminology
         logger.info(
-            f"  │  └─ Average sequences per gene: {len(dataset) / genes_with_data:.1f}"
+            f"  Average sequences per gene: {len(dataset) / genes_with_data:.1f}"
         )
 
         # Mode-specific breakdown
         if mutations_mode and "variant_type" in dataset.columns:
-            logger.info(f"\n  ├─ Sequence breakdown:")
+            logger.info(f"\n  Sequence breakdown:")
             type_counts = dataset["variant_type"].value_counts()
             for variant_type, count in type_counts.items():
                 percentage = (count / len(dataset)) * 100
-                logger.info(f"  │  ├─ {variant_type}: {count:,} ({percentage:.1f}%)")
+                logger.info(f"  {variant_type}: {count:,} ({percentage:.1f}%)")
 
             # Mutation-specific statistics
             if "canonical_mutated" in type_counts:
                 mutation_data = dataset[dataset["variant_type"] == "canonical_mutated"]
                 if not mutation_data.empty:
-                    logger.info(f"\n  ├─ Mutation Analysis:")
+                    logger.info(f"\n  Mutation Analysis:")
+                    logger.info(f"  Total mutations integrated: {len(mutation_data)}")
                     logger.info(
-                        f"  │  ├─ Total mutations integrated: {len(mutation_data)}"
-                    )
-                    logger.info(
-                        f"  │  ├─ Unique mutation positions: {mutation_data['mutation_position'].nunique()}"
+                        f"  Unique mutation positions: {mutation_data['mutation_position'].nunique()}"
                     )
 
                     if "aa_change" in mutation_data.columns:
                         aa_changes = mutation_data["aa_change"].dropna()
                         silent_mutations = len(mutation_data) - len(aa_changes)
-                        logger.info(
-                            f"  │  ├─ Mutations with AA changes: {len(aa_changes)}"
-                        )
+                        logger.info(f"  Mutations with AA changes: {len(aa_changes)}")
                         if silent_mutations > 0:
-                            logger.info(f"  │  ├─ Silent mutations: {silent_mutations}")
+                            logger.info(f"  Silent mutations: {silent_mutations}")
 
                     # Breakdown by impact type if available
                     if "mutation_impact" in mutation_data.columns:
                         impact_counts = mutation_data["mutation_impact"].value_counts()
-                        logger.info(f"  │  │")
-                        logger.info(f"  │  ├─ Breakdown by impact type:")
+                        logger.info(f"")
+                        logger.info(f"  Breakdown by impact type:")
                         for impact_type, count in impact_counts.items():
                             percentage = (count / len(mutation_data)) * 100
-                            logger.info(
-                                f"  │  │  ├─ {impact_type}: {count} ({percentage:.1f}%)"
-                            )
+                            logger.info(f"  {impact_type}: {count} ({percentage:.1f}%)")
 
                     logger.info(
-                        f"  │  └─ Average mutations per gene: {len(mutation_data) / genes_with_data:.1f}"
+                        f"  Average mutations per gene: {len(mutation_data) / genes_with_data:.1f}"
                     )
         else:
             # Pairs mode breakdown
             if "is_alternative" in dataset.columns:  # Updated column name
                 canonical_count = len(dataset[dataset["is_alternative"] == 0])
                 alternative_count = len(dataset[dataset["is_alternative"] == 1])
-                logger.info(f"\n  ├─ Sequence breakdown:")
-                logger.info(f"  │  ├─ Canonical: {canonical_count:,}")
+                logger.info(f"\n  Sequence breakdown:")
+                logger.info(f"  Canonical: {canonical_count:,}")
                 logger.info(
-                    f"  │  └─ Alternative isoform: {alternative_count:,}"
+                    f"  Alternative isoform: {alternative_count:,}"
                 )  # Updated terminology
 
         # Length statistics
-        logger.info(f"\n  ├─ Length statistics:")
-        logger.info(f"  │  ├─ Average: {dataset['length'].mean():.1f} amino acids")
-        logger.info(
-            f"  │  ├─ Range: {dataset['length'].min()}-{dataset['length'].max()}"
-        )
-        logger.info(f"  │  └─ Median: {dataset['length'].median():.1f}")
+        logger.info(f"\n  Length statistics:")
+        logger.info(f"  Average: {dataset['length'].mean():.1f} amino acids")
+        logger.info(f"  Range: {dataset['length'].min()}-{dataset['length'].max()}")
+        logger.info(f"  Median: {dataset['length'].median():.1f}")
 
     else:
-        logger.info(f"\n  ├─ No sequences generated")
+        logger.info(f"\n  No sequences generated")
 
     # Failed genes details
     if failed_genes:
-        logger.info(f"\n  ├─ Genes with errors:")
+        logger.info(f"\n  Genes with errors:")
         for gene in failed_genes[:5]:  # Show first 5
             logger.info(
-                f"  │  ├─ {gene}: No transcript-isoform pairs found"
+                f"  {gene}: No transcript-isoform pairs found"
             )  # Updated terminology
         if len(failed_genes) > 5:
-            logger.info(f"  │  └─ ... and {len(failed_genes) - 5} more")
+            logger.info(f"  ... and {len(failed_genes) - 5} more")
 
     # Output files
     output_path = Path(output_dir)
-    logger.info(f"\n  ├─ Results saved to: {output_dir}")
+    logger.info(f"\n  Results saved to: {output_dir}")
 
     if mutations_mode:
         fasta_file = output_path / "protein_sequences_with_mutations.fasta"
         csv_file = output_path / "protein_sequences_with_mutations.csv"
-        logger.info(f"  ├─ Protein sequences with mutations saved to: {csv_file.name}")
+        logger.info(f"  Protein sequences with mutations saved to: {csv_file.name}")
         if fasta_file.exists():
-            logger.info(f"  ├─ FASTA format saved to: {fasta_file.name}")
+            logger.info(f"  FASTA format saved to: {fasta_file.name}")
     else:
         fasta_file = output_path / "protein_sequences_pairs.fasta"
         csv_file = output_path / "protein_sequences_pairs.csv"
-        logger.info(f"  ├─ Protein sequence pairs saved to: {csv_file.name}")
+        logger.info(f"  Protein sequence pairs saved to: {csv_file.name}")
         if fasta_file.exists():
-            logger.info(f"  ├─ FASTA format saved to: {fasta_file.name}")
+            logger.info(f"  FASTA format saved to: {fasta_file.name}")
 
 
 def update_gencode_gene_names(
@@ -1088,9 +1160,13 @@ def parse_gene_list(gene_list_path: Union[str, Path]) -> List[str]:
     """Parse a file containing a list of gene names.
 
     Args:
-        gene_list_path: Path to file containing gene names
+        gene_list_path (Union[str, Path]): Path to file containing gene names.
+
     Returns:
-        List of gene names
+        List[str]: List of gene names.
+
+    Raises:
+        FileNotFoundError: If the gene list file does not exist.
     """
     gene_list_path = Path(gene_list_path)
     if not gene_list_path.exists():
@@ -1261,10 +1337,10 @@ def print_mutation_summary(results_df, output_dir):
         output_dir: Directory where output files are saved
     """
     logger.info("\nAnalysis Summary:")
-    logger.info(f"  ├─ Total genes processed: {len(results_df)}")
-    logger.info("\n  ├─ Status breakdown:")
+    logger.info(f"  Total genes processed: {len(results_df)}")
+    logger.info("\n  Status breakdown:")
     for status, count in results_df["status"].value_counts().items():
-        logger.info(f"  │  ├─ {status}: {count}")
+        logger.info(f"  {status}: {count}")
 
     # Transcript-isoform statistics (updated for new structure)
     successful_genes = results_df[results_df["status"] == "success"]
@@ -1278,18 +1354,18 @@ def print_mutation_summary(results_df, output_dir):
             total_pairs / len(successful_genes) if len(successful_genes) > 0 else 0
         )
 
-        logger.info(f"\n  ├─ Transcript-Isoform Analysis:")
-        logger.info(f"  │  ├─ Total transcripts across all genes: {total_transcripts}")
-        logger.info(f"  │  ├─ Total alternative isoform features: {total_features}")
-        logger.info(f"  │  ├─ Total transcript-isoform pairs: {total_pairs}")
-        logger.info(f"  │  └─ Average pairs per gene: {avg_pairs_per_gene:.2f}")
+        logger.info(f"\n  Transcript-Isoform Analysis:")
+        logger.info(f"  Total transcripts across all genes: {total_transcripts}")
+        logger.info(f"  Total alternative isoform features: {total_features}")
+        logger.info(f"  Total transcript-isoform pairs: {total_pairs}")
+        logger.info(f"  Average pairs per gene: {avg_pairs_per_gene:.2f}")
 
         # Mutation statistics if available
         if "mutations_filtered" in successful_genes.columns:
             total_mutations = successful_genes["mutations_filtered"].sum()
-            logger.info(f"\n  ├─ Mutation Analysis:")
+            logger.info(f"\n  Mutation Analysis:")
             logger.info(
-                f"  │  ├─ Total mutations in alternative isoform regions: {total_mutations}"
+                f"  Total mutations in alternative isoform regions: {total_mutations}"
             )
 
             # Try to load mutation analysis results to report statistics
@@ -1310,16 +1386,16 @@ def print_mutation_summary(results_df, output_dir):
                         total_pair_mutations / len(pairs_df) if len(pairs_df) > 0 else 0
                     )
                     logger.info(
-                        f"  │  ├─ Total mutations across all pairs: {total_pair_mutations}"
+                        f"  Total mutations across all pairs: {total_pair_mutations}"
                     )
                     logger.info(
-                        f"  │  ├─ Average mutations per transcript-isoform pair: {avg_mutations_per_pair:.2f}"
+                        f"  Average mutations per transcript-isoform pair: {avg_mutations_per_pair:.2f}"
                     )
 
                     # Show breakdown by isoform type if available
                     if "feature_type" in pairs_df.columns:
-                        logger.info(f"  │  │")
-                        logger.info(f"  │  ├─ Breakdown by isoform type:")
+                        logger.info(f"")
+                        logger.info(f"  Breakdown by isoform type:")
 
                         type_mutations = pairs_df.groupby("feature_type")[
                             "mutation_count_total"
@@ -1330,7 +1406,7 @@ def print_mutation_summary(results_df, output_dir):
                             )
                             avg_per_type = count / type_pairs if type_pairs > 0 else 0
                             logger.info(
-                                f"  │  │  ├─ {isoform_type.capitalize()}: {count} total ({avg_per_type:.1f} avg/pair)"
+                                f"  {isoform_type.capitalize()}: {count} total ({avg_per_type:.1f} avg/pair)"
                             )
 
                     # Print statistics for each mutation category
@@ -1338,8 +1414,8 @@ def print_mutation_summary(results_df, output_dir):
                         col for col in pairs_df.columns if col.startswith("mutations_")
                     ]
                     if mutation_categories:
-                        logger.info(f"  │  │")
-                        logger.info(f"  │  ├─ Breakdown by mutation category:")
+                        logger.info(f"")
+                        logger.info(f"  Breakdown by mutation category:")
 
                         for category in mutation_categories:
                             # Skip if the column doesn't exist in the dataframe
@@ -1361,31 +1437,29 @@ def print_mutation_summary(results_df, output_dir):
                             )
 
                             logger.info(
-                                f"  │  │  ├─ {category_name}: {category_total} ({category_percent:.1f}%)"
+                                f"  {category_name}: {category_total} ({category_percent:.1f}%)"
                             )
 
                     logger.info(
-                        f"  │  └─ Detailed results available in isoform_level_results.csv"  # Updated filename
+                        f"  Detailed results available in isoform_level_results.csv"  # Updated filename
                     )
                 except Exception as e:
                     logger.error(f"Error reading mutation analysis: {str(e)}")
-                    logger.info(
-                        f"  │  └─ Error reading detailed mutation analysis: {str(e)}"
-                    )
+                    logger.info(f"  Error reading detailed mutation analysis: {str(e)}")
 
     # Genes with errors
     error_genes = results_df[results_df["status"] == "error"]
     if not error_genes.empty:
-        logger.info("\n  ├─ Genes with errors:")
+        logger.info("\n  Genes with errors:")
         for _, row in error_genes.iterrows():
-            logger.info(f"  │  ├─ {row['gene_name']}: {row['error']}")
+            logger.info(f"  {row['gene_name']}: {row['error']}")
 
-    logger.info(f"\n  ├─ Results saved to: {output_dir}")
+    logger.info(f"\n  Results saved to: {output_dir}")
     logger.info(
-        f"  ├─ Gene-level results saved to: {Path(output_dir) / 'gene_level_results.csv'}"
+        f"  Gene-level results saved to: {Path(output_dir) / 'gene_level_results.csv'}"
     )
     logger.info(
-        f"  ├─ Detailed mutation analysis by pair saved to: {Path(output_dir) / 'isoform_level_results.csv'}"  # Updated filename
+        f"  Detailed mutation analysis by pair saved to: {Path(output_dir) / 'isoform_level_results.csv'}"  # Updated filename
     )
 
 
@@ -1408,20 +1482,20 @@ def print_translation_summary(
         output_dir: Output directory path
     """
     logger.info(f"\nProtein Sequence Generation Summary:")
-    logger.info(f"  ├─ Total genes processed: {total_genes}")
+    logger.info(f"  Total genes processed: {total_genes}")
 
     # Status breakdown
-    logger.info(f"\n  ├─ Status breakdown:")
-    logger.info(f"  │  ├─ Success: {successful_genes}")
+    logger.info(f"\n  Status breakdown:")
+    logger.info(f"  Success: {successful_genes}")
     if failed_genes:
-        logger.info(f"  │  └─ Failed: {len(failed_genes)}")
+        logger.info(f"  Failed: {len(failed_genes)}")
     else:
-        logger.info(f"  │  └─ Failed: 0")
+        logger.info(f"  Failed: 0")
 
     # Dataset statistics
     if not dataset.empty:
-        logger.info(f"\n  ├─ Sequence Generation:")
-        logger.info(f"  │  ├─ Total sequences generated: {len(dataset):,}")
+        logger.info(f"\n  Sequence Generation:")
+        logger.info(f"  Total sequences generated: {len(dataset):,}")
 
         # Calculate transcript-isoform pairs
         genes_with_data = dataset["gene"].nunique()
@@ -1444,103 +1518,95 @@ def print_translation_summary(
             )
 
         logger.info(
-            f"  │  ├─ Transcript-isoform pairs: {unique_pairs}"
+            f"  Transcript-isoform pairs: {unique_pairs}"
         )  # Updated terminology
         logger.info(
-            f"  │  └─ Average sequences per gene: {len(dataset) / genes_with_data:.1f}"
+            f"  Average sequences per gene: {len(dataset) / genes_with_data:.1f}"
         )
 
         # Mode-specific breakdown
         if mutations_mode and "variant_type" in dataset.columns:
-            logger.info(f"\n  ├─ Sequence breakdown:")
+            logger.info(f"\n  Sequence breakdown:")
             type_counts = dataset["variant_type"].value_counts()
             for variant_type, count in type_counts.items():
                 percentage = (count / len(dataset)) * 100
-                logger.info(f"  │  ├─ {variant_type}: {count:,} ({percentage:.1f}%)")
+                logger.info(f"  {variant_type}: {count:,} ({percentage:.1f}%)")
 
             # Mutation-specific statistics
             if "canonical_mutated" in type_counts:
                 mutation_data = dataset[dataset["variant_type"] == "canonical_mutated"]
                 if not mutation_data.empty:
-                    logger.info(f"\n  ├─ Mutation Analysis:")
+                    logger.info(f"\n  Mutation Analysis:")
+                    logger.info(f"  Total mutations integrated: {len(mutation_data)}")
                     logger.info(
-                        f"  │  ├─ Total mutations integrated: {len(mutation_data)}"
-                    )
-                    logger.info(
-                        f"  │  ├─ Unique mutation positions: {mutation_data['mutation_position'].nunique()}"
+                        f"  Unique mutation positions: {mutation_data['mutation_position'].nunique()}"
                     )
 
                     if "aa_change" in mutation_data.columns:
                         aa_changes = mutation_data["aa_change"].dropna()
                         silent_mutations = len(mutation_data) - len(aa_changes)
-                        logger.info(
-                            f"  │  ├─ Mutations with AA changes: {len(aa_changes)}"
-                        )
+                        logger.info(f"  Mutations with AA changes: {len(aa_changes)}")
                         if silent_mutations > 0:
-                            logger.info(f"  │  ├─ Silent mutations: {silent_mutations}")
+                            logger.info(f"  Silent mutations: {silent_mutations}")
 
                     # Breakdown by impact type if available
                     if "mutation_impact" in mutation_data.columns:
                         impact_counts = mutation_data["mutation_impact"].value_counts()
-                        logger.info(f"  │  │")
-                        logger.info(f"  │  ├─ Breakdown by impact type:")
+                        logger.info(f"")
+                        logger.info(f"  Breakdown by impact type:")
                         for impact_type, count in impact_counts.items():
                             percentage = (count / len(mutation_data)) * 100
-                            logger.info(
-                                f"  │  │  ├─ {impact_type}: {count} ({percentage:.1f}%)"
-                            )
+                            logger.info(f"  {impact_type}: {count} ({percentage:.1f}%)")
 
                     logger.info(
-                        f"  │  └─ Average mutations per gene: {len(mutation_data) / genes_with_data:.1f}"
+                        f"  Average mutations per gene: {len(mutation_data) / genes_with_data:.1f}"
                     )
         else:
             # Pairs mode breakdown
             if "is_alternative" in dataset.columns:  # Updated column name
                 canonical_count = len(dataset[dataset["is_alternative"] == 0])
                 alternative_count = len(dataset[dataset["is_alternative"] == 1])
-                logger.info(f"\n  ├─ Sequence breakdown:")
-                logger.info(f"  │  ├─ Canonical: {canonical_count:,}")
+                logger.info(f"\n  Sequence breakdown:")
+                logger.info(f"  Canonical: {canonical_count:,}")
                 logger.info(
-                    f"  │  └─ Alternative isoform: {alternative_count:,}"
+                    f"  Alternative isoform: {alternative_count:,}"
                 )  # Updated terminology
 
         # Length statistics
-        logger.info(f"\n  ├─ Length statistics:")
-        logger.info(f"  │  ├─ Average: {dataset['length'].mean():.1f} amino acids")
-        logger.info(
-            f"  │  ├─ Range: {dataset['length'].min()}-{dataset['length'].max()}"
-        )
-        logger.info(f"  │  └─ Median: {dataset['length'].median():.1f}")
+        logger.info(f"\n  Length statistics:")
+        logger.info(f"  Average: {dataset['length'].mean():.1f} amino acids")
+        logger.info(f"  Range: {dataset['length'].min()}-{dataset['length'].max()}")
+        logger.info(f"  Median: {dataset['length'].median():.1f}")
 
     else:
-        logger.info(f"\n  ├─ No sequences generated")
+        logger.info(f"\n  No sequences generated")
 
     # Failed genes details
     if failed_genes:
-        logger.info(f"\n  ├─ Genes with errors:")
+        logger.info(f"\n  Genes with errors:")
         for gene in failed_genes[:5]:  # Show first 5
             logger.info(
-                f"  │  ├─ {gene}: No transcript-isoform pairs found"
+                f"  {gene}: No transcript-isoform pairs found"
             )  # Updated terminology
         if len(failed_genes) > 5:
-            logger.info(f"  │  └─ ... and {len(failed_genes) - 5} more")
+            logger.info(f"  ... and {len(failed_genes) - 5} more")
 
     # Output files
     output_path = Path(output_dir)
-    logger.info(f"\n  ├─ Results saved to: {output_dir}")
+    logger.info(f"\n  Results saved to: {output_dir}")
 
     if mutations_mode:
         fasta_file = output_path / "protein_sequences_with_mutations.fasta"
         csv_file = output_path / "protein_sequences_with_mutations.csv"
-        logger.info(f"  ├─ Protein sequences with mutations saved to: {csv_file.name}")
+        logger.info(f"  Protein sequences with mutations saved to: {csv_file.name}")
         if fasta_file.exists():
-            logger.info(f"  ├─ FASTA format saved to: {fasta_file.name}")
+            logger.info(f"  FASTA format saved to: {fasta_file.name}")
     else:
         fasta_file = output_path / "protein_sequences_pairs.fasta"
         csv_file = output_path / "protein_sequences_pairs.csv"
-        logger.info(f"  ├─ Protein sequence pairs saved to: {csv_file.name}")
+        logger.info(f"  Protein sequence pairs saved to: {csv_file.name}")
         if fasta_file.exists():
-            logger.info(f"  ├─ FASTA format saved to: {fasta_file.name}")
+            logger.info(f"  FASTA format saved to: {fasta_file.name}")
 
 
 def load_pre_validated_variants(mutations_file: str) -> Dict[str, Set[str]]:
@@ -1611,8 +1677,8 @@ def load_pre_validated_variants(mutations_file: str) -> Dict[str, Set[str]]:
     if gene_counts:
         logger.info("Top genes by variant count:")
         for gene, count in gene_counts[:10]:
-            logger.info(f"  ├─ {gene}: {count} variants")
+            logger.info(f"  {gene}: {count} variants")
         if len(gene_counts) > 10:
-            logger.info(f"  └─ ... and {len(gene_counts) - 10} more genes")
+            logger.info(f"  ... and {len(gene_counts) - 10} more genes")
 
     return pre_validated_variants

@@ -28,9 +28,6 @@ class GenomeHandler:
         Args:
             genome_path (str): Path to the genome FASTA file.
             gtf_path (Optional[str]): Path to the genome annotation GTF file.
-
-        Returns:
-            None
         """
         self.genome = SeqIO.to_dict(SeqIO.parse(genome_path, "fasta"))
         self.gtf_path = gtf_path

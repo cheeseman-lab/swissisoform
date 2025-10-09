@@ -20,13 +20,13 @@ data/mutation_data/*
 results/*
 
 # test notebooks
-notebooks/
+
 
 # out files 
-# TODO: remove results from here
 scripts/out
 scripts/results
 scripts/results_reduced
+tests/test_run_*
 
 # all DS store files
 .DS_Store
