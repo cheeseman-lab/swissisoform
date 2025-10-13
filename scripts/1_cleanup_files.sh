@@ -14,38 +14,47 @@ echo "Checking for required input files..."
 
 GENOME_DIR="../data/genome_data"
 RIBOPROF_DIR="../data/ribosome_profiling"
+CONFIG_FILE="$RIBOPROF_DIR/dataset_config.yaml"
 
-required_genome_files=(
-    "$GENOME_DIR/gencode.v25.annotation.gtf"
-    "$GENOME_DIR/gencode.v47.annotation.gtf"
-)
+# Check for config file
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "✗ $CONFIG_FILE missing"
+    echo "❌ Configuration file not found!"
+    echo "Please create dataset_config.yaml or run 0_download_genome.sh"
+    exit 1
+fi
 
-required_riboprof_files=(
-    "$RIBOPROF_DIR/Ly_2024b_TableS2_formatted.bed"
-)
+echo "✓ dataset_config.yaml found"
 
+# Check for GTF files referenced in config
 echo ""
 echo "Checking genome files..."
-for file in "${required_genome_files[@]}"; do
-    if [ -f "$file" ]; then
-        echo "✓ $(basename $file)"
-    else
-        echo "✗ $file missing"
-        echo "❌ Run 0_download_genome.sh first"
-        exit 1
-    fi
-done
 
+if [ -f "$GENOME_DIR/gencode.v25.annotation.gtf" ]; then
+    echo "✓ gencode.v25.annotation.gtf"
+else
+    echo "✗ gencode.v25.annotation.gtf missing"
+fi
+
+if [ -f "$GENOME_DIR/gencode.v24.annotation.gtf" ]; then
+    echo "✓ gencode.v24.annotation.gtf"
+else
+    echo "✗ gencode.v24.annotation.gtf missing"
+fi
+
+# Check for ribosome profiling BED files
 echo ""
 echo "Checking ribosome profiling files..."
 mkdir -p "$RIBOPROF_DIR"  # Create directory if it doesn't exist
 
 missing_riboprof=false
-for file in "${required_riboprof_files[@]}"; do
-    if [ -f "$file" ]; then
-        echo "✓ $(basename $file)"
+
+# Check for the new data files
+for file in "HELA_Ly2024.bed" "HFF_Chen2020.bed" "IPSC_Chen2020.bed"; do
+    if [ -f "$RIBOPROF_DIR/$file" ]; then
+        echo "✓ $file"
     else
-        echo "✗ $(basename $file) missing"
+        echo "✗ $file missing"
         missing_riboprof=true
     fi
 done
@@ -53,8 +62,7 @@ done
 if [ "$missing_riboprof" = true ]; then
     echo ""
     echo "❌ Missing ribosome profiling BED files!"
-    echo "Please place your experimental data files in $RIBOPROF_DIR:"
-    echo "  - isoforms.bed (all detected isoforms sites)"
+    echo "Please place your experimental data files in $RIBOPROF_DIR"
     exit 1
 fi
 
@@ -73,76 +81,46 @@ echo ""
 echo "Running cleanup script..."
 python3 cleanup_files.py
 
-# Verify outputs
+# Verify outputs for each dataset
+echo ""
 echo "Verifying cleanup outputs..."
 
-# Check GTF file
-if [ -f "../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf" ]; then
-    echo "✓ gencode.v25.annotation.ensembl_cleaned.gtf"
-else
-    echo "✗ gencode.v25.annotation.ensembl_cleaned.gtf"
-    exit 1
-fi
+# Parse datasets from config (simplified check)
+datasets=("hela" "hff" "ipsc")
 
-# Check filtered BED file
-if [ -f "../data/ribosome_profiling/isoforms_with_transcripts.bed" ]; then
-    echo "✓ isoforms_with_transcripts.bed"
-else
-    echo "✗ isoforms_with_transcripts.bed"
-    exit 1
-fi
+all_outputs_exist=true
 
-# Check gene list file and validate gene count
-if [ -f "../data/ribosome_profiling/isoforms_gene_list.txt" ]; then
-    GENE_COUNT_TXT=$(wc -l < "../data/ribosome_profiling/isoforms_gene_list.txt")
-    GENE_COUNT_BED=$(cut -f4 "../data/ribosome_profiling/isoforms_with_transcripts.bed" | cut -d'_' -f1 | sort | uniq | wc -l)
-    
-    if [ "$GENE_COUNT_TXT" -eq "$GENE_COUNT_BED" ]; then
-        echo "✓ isoforms_gene_list.txt ($GENE_COUNT_TXT genes, matches BED file)"
+for dataset in "${datasets[@]}"; do
+    output_bed="$RIBOPROF_DIR/${dataset}_isoforms_with_transcripts.bed"
+    gene_list="$RIBOPROF_DIR/${dataset}_isoforms_gene_list.txt"
+
+    if [ -f "$output_bed" ]; then
+        echo "✓ ${dataset}_isoforms_with_transcripts.bed"
     else
-        echo "✗ isoforms_gene_list.txt ($GENE_COUNT_TXT genes, but BED has $GENE_COUNT_BED genes)"
-        echo "  Gene count mismatch detected - check AlternativeIsoform.get_gene_list() method"
-        exit 1
+        echo "✗ ${dataset}_isoforms_with_transcripts.bed"
+        all_outputs_exist=false
     fi
-else
-    echo "✗ isoforms_gene_list.txt"
-    exit 1
-fi
 
-# Check reduced gene list
-if [ -f "../data/ribosome_profiling/isoforms_gene_list_reduced.txt" ]; then
-    REDUCED_COUNT=$(wc -l < "../data/ribosome_profiling/isoforms_gene_list_reduced.txt")
-    echo "✓ isoforms_gene_list_reduced.txt ($REDUCED_COUNT genes)"
-    
-    if [ "$REDUCED_COUNT" -eq 0 ]; then
-        echo "  WARNING: No genes found in reduced list - predefined genes may not exist in dataset"
-        echo "  Consider updating the subset_gene_list() function with genes from your actual dataset"
+    if [ -f "$gene_list" ]; then
+        GENE_COUNT=$(wc -l < "$gene_list")
+        echo "✓ ${dataset}_isoforms_gene_list.txt ($GENE_COUNT genes)"
+    else
+        echo "✗ ${dataset}_isoforms_gene_list.txt"
+        all_outputs_exist=false
     fi
-else
-    echo "✗ isoforms_gene_list_reduced.txt"
-    exit 1
-fi
+done
 
-echo "🎉 File cleanup completed successfully!"
-echo "Generated files:"
-echo "  ├─ Cleaned GTF annotation"
-echo "  ├─ Cleaned and filtered BED files"
-echo "  └─ Gene lists for analysis"
-
-# Add diagnostic info
-echo ""
-echo "Summary:"
-echo "  ├─ Total genes with alternatives: $GENE_COUNT_BED"
-echo "  ├─ Genes in reduced list: $REDUCED_COUNT"
-if [ "$REDUCED_COUNT" -gt 0 ]; then
-    echo "  └─ Ready for analysis"
-else
-    echo "  └─ WARNING: No genes available for reduced analysis"
+if [ "$all_outputs_exist" = false ]; then
     echo ""
-    echo "Suggested next steps:"
-    echo "  1. Check which genes are available: head -20 ../data/ribosome_profiling/isoforms_gene_list.txt"
-    echo "  2. Update subset_gene_list() with genes from your dataset"
+    echo "❌ Some output files are missing!"
+    exit 1
 fi
+
+echo ""
+echo "🎉 File cleanup completed successfully!"
+echo "Generated files per dataset:"
+echo "  ├─ {dataset}_isoforms_with_transcripts.bed"
+echo "  └─ {dataset}_isoforms_gene_list.txt"
 
 echo ""
 echo "Next step:"

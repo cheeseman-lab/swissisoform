@@ -1,117 +1,123 @@
 #!/usr/bin/env python3
-"""Cleanup files for the ribosome profiling data with intelligent transcript selection."""
+"""Cleanup ribosome profiling data - simplified for transcript-based data."""
 
+import yaml
+import logging
+from pathlib import Path
 from swissisoform.alternative_isoforms import AlternativeIsoform
-from swissisoform.utils import (
-    update_gencode_gene_names,
-    comprehensive_cleanup_bed_with_intelligent_selection,
-    subset_gene_list,
-)
+from swissisoform.utils import simple_transcript_based_cleanup, update_gencode_gene_names
 
-# File paths
-input_gtf = "../data/genome_data/gencode.v25.annotation.gtf"
-output_gtf = "../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
-reference_gtf = "../data/genome_data/gencode.v47.annotation.gtf"
-preferred_transcripts = "../data/genome_data/hela_top_transcript.txt"
-refseq_gtf = "../data/genome_data/GRCh38_latest_genomic.gtf"  # Will auto-detect if None
-input_bed = "../data/ribosome_profiling/Ly_2024b_TableS2_formatted.bed"
-enhanced_bed = "../data/ribosome_profiling/isoforms_with_transcripts.bed"
+# Configure logging to show INFO messages
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-print("=== SwissIsoform Data Cleanup Pipeline ===")
+print("="*60)
+print("SwissIsoform Data Cleanup Pipeline")
+print("="*60)
 
-# Step 1: Update gene names
-print("Step 1: Updating GTF gene names...")
-update_gencode_gene_names(
-    input_gtf_path=input_gtf,
-    output_gtf_path=output_gtf,
-    reference_gtf_path=reference_gtf,
-    verbose=False,  # Reduce verbosity
-)
-print("  ✓ Gene names updated")
+# Load dataset configuration
+config_path = "../data/ribosome_profiling/dataset_config.yaml"
+with open(config_path) as f:
+    config = yaml.safe_load(f)
 
-# Step 2: Enhanced BED cleanup with intelligent transcript selection
-print("Step 2: Processing BED file with intelligent transcript selection...")
-cleanup_stats = comprehensive_cleanup_bed_with_intelligent_selection(
-    input_bed_path=input_bed,
-    gtf_path=output_gtf,
-    preferred_transcripts_path=preferred_transcripts,
-    output_bed_path=enhanced_bed,
-    refseq_gtf_path=refseq_gtf,  # Set to None to auto-detect
-    verbose=True,  # Keep verbose for the new detailed output
-)
+print(f"\nStep 0: Updating GTFs with GENCODE v47 gene names")
+print("="*60)
 
-print(f"  ✓ Enhanced {cleanup_stats['enhanced_entries']} entries")
-print(f"  ✓ Transcript assignments: {cleanup_stats['transcript_assignments']}")
+genome_data_dir = Path("../data/genome_data")
+v47_gtf = genome_data_dir / "gencode.v47.annotation.gtf"
 
-# Step 3: Generate gene lists
-print("Step 3: Generating gene lists...")
-alt_isoforms = AlternativeIsoform()
-alt_isoforms.load_bed(enhanced_bed)
-gene_list = alt_isoforms.get_gene_list()
+if not v47_gtf.exists():
+    print(f"ERROR: GENCODE v47 GTF not found: {v47_gtf}")
+    print("Cannot proceed without v47 reference for gene name updates.")
+    exit(1)
 
-# Write gene lists
-gene_list_path = "../data/ribosome_profiling/isoforms_gene_list.txt"
-with open(gene_list_path, "w") as f:
-    for gene in gene_list:
-        f.write(gene + "\n")
+# Update v24 and v25 GTFs with v47 gene names
+gtf_versions = {
+    "v24": {
+        "input": genome_data_dir / "gencode.v24.annotation.gtf",
+        "output": genome_data_dir / "gencode.v24.annotation.v47names.gtf"
+    },
+    "v25": {
+        "input": genome_data_dir / "gencode.v25.annotation.gtf",
+        "output": genome_data_dir / "gencode.v25.annotation.v47names.gtf"
+    }
+}
 
-reduced_gene_list = subset_gene_list(gene_list_path=gene_list_path)
-reduced_gene_list_path = "../data/ribosome_profiling/isoforms_gene_list_reduced.txt"
-with open(reduced_gene_list_path, "w") as f:
-    for gene in reduced_gene_list:
-        f.write(gene + "\n")
+for version, paths in gtf_versions.items():
+    if not paths["input"].exists():
+        print(f"WARNING: {version} GTF not found: {paths['input']}")
+        continue
 
-print(f"  ✓ Full gene list: {len(gene_list)} genes")
-print(f"  ✓ Reduced gene list: {len(reduced_gene_list)} genes")
+    # Check if updated GTF already exists
+    if paths["output"].exists():
+        print(f"✓ {version} GTF with v47 names already exists: {paths['output'].name}")
+    else:
+        print(f"Updating {version} GTF with v47 gene names...")
+        stats = update_gencode_gene_names(
+            input_gtf_path=paths["input"],
+            output_gtf_path=paths["output"],
+            reference_gtf_path=v47_gtf,
+            verbose=True
+        )
+        print(f"✓ {version} update complete: {stats['genes_updated']} genes updated\n")
+
+print(f"\n{'='*60}")
+print("Processing Datasets")
+print(f"{'='*60}\n")
+
+# Process each dataset
+all_results = []
+
+for dataset in config['datasets']:
+    dataset_name = dataset['name']
+    bed_file = dataset['bed_file']
+    source_gtf = dataset['source_gtf_path']
+
+    # Use v47-updated GTF if it exists, otherwise fall back to original
+    source_gtf_path = Path(source_gtf)
+    v47_updated_gtf = source_gtf_path.parent / f"{source_gtf_path.stem}.v47names.gtf"
+
+    if v47_updated_gtf.exists():
+        actual_gtf = str(v47_updated_gtf)
+    else:
+        actual_gtf = source_gtf
+
+    # Run simplified cleanup (verbose output comes from utils.py)
+    input_bed_path = f"../data/ribosome_profiling/{bed_file}"
+    output_bed_path = f"../data/ribosome_profiling/{dataset_name}_isoforms_with_transcripts.bed"
+    refseq_gtf = "../data/genome_data/GRCh38_latest_genomic.gtf"
+
+    stats = simple_transcript_based_cleanup(
+        input_bed_path=input_bed_path,
+        gtf_path=actual_gtf,  # Use v47-updated GTF
+        output_bed_path=output_bed_path,
+        refseq_gtf_path=refseq_gtf,
+        verbose=True
+    )
+
+    # Generate gene list
+    alt_isoforms = AlternativeIsoform()
+    alt_isoforms.load_bed(output_bed_path)
+    gene_list = alt_isoforms.get_gene_list()
+
+    # Write gene list
+    gene_list_path = f"../data/ribosome_profiling/{dataset_name}_isoforms_gene_list.txt"
+    with open(gene_list_path, "w") as f:
+        for gene in gene_list:
+            f.write(gene + "\n")
+
+    all_results.append({
+        'dataset': dataset_name,
+        'genes': len(gene_list),
+        **stats
+    })
 
 # Final summary
-print("\n=== Summary ===")
-print(f"Total entries processed: {cleanup_stats['enhanced_entries']}")
-print(
-    f"Transcript assignment success: {cleanup_stats['transcript_assignments'] / cleanup_stats['enhanced_entries'] * 100:.1f}%"
-)
-print(f"Final gene count: {cleanup_stats['final_genes']}")
+print(f"\n{'='*60}")
+print("Cleanup Completed Successfully")
+print(f"{'='*60}")
 
-# Assessment of transcript assignment success
-assignment_rate = (
-    cleanup_stats["transcript_assignments"] / cleanup_stats["enhanced_entries"] * 100
-)
-if assignment_rate > 90:
-    print("✓ Excellent transcript assignment coverage")
-elif assignment_rate > 80:
-    print("✓ Good transcript assignment coverage")
-elif assignment_rate > 60:
-    print("⚠ Moderate transcript assignment coverage")
-else:
-    print("❌ Low transcript assignment coverage")
+print(f"\nProcessed {len(all_results)} datasets:")
+for result in all_results:
+    print(f"  {result['dataset']}: {result['genes']:,} genes, {result['final_entries']:,} entries")
 
-# RefSeq mapping assessment (if available in stats)
-if "refseq_assignments" in cleanup_stats:
-    refseq_rate = (
-        cleanup_stats["refseq_assignments"] / cleanup_stats["enhanced_entries"] * 100
-    )
-    print(f"RefSeq mapping success: {refseq_rate:.1f}%")
-
-    if refseq_rate > 80:
-        print("✓ Excellent RefSeq coverage")
-    elif refseq_rate > 60:
-        print("✓ Good RefSeq coverage")
-    elif refseq_rate > 40:
-        print("⚠ Moderate RefSeq coverage")
-    else:
-        print("❌ Low RefSeq coverage")
-
-print(f"\nOutput files:")
-print(f"  ├─ Enhanced BED: {enhanced_bed}")
-print(f"  ├─ Updated GTF: {output_gtf}")
-print(f"  ├─ Gene lists: {len(gene_list)} total, {len(reduced_gene_list)} reduced")
-print(f"  └─ Ready for analysis")
-
-print("\n✓ Cleanup completed successfully!")
-
-# Print some details about the intelligent selection features used
-print("\nIntelligent Selection Features:")
-print("  ├─ Preferred transcripts from HeLa data")
-print("  ├─ MANE Select transcript prioritization")
-print("  ├─ Position-based transcript matching")
-print("  └─ RefSeq ID mapping with fallback logic")
+print(f"\nNext step: sbatch 2_analyze_mutations.sh")
