@@ -104,6 +104,12 @@ class MutationHandler:
             ],
             "inframe_ins": ["inframe_insertion", "inframe insertion", "inframe_ins"],
             "synonymous": ["synonymous", "synonymous_variant", "synonymous variant"],
+            # Unclassified - requires validation to determine true impact
+            "unclassified": [
+                "unclassified",
+                "unclassified variant",
+                "unclassified_variant",
+            ],
             # Low impact last
             "splice": [
                 "splice",
@@ -857,7 +863,7 @@ class MutationHandler:
             # Look for cosmic_variants_combined.parquet
             combined_file = path / "cosmic_variants_combined.parquet"
             if combined_file.exists():
-                logger.info(f"Found COSMIC variants database: {combined_file}")
+                logger.debug(f"Found COSMIC variants database: {combined_file}")
                 return str(combined_file)
 
         return None
@@ -874,7 +880,6 @@ class MutationHandler:
             result = self._process_cosmic_dataset(cosmic_file, gene_name)
 
             if result is not None and not result.empty:
-                logger.info(f"Found {len(result)} COSMIC variants for {gene_name}")
                 return self._process_cosmic_variants(result)
             else:
                 logger.warning(f"No COSMIC data found for {gene_name}")
@@ -887,12 +892,11 @@ class MutationHandler:
     def _process_cosmic_dataset(self, file_path: str, gene_name: str) -> pd.DataFrame:
         """Process the COSMIC variants dataset."""
         try:
-            logger.info(f"Querying COSMIC database for {gene_name}")
+            logger.debug(f"Querying COSMIC database for {gene_name}")
 
             result = self._query_parquet_by_gene(file_path, gene_name, "GENE_SYMBOL")
 
             if result is not None and not result.empty:
-                logger.info(f"Found {len(result)} variants in COSMIC database")
                 return result
 
         except Exception as e:
@@ -940,7 +944,24 @@ class MutationHandler:
 
             processed_variants.append(variant_info)
 
-        return pd.DataFrame(processed_variants)
+        result_df = pd.DataFrame(processed_variants)
+
+        # Deduplicate based on unique genomic variant (chromosome, position, ref, alt)
+        # Keep first occurrence to maintain consistency
+        if not result_df.empty:
+            original_count = len(result_df)
+            result_df = result_df.drop_duplicates(
+                subset=['chromosome', 'position', 'reference', 'alternate'],
+                keep='first'
+            )
+            deduplicated_count = len(result_df)
+            if original_count > deduplicated_count:
+                logger.debug(
+                    f"Deduplicated COSMIC variants: {original_count} → {deduplicated_count} "
+                    f"({original_count - deduplicated_count} duplicates removed)"
+                )
+
+        return result_df
 
     def _query_parquet_by_gene(
         self, file_path: str, gene_name: str, gene_column: str
@@ -976,11 +997,6 @@ class MutationHandler:
             Dict: Dictionary of summary statistics.
         """
         cosmic_df = await self.get_cosmic_variants(gene_name)
-
-        if not cosmic_df.empty:
-            logger.info(f"Found {len(cosmic_df)} COSMIC variants for {gene_name}")
-        else:
-            logger.info(f"No COSMIC variants found for {gene_name}")
 
         if cosmic_df is None or cosmic_df.empty:
             return self._get_empty_cosmic_summary()
@@ -1474,10 +1490,10 @@ class MutationHandler:
                 "reference": variants_df["reference"],
                 "alternate": variants_df["alternate"],
                 "source": "COSMIC",
-                # Use the standard impact standardization - MUTATION_DESCRIPTION is already compatible!
-                "impact": variants_df["consequence"].apply(
-                    self._standardize_impact_category
-                ),
+                # COSMIC MUTATION_DESCRIPTION contains variant types (SNV/deletion/insertion), not functional impacts.
+                # Label as "unclassified variant" so they pass through filtering to validation, where genomic
+                # changes are applied to determine actual functional impact (missense/nonsense/frameshift/etc.).
+                "impact": "unclassified variant",
                 "hgvsc": variants_df["hgvs_coding"].apply(self._standardize_hgvsc),
                 "hgvsp": variants_df["hgvs_protein"].apply(self._standardize_hgvsp),
                 "allele_frequency": None,  # COSMIC doesn't have population frequency
@@ -1518,77 +1534,9 @@ class MutationHandler:
             "intronic": "intron variant",
             "stop_gained": "stop gained variant",
             "stop_lost": "stop lost variant",
+            "unclassified": "unclassified variant",
         }
         return mapping.get(category, "other variant")
-
-    def _standardize_cosmic_impact(self, cosmic_impact: str) -> str:
-        """Convert COSMIC mutation classifications to standardized impact terms."""
-        if pd.isna(cosmic_impact) or not isinstance(cosmic_impact, str):
-            return "unknown"
-
-        cosmic_impact = cosmic_impact.lower().strip()
-
-        # COSMIC mutation description mappings (based on your actual data)
-        cosmic_mapping = {
-            # Direct COSMIC mutation description patterns
-            "substitution - missense": "missense variant",
-            "substitution - nonsense": "nonsense variant",
-            "substitution - coding silent": "synonymous variant",
-            "deletion - frameshift": "frameshift variant",
-            "insertion - frameshift": "frameshift variant",
-            "deletion - in frame": "inframe deletion",
-            "insertion - in frame": "inframe insertion",
-            "complex - insertion inframe": "inframe insertion",
-            "complex - deletion inframe": "inframe deletion",
-            "complex - frameshift": "frameshift variant",
-            # Fallback patterns
-            "missense": "missense variant",
-            "nonsense": "nonsense variant",
-            "silent": "synonymous variant",
-            "synonymous": "synonymous variant",
-            "frameshift": "frameshift variant",
-            "noncoding": "noncoding variant",
-            "noncoding_variant": "noncoding variant",
-            # General categories
-            "substitution": "substitution",
-            "deletion": "deletion",
-            "insertion": "insertion",
-            "complex": "complex variant",
-        }
-
-        # Check for exact matches first
-        for pattern, standardized in cosmic_mapping.items():
-            if pattern in cosmic_impact:
-                return standardized
-
-        # Handle specific patterns that might vary
-        if "substitution" in cosmic_impact:
-            if "missense" in cosmic_impact:
-                return "missense variant"
-            elif "nonsense" in cosmic_impact:
-                return "nonsense variant"
-            elif "silent" in cosmic_impact or "coding silent" in cosmic_impact:
-                return "synonymous variant"
-            else:
-                return "substitution"
-
-        if "deletion" in cosmic_impact:
-            if "frameshift" in cosmic_impact:
-                return "frameshift variant"
-            elif "in frame" in cosmic_impact or "inframe" in cosmic_impact:
-                return "inframe deletion"
-            else:
-                return "deletion"
-
-        if "insertion" in cosmic_impact:
-            if "frameshift" in cosmic_impact:
-                return "frameshift variant"
-            elif "in frame" in cosmic_impact or "inframe" in cosmic_impact:
-                return "inframe insertion"
-            else:
-                return "insertion"
-
-        return "other variant"
 
     def _clean_mutation_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Clean and validate the standardized mutation data."""
@@ -2008,26 +1956,6 @@ class MutationHandler:
                     logger.info(
                         f"  {source}: {variant_id} | {variant_display} | {original_impact} → {validated_impact}{alt_site_tag}"
                     )
-
-                    # Add brief explanation for common disagreement types (DEBUG only)
-                    if (
-                        "missense" in original_impact
-                        and "synonymous" in validated_impact
-                    ):
-                        logger.debug(
-                            f"    Database predicted protein change, validation shows silent"
-                        )
-                    elif (
-                        "synonymous" in original_impact
-                        and "missense" in validated_impact
-                    ):
-                        logger.debug(
-                            f"    Database predicted silent, validation shows protein change"
-                        )
-                    elif "nonsense" in validated_impact:
-                        logger.debug(f"    Validation detected premature stop codon")
-                    elif "frameshift" in validated_impact:
-                        logger.debug(f"    Length change causes frameshift")
 
                 validated_mutations.append(validated_mutation)
                 validation_stats["successful_validations"] += 1

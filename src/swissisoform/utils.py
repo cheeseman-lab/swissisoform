@@ -858,7 +858,9 @@ def simple_transcript_based_cleanup(
     3. Load RefSeq mapping
     4. Validate entries and map to RefSeq IDs
     5. Add canonical starts where missing (except for uORF-only transcripts)
-    6. Generate statistics including multi-TIS per transcript/category
+    6. Remove Extended/Truncated entries for transcripts without annotated starts
+    7. Validate and deduplicate Annotated starts (max 1 per transcript)
+    8. Generate statistics including multi-TIS per transcript/category
 
     Args:
         input_bed_path: Path to input BED file with transcript IDs in name field
@@ -875,7 +877,10 @@ def simple_transcript_based_cleanup(
         - valid_entries: Entries kept after filtering
         - ensembl_mapped: Entries with Ensembl transcript IDs
         - refseq_mapped: Entries with RefSeq IDs
-        - canonical_starts_added: Number of canonical starts added
+        - canonical_starts_added: Number of canonical starts added from GTF
+        - extended_truncated_removed: Number of Extended/Truncated entries removed (no annotated start)
+        - transcripts_with_removed_entries: Number of transcripts affected by removal
+        - duplicate_annotated_removed: Number of duplicate Annotated entries removed
         - multi_tis_transcripts: Dict of {category: count} for transcripts with multiple TIS
         - total_transcripts_with_multi_tis: Number of transcripts with any multi-TIS
         - final_gene_count: Number of unique genes
@@ -1153,9 +1158,58 @@ def simple_transcript_based_cleanup(
         if added_canonical > 0 and added_canonical_transcripts:
             logger.info(f"    Examples: {', '.join(added_canonical_transcripts[:3])}")
 
-    # Step 4b: Validate and deduplicate Annotated starts per transcript
+    # Step 4b: Remove Extended/Truncated entries without annotated starts
     if verbose:
-        logger.info("\nStep 4b: Validating Annotated starts (max 1 per transcript)...")
+        logger.info(
+            "\nStep 4b: Removing Extended/Truncated entries without annotated starts..."
+        )
+
+    # Re-find transcripts with annotated starts (now including added ones)
+    transcripts_with_annotated = {
+        e["transcript"] for e in entries if e["category"] == "Annotated"
+    }
+
+    # Filter out Extended/Truncated entries for transcripts without annotated starts
+    filtered_entries = []
+    removed_extended_truncated = 0
+    removed_transcripts = set()
+
+    for entry in entries:
+        # Keep all entries that are not Extended or Truncated
+        if entry["category"] not in {"Extended", "Truncated"}:
+            filtered_entries.append(entry)
+        # For Extended/Truncated, only keep if transcript has an annotated start
+        elif entry["transcript"] in transcripts_with_annotated:
+            filtered_entries.append(entry)
+        else:
+            # Remove this Extended/Truncated entry
+            removed_extended_truncated += 1
+            removed_transcripts.add(entry["transcript"])
+            # Update transcript_category_counts
+            if entry["transcript"] in transcript_category_counts:
+                if entry["category"] in transcript_category_counts[entry["transcript"]]:
+                    transcript_category_counts[entry["transcript"]][
+                        entry["category"]
+                    ] -= 1
+
+    entries = filtered_entries
+
+    stats["extended_truncated_removed"] = removed_extended_truncated
+    stats["transcripts_with_removed_entries"] = len(removed_transcripts)
+    stats["removed_transcript_examples"] = list(removed_transcripts)[
+        :10
+    ]  # Store up to 10 examples
+
+    if verbose:
+        logger.info(
+            f"    ✓ Removed {removed_extended_truncated} Extended/Truncated entries from {len(removed_transcripts)} transcripts without annotated starts"
+        )
+        if removed_extended_truncated > 0 and removed_transcripts:
+            logger.info(f"    Examples: {', '.join(list(removed_transcripts)[:3])}")
+
+    # Step 4c: Validate and deduplicate Annotated starts per transcript
+    if verbose:
+        logger.info("\nStep 4c: Validating Annotated starts (max 1 per transcript)...")
 
     # Group entries by transcript and category
     transcript_annotated_map = defaultdict(list)
@@ -1403,6 +1457,9 @@ def simple_transcript_based_cleanup(
         logger.info(f"  Total entries processed: {stats['total_entries']}")
         logger.info(f"  Valid input entries: {stats['valid_entries']}")
         logger.info(f"  Canonical starts added: {stats['canonical_starts_added']}")
+        logger.info(
+            f"  Extended/Truncated entries removed (no annotated start): {stats['extended_truncated_removed']}"
+        )
         logger.info(
             f"  Duplicate Annotated entries removed: {stats['duplicate_annotated_removed']}"
         )
