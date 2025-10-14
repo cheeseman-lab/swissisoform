@@ -84,7 +84,7 @@ async def main(
     visualize: bool = False,
     sources: List[str] = None,
     impact_types: List[str] = None,
-    top_n_per_type: int = 1,
+    top_n_per_type: Optional[int] = None,
 ):
     """Main function to process genes for mutation analysis.
 
@@ -97,7 +97,7 @@ async def main(
         visualize (bool): Whether to generate visualizations.
         sources (Optional[List[str]]): List of mutation sources to query.
         impact_types (Optional[List[str]]): List of mutation impact types to include.
-        top_n_per_type (int): Number of top alternative start sites to keep per type per transcript.
+        top_n_per_type (Optional[int]): Number of top alternative start sites to keep per type per transcript (None = all).
 
     Returns:
         None
@@ -236,8 +236,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--top-n-per-type",
         type=int,
-        default=1,
-        help="Number of top alternative start sites to keep per type (Truncated/Extended) per transcript",
+        default=None,
+        help="Number of top alternative start sites to keep per type (Truncated/Extended) per transcript (default: None = all)",
     )
     parser.add_argument(
         "--verbose",

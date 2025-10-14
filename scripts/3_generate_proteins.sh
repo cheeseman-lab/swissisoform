@@ -1,20 +1,25 @@
 #!/bin/bash
 
-#SBATCH --job-name=proteins_chunked        # Job name
+#SBATCH --job-name=proteins                # Job name
 #SBATCH --partition=20                     # Partition name
-#SBATCH --array=1-8                        # 8 chunks for full dataset
+#SBATCH --array=1-8                        # 8 chunks for parallel processing
 #SBATCH --cpus-per-task=4                  # CPUs per task
 #SBATCH --mem=16G                          # Memory per task
 #SBATCH --time=24:00:00                    # Time limit (hrs:min:sec)
 #SBATCH --output=out/proteins-%A_%a.out    # %A = job ID, %a = array task ID
 
-# 3_generate_proteins_chunked.sh
+# 3_generate_proteins.sh
 # Generates protein sequences using chunked parallel processing with pre-validated mutations
+# Reads dataset configuration from YAML file
 
 echo "======================================================="
 echo "SwissIsoform Pipeline Step 3: Generate Proteins (Chunked)"
 echo "Array Task ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_MAX}"
 echo "======================================================="
+
+# Dataset selection (default: hela)
+DATASET="${DATASET:-hela}"
+echo "Dataset: $DATASET"
 
 # Function to split gene list into chunks
 split_gene_list() {
@@ -33,19 +38,78 @@ split_gene_list() {
 
 # Only run setup checks on the first task to avoid race conditions
 if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
+    # Read dataset configuration from YAML
+    echo "Reading dataset configuration..."
+    CONFIG_FILE="../data/ribosome_profiling/dataset_config.yaml"
+
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "❌ Dataset configuration file not found: $CONFIG_FILE"
+        exit 1
+    fi
+
+    # Use Python to parse YAML and get dataset-specific paths
+    read -r DATASET_BED DATASET_GTF GENE_LIST <<< $(python3 -c "
+import yaml
+import sys
+from pathlib import Path
+
+config_file = '$CONFIG_FILE'
+dataset = '$DATASET'
+
+with open(config_file) as f:
+    config = yaml.safe_load(f)
+
+# Find the dataset
+dataset_config = None
+for ds in config['datasets']:
+    if ds['name'] == dataset:
+        dataset_config = ds
+        break
+
+if not dataset_config:
+    print(f'ERROR: Dataset {dataset} not found in config', file=sys.stderr)
+    sys.exit(1)
+
+# Get paths
+bed_file = f\"../data/ribosome_profiling/{dataset}_isoforms_with_transcripts.bed\"
+gene_list = f\"../data/ribosome_profiling/{dataset}_isoforms_gene_list.txt\"
+
+# Get GTF path - prefer v47names version if it exists
+source_gtf_path = Path(dataset_config['source_gtf_path'])
+v47_gtf = source_gtf_path.parent / f\"{source_gtf_path.stem}.v47names.gtf\"
+
+if v47_gtf.exists():
+    gtf_file = str(v47_gtf)
+else:
+    gtf_file = dataset_config['source_gtf_path']
+
+print(bed_file, gtf_file, gene_list)
+")
+
+    if [ $? -ne 0 ]; then
+        echo "❌ Failed to read dataset configuration"
+        exit 1
+    fi
+
+    echo "Dataset configuration:"
+    echo "  BED file: $DATASET_BED"
+    echo "  GTF file: $DATASET_GTF"
+    echo "  Gene list: $GENE_LIST"
+
     # Check if required input files exist
+    echo ""
     echo "Checking for required input files..."
 
     GENOME_DIR="../data/genome_data"
-    RIBOPROF_DIR="../data/ribosome_profiling"
-    MUTATIONS_DIR="../results/full/mutations"
+    GENOME_PATH="$GENOME_DIR/GRCh38.p7.genome.fa"
+    MUTATIONS_FILE="../results/${DATASET}/mutations/isoform_level_results.csv"
 
     required_files=(
-        "$GENOME_DIR/GRCh38.p7.genome.fa"
-        "$GENOME_DIR/gencode.v25.annotation.ensembl_cleaned.gtf"
-        "$RIBOPROF_DIR/isoforms_with_transcripts.bed"
-        "$RIBOPROF_DIR/isoforms_gene_list.txt"
-        "$MUTATIONS_DIR/isoform_level_results.csv"
+        "$GENOME_PATH"
+        "$DATASET_GTF"
+        "$DATASET_BED"
+        "$GENE_LIST"
+        "$MUTATIONS_FILE"
     )
 
     echo ""
@@ -67,7 +131,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     fi
 
     # Check that we have mutation results
-    mutation_count=$(tail -n +2 "$MUTATIONS_DIR/isoform_level_results.csv" | wc -l)
+    mutation_count=$(tail -n +2 "$MUTATIONS_FILE" | wc -l)
     if [ "$mutation_count" -eq 0 ]; then
         echo "❌ No mutation results found! Run 2_analyze_mutations.sh first"
         exit 1
@@ -76,8 +140,28 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     echo "✓ Found $mutation_count validated mutation results"
 
     # Create results directory structure
-    mkdir -p ../results/full/proteins
+    mkdir -p "../results/${DATASET}/proteins"
     mkdir -p ../results/temp/protein_chunks
+else
+    # Other tasks need to read the config too
+    CONFIG_FILE="../data/ribosome_profiling/dataset_config.yaml"
+    read -r DATASET_BED DATASET_GTF GENE_LIST <<< $(python3 -c "
+import yaml
+from pathlib import Path
+
+with open('$CONFIG_FILE') as f:
+    config = yaml.safe_load(f)
+
+dataset_config = next(ds for ds in config['datasets'] if ds['name'] == '$DATASET')
+bed_file = f\"../data/ribosome_profiling/$DATASET\_isoforms_with_transcripts.bed\"
+gene_list = f\"../data/ribosome_profiling/$DATASET\_isoforms_gene_list.txt\"
+
+source_gtf_path = Path(dataset_config['source_gtf_path'])
+v47_gtf = source_gtf_path.parent / f\"{source_gtf_path.stem}.v47names.gtf\"
+gtf_file = str(v47_gtf) if v47_gtf.exists() else dataset_config['source_gtf_path']
+
+print(bed_file, gtf_file, gene_list)
+")
 fi
 
 # Wait for setup to complete and add staggered delays
@@ -96,13 +180,12 @@ conda activate swissisoform || {
     exit 1
 }
 
-# Define common paths
+# Define common paths (using dataset-specific values from config)
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
-ANNOTATION_PATH="../data/genome_data/gencode.v25.annotation.ensembl_cleaned.gtf"
-TRUNCATIONS_PATH="../data/ribosome_profiling/isoforms_with_transcripts.bed"
-MUTATIONS_FILE="../results/full/mutations/isoform_level_results.csv"
-GENE_LIST="../data/ribosome_profiling/isoforms_gene_list.txt"
-OUTPUT_DIR="../results/full/proteins/chunk_${SLURM_ARRAY_TASK_ID}"
+ANNOTATION_PATH="$DATASET_GTF"
+TRUNCATIONS_PATH="$DATASET_BED"
+MUTATIONS_FILE="../results/${DATASET}/mutations/isoform_level_results.csv"
+OUTPUT_DIR="../results/${DATASET}/proteins/chunk_${SLURM_ARRAY_TASK_ID}"
 CHUNK_ID=$SLURM_ARRAY_TASK_ID
 TOTAL_CHUNKS=8
 MIN_LENGTH=10
@@ -122,7 +205,7 @@ if [ ! -s "$CHUNK_FILE" ]; then
     exit 0
 fi
 
-echo "Processing chunk ${CHUNK_ID}"
+echo "Processing ${DATASET} dataset chunk ${CHUNK_ID}"
 echo "Gene list: $(wc -l < "$CHUNK_FILE") genes"
 echo "Configuration:"
 echo "  ├─ Pre-validated mutations: $(basename $MUTATIONS_FILE)"
@@ -133,7 +216,7 @@ echo "  └─ Output format: $FORMAT"
 
 # Generate both pairs and mutations datasets for this chunk
 echo ""
-echo "Generating protein sequences for chunk ${CHUNK_ID}..."
+echo "Generating protein sequences for ${DATASET} chunk ${CHUNK_ID}..."
 python3 generate_proteins.py "$CHUNK_FILE" "$OUTPUT_DIR" \
   --mutations-file "$MUTATIONS_FILE" \
   --genome "$GENOME_PATH" \
@@ -166,19 +249,19 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     
     echo ""
     echo "Merging results from all chunks..."
-    
+
     # Create final output directory
-    FINAL_OUTPUT_DIR="../results/full/proteins"
+    FINAL_OUTPUT_DIR="../results/${DATASET}/proteins"
     mkdir -p "$FINAL_OUTPUT_DIR"
-    
+
     # Merge pairs datasets
     echo "Merging pairs datasets..."
-    
+
     # Merge FASTA files (pairs)
     echo "  ├─ Merging protein_sequences_pairs.fasta..."
     > "$FINAL_OUTPUT_DIR/protein_sequences_pairs.fasta"
     for i in {1..8}; do
-        chunk_fasta="../results/full/proteins/chunk_${i}/protein_sequences_pairs.fasta"
+        chunk_fasta="../results/${DATASET}/proteins/chunk_${i}/protein_sequences_pairs.fasta"
         if [ -f "$chunk_fasta" ]; then
             cat "$chunk_fasta" >> "$FINAL_OUTPUT_DIR/protein_sequences_pairs.fasta"
             count=$(grep -c '^>' "$chunk_fasta" 2>/dev/null || echo 0)
@@ -192,7 +275,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo "  ├─ Merging protein_sequences_pairs.csv..."
     first_file=true
     for i in {1..8}; do
-        chunk_csv="../results/full/proteins/chunk_${i}/protein_sequences_pairs.csv"
+        chunk_csv="../results/${DATASET}/proteins/chunk_${i}/protein_sequences_pairs.csv"
         if [ -f "$chunk_csv" ]; then
             if [ "$first_file" = true ]; then
                 # Copy first file with header
@@ -213,12 +296,12 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     
     # Merge mutations datasets
     echo "Merging mutations datasets..."
-    
+
     # Merge FASTA files (mutations)
     echo "  ├─ Merging protein_sequences_with_mutations.fasta..."
     > "$FINAL_OUTPUT_DIR/protein_sequences_with_mutations.fasta"
     for i in {1..8}; do
-        chunk_fasta="../results/full/proteins/chunk_${i}/protein_sequences_with_mutations.fasta"
+        chunk_fasta="../results/${DATASET}/proteins/chunk_${i}/protein_sequences_with_mutations.fasta"
         if [ -f "$chunk_fasta" ]; then
             cat "$chunk_fasta" >> "$FINAL_OUTPUT_DIR/protein_sequences_with_mutations.fasta"
             count=$(grep -c '^>' "$chunk_fasta" 2>/dev/null || echo 0)
@@ -232,7 +315,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo "  ├─ Merging protein_sequences_with_mutations.csv..."
     first_file=true
     for i in {1..8}; do
-        chunk_csv="../results/full/proteins/chunk_${i}/protein_sequences_with_mutations.csv"
+        chunk_csv="../results/${DATASET}/proteins/chunk_${i}/protein_sequences_with_mutations.csv"
         if [ -f "$chunk_csv" ]; then
             if [ "$first_file" = true ]; then
                 # Copy first file with header
@@ -256,10 +339,10 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo "Verifying merged protein datasets..."
 
     expected_files=(
-        "../results/full/proteins/protein_sequences_pairs.fasta"
-        "../results/full/proteins/protein_sequences_pairs.csv"
-        "../results/full/proteins/protein_sequences_with_mutations.fasta"
-        "../results/full/proteins/protein_sequences_with_mutations.csv"
+        "../results/${DATASET}/proteins/protein_sequences_pairs.fasta"
+        "../results/${DATASET}/proteins/protein_sequences_pairs.csv"
+        "../results/${DATASET}/proteins/protein_sequences_with_mutations.fasta"
+        "../results/${DATASET}/proteins/protein_sequences_with_mutations.csv"
     )
 
     all_files_present=true
@@ -280,12 +363,12 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
 
     if [ "$all_files_present" = true ]; then
         echo ""
-        echo "🎉 Chunked protein sequence generation completed successfully!"
+        echo "🎉 ${DATASET} dataset protein sequence generation completed successfully!"
         echo ""
         echo "Generated datasets:"
-        echo "  └─ full/proteins/                        # Fast generation with pre-validated mutations"
-        echo "     ├─ protein_sequences_pairs.*                # Canonical + truncated/extended pairs"
-        echo "     └─ protein_sequences_with_mutations.*       # With pre-validated mutations applied"
+        echo "  └─ ${DATASET}/proteins/                    # Fast generation with pre-validated mutations"
+        echo "     ├─ protein_sequences_pairs.*            # Canonical + truncated/extended pairs"
+        echo "     └─ protein_sequences_with_mutations.*   # With pre-validated mutations applied"
         echo ""
         echo "Performance benefits:"
         echo "  ├─ ⚡ Parallel processing with 8 chunks"
@@ -299,15 +382,15 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
         echo "  └─ Mutations source: ClinVar missense variants only"
         echo ""
         echo "Next step:"
-        echo "  Run: sbatch 4_predict_localization.sh"
-        
+        echo "  Run: sbatch --export=DATASET=${DATASET} 4_predict_localization.sh"
+
         # Clean up chunk directories
         echo ""
         echo "Cleaning up chunk directories..."
-        rm -rf ../results/full/proteins/chunk_*
+        rm -rf "../results/${DATASET}/proteins/chunk_"*
     else
         echo ""
-        echo "❌ Chunked protein generation failed. Some output files are missing."
+        echo "❌ ${DATASET} dataset protein generation failed. Some output files are missing."
         echo "Check the generate_proteins.py script and logs for errors."
         exit 1
     fi

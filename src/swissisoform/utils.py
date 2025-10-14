@@ -1,9 +1,7 @@
-"""Refactored BED cleanup utilities with improved transcript selection logic.
+"""BED cleanup utilities for ribosome profiling data.
 
-This module provides cleaner, more systematic functions for:
-1. Building comprehensive transcript databases from multiple sources
-2. Intelligent transcript selection using preferred lists and MANE Select
-3. Enhanced BED file processing with better transcript mapping
+This module provides functions for processing ribosome profiling BED files
+with pre-assigned transcript IDs and generating protein sequences.
 """
 
 import pandas as pd
@@ -12,810 +10,13 @@ import logging
 from pathlib import Path
 from collections import defaultdict
 import re
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class TranscriptInfo:
-    """Data class to hold transcript information."""
-
-    transcript_id: str
-    gene_id: str
-    gene_name: str
-    chrom: str
-    start: int
-    end: int
-    strand: str
-    start_pos: int  # TSS position
-    is_preferred: bool = False
-    is_mane_select: bool = False
-    refseq_id: Optional[str] = None
-
-
-class TranscriptDatabase:
-    """Comprehensive transcript database with intelligent selection logic."""
-
-    def __init__(self):
-        """Initialize transcript containers, mappings, and transcript sets.
-
-        Creates empty data structures for storing transcript information, gene mappings,
-        preferred transcripts, MANE Select transcripts, and Ensembl-RefSeq ID mappings.
-        """
-        self.transcripts: Dict[str, TranscriptInfo] = {}
-        self.gene_transcripts: Dict[str, List[str]] = defaultdict(list)
-        self.gene_names: Dict[str, str] = {}
-        self.preferred_transcripts: Set[str] = set()
-        self.mane_select_transcripts: Set[str] = set()
-        self.ensembl_to_refseq: Dict[str, str] = {}
-
-    def load_from_gtf(self, gtf_path: Union[str, Path], verbose: bool = True) -> None:
-        """Load transcript information from GENCODE GTF.
-
-        Args:
-            gtf_path (Union[str, Path]): Path to the GENCODE GTF annotation file.
-            verbose (bool): If True, print progress information. Defaults to True.
-        """
-        if verbose:
-            logger.info(f"Loading transcripts from GTF: {gtf_path}")
-
-        transcript_count = 0
-
-        with open(gtf_path, "r") as f:
-            for line in f:
-                if line.startswith("#") or "\tstart_codon\t" not in line:
-                    continue
-
-                fields = line.strip().split("\t")
-                chrom, start, end, strand = (
-                    fields[0],
-                    int(fields[3]),
-                    int(fields[4]),
-                    fields[6],
-                )
-
-                gene_match = re.search(r'gene_id "([^"]+)"', fields[8])
-                transcript_match = re.search(r'transcript_id "([^"]+)"', fields[8])
-                gene_name_match = re.search(r'gene_name "([^"]+)"', fields[8])
-
-                if gene_match and transcript_match and gene_name_match:
-                    gene_id = gene_match.group(1).split(".")[0]
-                    transcript_id = transcript_match.group(1)
-                    gene_name = gene_name_match.group(1)
-                    start_pos = start if strand == "+" else end
-
-                    transcript_info = TranscriptInfo(
-                        transcript_id=transcript_id,
-                        gene_id=gene_id,
-                        gene_name=gene_name,
-                        chrom=chrom,
-                        start=start,
-                        end=end,
-                        strand=strand,
-                        start_pos=start_pos,
-                    )
-
-                    self.transcripts[transcript_id] = transcript_info
-                    self.gene_transcripts[gene_id].append(transcript_id)
-                    self.gene_names[gene_id] = gene_name
-                    transcript_count += 1
-
-        if verbose:
-            logger.info(
-                f"Loaded {transcript_count} transcripts for {len(self.gene_transcripts)} genes"
-            )
-
-    def load_preferred_transcripts(
-        self, preferred_path: Union[str, Path], verbose: bool = True
-    ) -> None:
-        """Load preferred transcript list.
-
-        Args:
-            preferred_path (Union[str, Path]): Path to file containing preferred transcript IDs.
-            verbose (bool): If True, print progress information. Defaults to True.
-        """
-        if verbose:
-            logger.info(f"Loading preferred transcripts: {preferred_path}")
-
-        with open(preferred_path, "r") as f:
-            self.preferred_transcripts = {line.strip() for line in f if line.strip()}
-
-        # Mark preferred transcripts
-        preferred_count = 0
-        for transcript_id in self.preferred_transcripts:
-            if transcript_id in self.transcripts:
-                self.transcripts[transcript_id].is_preferred = True
-                preferred_count += 1
-
-        if verbose:
-            logger.info(
-                f"Loaded {len(self.preferred_transcripts)} preferred transcripts"
-            )
-            logger.info(f"Found {preferred_count} in current dataset")
-
-    def load_refseq_mapping(
-        self, refseq_gtf_path: Union[str, Path], verbose: bool = True
-    ) -> None:
-        """Load RefSeq mapping and MANE Select information from RefSeq GTF.
-
-        Args:
-            refseq_gtf_path (Union[str, Path]): Path to RefSeq GTF annotation file.
-            verbose (bool): If True, print progress information. Defaults to True.
-        """
-        if verbose:
-            logger.info(f"Loading RefSeq mappings: {refseq_gtf_path}")
-
-        mane_count = 0
-        mapping_count = 0
-
-        with open(refseq_gtf_path, "r") as f:
-            for line in f:
-                if line.startswith("#") or "\ttranscript\t" not in line:
-                    continue
-
-                attributes = line.strip().split("\t")[8]
-
-                # Extract RefSeq transcript ID and Ensembl cross-reference
-                refseq_match = re.search(r'transcript_id "([^"]+)"', attributes)
-                ensembl_match = re.search(r'db_xref "Ensembl:([^"]+)"', attributes)
-
-                if refseq_match and ensembl_match:
-                    refseq_id = refseq_match.group(1)
-                    ensembl_id = ensembl_match.group(1)
-
-                    # Only keep RefSeq transcript IDs
-                    if refseq_id.startswith(("NM_", "NR_", "XM_", "XR_")):
-                        # Store mapping
-                        self.ensembl_to_refseq[ensembl_id] = refseq_id
-                        base_ensembl = ensembl_id.split(".")[0]
-                        self.ensembl_to_refseq[base_ensembl] = refseq_id
-                        mapping_count += 1
-
-                        # Check for MANE Select tag
-                        if 'tag "MANE Select"' in attributes:
-                            self.mane_select_transcripts.add(ensembl_id)
-                            self.mane_select_transcripts.add(base_ensembl)
-
-                            # Mark in our transcript database
-                            if ensembl_id in self.transcripts:
-                                self.transcripts[ensembl_id].is_mane_select = True
-                                self.transcripts[ensembl_id].refseq_id = refseq_id
-                            if base_ensembl in self.transcripts:
-                                self.transcripts[base_ensembl].is_mane_select = True
-                                self.transcripts[base_ensembl].refseq_id = refseq_id
-
-                            mane_count += 1
-
-        if verbose:
-            logger.info(f"Found {mapping_count} Ensembl-RefSeq mappings")
-            logger.info(f"Found {mane_count} MANE Select transcripts")
-
-    def select_best_transcript_for_position(
-        self, gene_id: str, target_pos: int, strand: str, max_distance: int = 100
-    ) -> Optional[str]:
-        """Select the best transcript for a given genomic position with intelligent ranking.
-
-        Prioritizes transcripts based on position proximity, preferred status, and MANE Select status.
-
-        Args:
-            gene_id (str): Gene identifier.
-            target_pos (int): Genomic position to match.
-            strand (str): Strand direction ('+' or '-').
-            max_distance (int): Maximum distance to consider for matching. Defaults to 100.
-
-        Returns:
-            Optional[str]: Best matching transcript ID, or None if no match found.
-        """
-        if gene_id not in self.gene_transcripts:
-            return None
-
-        candidate_transcripts = []
-
-        for transcript_id in self.gene_transcripts[gene_id]:
-            transcript_info = self.transcripts[transcript_id]
-            distance = abs(transcript_info.start_pos - target_pos)
-
-            # Only consider transcripts within reasonable distance
-            if distance <= max_distance:
-                # Calculate priority score (lower is better)
-                priority_score = 0
-
-                # Exact match gets highest priority
-                if distance == 0:
-                    priority_score = 0
-                else:
-                    priority_score = distance
-
-                # Boost preferred transcripts
-                if transcript_info.is_preferred:
-                    priority_score -= 1000
-
-                # Boost MANE Select transcripts
-                if transcript_info.is_mane_select:
-                    priority_score -= 2000
-
-                candidate_transcripts.append((transcript_id, priority_score, distance))
-
-        if not candidate_transcripts:
-            # Fallback: find closest transcript regardless of distance
-            all_distances = []
-            for transcript_id in self.gene_transcripts[gene_id]:
-                transcript_info = self.transcripts[transcript_id]
-                distance = abs(transcript_info.start_pos - target_pos)
-
-                priority_score = distance
-                if transcript_info.is_preferred:
-                    priority_score -= 1000
-                if transcript_info.is_mane_select:
-                    priority_score -= 2000
-
-                all_distances.append((transcript_id, priority_score, distance))
-
-            candidate_transcripts = all_distances
-
-        if candidate_transcripts:
-            # Sort by priority score, then by distance
-            best_transcript = min(candidate_transcripts, key=lambda x: (x[1], x[2]))
-            return best_transcript[0]
-
-        return None
-
-    def get_refseq_id(self, transcript_id: str) -> str:
-        """Get RefSeq ID for a given Ensembl transcript with comprehensive fallback logic.
-
-        Attempts multiple strategies to find RefSeq mappings including direct mapping,
-        base ID matching, unique reverse mapping, and gene-level fallback.
-
-        Args:
-            transcript_id (str): Ensembl transcript identifier.
-
-        Returns:
-            str: RefSeq transcript ID if found, 'NA' otherwise.
-        """
-        # Method 1: Check if it's already stored in transcript info
-        if (
-            transcript_id in self.transcripts
-            and self.transcripts[transcript_id].refseq_id
-        ):
-            return self.transcripts[transcript_id].refseq_id
-
-        # Method 2: Direct mapping (versioned)
-        if transcript_id in self.ensembl_to_refseq:
-            return self.ensembl_to_refseq[transcript_id]
-
-        # Method 3: Direct mapping (base, without version)
-        base_id = transcript_id.split(".")[0]
-        if base_id in self.ensembl_to_refseq:
-            return self.ensembl_to_refseq[base_id]
-
-        # Method 4: Fallback - check reverse mapping for unique matches
-        # Look for RefSeq transcripts that have only one Ensembl match
-        for refseq_id, ensembl_id in self.ensembl_to_refseq.items():
-            # Check if this RefSeq maps uniquely to our transcript
-            if transcript_id == ensembl_id or base_id == ensembl_id.split(".")[0]:
-                # Verify it's a unique mapping by checking reverse
-                matching_ensembls = [
-                    ens
-                    for ens, ref in self.ensembl_to_refseq.items()
-                    if ref == refseq_id
-                ]
-                if len(matching_ensembls) == 1:
-                    return refseq_id
-
-        # Method 5: Gene-level fallback
-        # If transcript has a gene, check if gene has only one RefSeq transcript
-        if transcript_id in self.transcripts:
-            gene_id = self.transcripts[transcript_id].gene_id
-            gene_refseq_ids = set()
-
-            # Collect all RefSeq IDs for this gene
-            for other_transcript_id in self.gene_transcripts[gene_id]:
-                if other_transcript_id in self.ensembl_to_refseq:
-                    gene_refseq_ids.add(self.ensembl_to_refseq[other_transcript_id])
-
-                other_base_id = other_transcript_id.split(".")[0]
-                if other_base_id in self.ensembl_to_refseq:
-                    gene_refseq_ids.add(self.ensembl_to_refseq[other_base_id])
-
-            # If gene has exactly one RefSeq ID, use it
-            if len(gene_refseq_ids) == 1:
-                return list(gene_refseq_ids)[0]
-            elif len(gene_refseq_ids) > 1:
-                # Pick the best one (prefer NM_ over XM_, then shortest)
-                best_refseq = min(
-                    gene_refseq_ids, key=lambda x: (not x.startswith("NM_"), len(x), x)
-                )
-                return best_refseq
-
-        return "NA"
-
-
-@dataclass
-class BedEntry:
-    """Data class for BED file entries."""
-
-    chrom: str
-    start: int
-    end: int
-    name: str
-    score: str
-    strand: str
-    gene_id: str
-    gene_name: str
-    start_type: str  # Annotated, Truncated, Extended
-    start_codon: str
-    efficiency: float
-    start_pos: int
-    line_num: int = -1
-
-
-class BedProcessor:
-    """Enhanced BED file processor with improved transcript mapping."""
-
-    def __init__(self, transcript_db: TranscriptDatabase):
-        """Initialize the processor with a transcript database and statistics tracker.
-
-        Args:
-            transcript_db (TranscriptDatabase): TranscriptDatabase instance used for mapping BED entries.
-        """
-        self.transcript_db = transcript_db
-        self.stats = defaultdict(int)
-
-    def parse_bed_entry(self, line: str, line_num: int) -> Optional[BedEntry]:
-        """Parse a BED line into a BedEntry object.
-
-        Args:
-            line (str): BED format line to parse.
-            line_num (int): Line number in the file.
-
-        Returns:
-            Optional[BedEntry]: Parsed BED entry, or None if parsing failed or entry should be filtered.
-        """
-        fields = line.strip().split("\t")
-        if len(fields) < 6:
-            self.stats["invalid_format"] += 1
-            return None
-
-        try:
-            name_info = self._parse_alternative_start_name(fields[3])
-            gene_id = name_info["gene_id"].split(".")[0]
-
-            # Validate gene exists in our database
-            if gene_id not in self.transcript_db.gene_names:
-                self.stats["invalid_gene"] += 1
-                return None
-
-            # Filter out uORFs
-            if name_info["start_type"] == "uORF":
-                self.stats["uorfs_filtered"] += 1
-                return None
-
-            # Only keep target types
-            if name_info["start_type"] not in ["Annotated", "Truncated", "Extended"]:
-                self.stats["filtered_type"] += 1
-                return None
-
-            chrom, start, end, strand = (
-                fields[0],
-                int(fields[1]),
-                int(fields[2]),
-                fields[5],
-            )
-            start_pos = start if strand == "+" else end
-            gene_name = self.transcript_db.gene_names[gene_id]
-
-            # Update name with correct gene name if needed
-            if name_info["gene_name"].upper() != gene_name.upper():
-                updated_name = f"{gene_name}_{name_info['gene_id']}_{name_info['start_type']}_{name_info['start_codon']}_{name_info['efficiency']}"
-                self.stats["updated_gene_names"] += 1
-            else:
-                updated_name = fields[3]
-
-            return BedEntry(
-                chrom=chrom,
-                start=start,
-                end=end,
-                name=updated_name,
-                score=fields[4],
-                strand=strand,
-                gene_id=gene_id,
-                gene_name=gene_name,
-                start_type=name_info["start_type"],
-                start_codon=name_info["start_codon"],
-                efficiency=name_info["efficiency"],
-                start_pos=start_pos,
-                line_num=line_num,
-            )
-
-        except (IndexError, ValueError, KeyError) as e:
-            self.stats["parse_error"] += 1
-            return None
-
-    def select_relevant_annotated_start(
-        self, gene_id: str, alternative_pos: int, alternative_type: str, strand: str
-    ) -> Optional[BedEntry]:
-        """Select biologically relevant annotated start for pairing with alternative.
-
-        Args:
-            gene_id (str): Gene identifier.
-            alternative_pos (int): Position of the alternative start site.
-            alternative_type (str): Type of alternative start ('Extended' or 'Truncated').
-            strand (str): Strand direction ('+' or '-').
-
-        Returns:
-            Optional[BedEntry]: Best matching annotated start entry, or None if not found.
-        """
-        gene_entries = self.gene_entries[
-            gene_id
-        ]  # You'll need to store this in BedProcessor
-        annotated_entries = [e for e in gene_entries if e.start_type == "Annotated"]
-
-        if len(annotated_entries) <= 1:
-            return annotated_entries[0] if annotated_entries else None
-
-        relevant_starts = []
-
-        for ann_entry in annotated_entries:
-            ann_pos = ann_entry.start_pos
-
-            if alternative_type == "Extended":
-                if strand == "+":
-                    # Extension upstream, canonical downstream
-                    if ann_pos > alternative_pos:
-                        distance = ann_pos - alternative_pos
-                        relevant_starts.append((ann_entry, distance))
-                else:
-                    # Extension upstream in transcript (lower genomic coord)
-                    if ann_pos < alternative_pos:
-                        distance = alternative_pos - ann_pos
-                        relevant_starts.append((ann_entry, distance))
-
-            elif alternative_type == "Truncated":
-                if strand == "+":
-                    # Truncation downstream, canonical upstream
-                    if ann_pos < alternative_pos:
-                        distance = alternative_pos - ann_pos
-                        relevant_starts.append((ann_entry, distance))
-                else:
-                    # Truncation downstream in transcript (higher genomic coord)
-                    if ann_pos > alternative_pos:
-                        distance = ann_pos - alternative_pos
-                        relevant_starts.append((ann_entry, distance))
-
-        if relevant_starts:
-            # Return the closest biologically relevant annotated start
-            return min(relevant_starts, key=lambda x: x[1])[0]
-        else:
-            # Fallback to highest efficiency if no biologically relevant pairing
-            return max(annotated_entries, key=lambda x: x.efficiency)
-
-    def _parse_alternative_start_name(self, name: str) -> Dict[str, str]:
-        """Parse alternative start site name field.
-
-        Args:
-            name (str): Name field from BED file in format GENE_ENSEMBL_TYPE_CODON_EFFICIENCY.
-
-        Returns:
-            Dict[str, str]: Dictionary with gene_name, gene_id, start_type, start_codon, and efficiency.
-        """
-        parts = name.split("_")
-
-        if len(parts) >= 5:
-            return {
-                "gene_name": parts[0],
-                "gene_id": parts[1],
-                "start_type": parts[2],
-                "start_codon": parts[3],
-                "efficiency": float(parts[4])
-                if parts[4].replace(".", "").isdigit()
-                else 0.0,
-            }
-        else:
-            return {
-                "gene_id": name,
-                "gene_name": name,
-                "start_type": "Unknown",
-                "start_codon": "UNK",
-                "efficiency": 0.0,
-            }
-
-    def add_missing_annotated_starts(
-        self, gene_entries: Dict[str, List[BedEntry]]
-    ) -> int:
-        """Add missing annotated starts for genes that have alternatives but no annotated.
-
-        Args:
-            gene_entries (Dict[str, List[BedEntry]]): Dictionary mapping gene IDs to lists of BED entries.
-
-        Returns:
-            int: Number of annotated starts added.
-        """
-        added_count = 0
-
-        for gene_id, entries in gene_entries.items():
-            has_annotated = any(e.start_type == "Annotated" for e in entries)
-            has_alternatives = any(
-                e.start_type in ["Truncated", "Extended"] for e in entries
-            )
-
-            if has_alternatives and not has_annotated:
-                # Find the best transcript for this gene
-                if gene_id in self.transcript_db.gene_transcripts:
-                    # Use the first preferred/MANE Select transcript if available
-                    best_transcript_id = None
-                    for transcript_id in self.transcript_db.gene_transcripts[gene_id]:
-                        transcript_info = self.transcript_db.transcripts[transcript_id]
-                        if (
-                            transcript_info.is_mane_select
-                            or transcript_info.is_preferred
-                        ):
-                            best_transcript_id = transcript_id
-                            break
-
-                    # Fallback to first transcript
-                    if not best_transcript_id:
-                        best_transcript_id = self.transcript_db.gene_transcripts[
-                            gene_id
-                        ][0]
-
-                    transcript_info = self.transcript_db.transcripts[best_transcript_id]
-
-                    # Create BED coordinates for the start codon
-                    if transcript_info.strand == "+":
-                        bed_start = transcript_info.start
-                        bed_end = transcript_info.start + 2
-                    else:
-                        bed_start = transcript_info.end - 2
-                        bed_end = transcript_info.end
-
-                    # Create annotated entry
-                    annotated_entry = BedEntry(
-                        chrom=transcript_info.chrom,
-                        start=bed_start,
-                        end=bed_end,
-                        name=f"{transcript_info.gene_name}_{gene_id}_Annotated_AUG_0.0",
-                        score="0",
-                        strand=transcript_info.strand,
-                        gene_id=gene_id,
-                        gene_name=transcript_info.gene_name,
-                        start_type="Annotated",
-                        start_codon="AUG",
-                        efficiency=0.0,
-                        start_pos=transcript_info.start_pos,
-                        line_num=-1,  # Mark as added
-                    )
-
-                    gene_entries[gene_id].append(annotated_entry)
-                    added_count += 1
-
-        return added_count
-
-    def process_bed_file(
-        self,
-        input_bed_path: Union[str, Path],
-        output_bed_path: Union[str, Path],
-        verbose: bool = True,
-    ) -> Dict:
-        """Process BED file with enhanced transcript mapping and biologically relevant pairing."""
-        if verbose:
-            logger.info(f"Processing BED file: {input_bed_path}")
-
-        # Parse all entries
-        valid_entries = []
-        gene_entries = defaultdict(list)
-
-        with open(input_bed_path, "r") as f:
-            for line_num, line in enumerate(f, 1):
-                if not line.strip():
-                    continue
-
-                self.stats["total_entries"] += 1
-                entry = self.parse_bed_entry(line, line_num)
-
-                if entry:
-                    valid_entries.append(entry)
-                    gene_entries[entry.gene_id].append(entry)
-                    self.stats["valid_entries"] += 1
-
-        if verbose:
-            logger.info(
-                f"  Valid entries: {self.stats['valid_entries']} / {self.stats['total_entries']}"
-            )
-
-        # Add missing annotated starts
-        added_annotated = self.add_missing_annotated_starts(gene_entries)
-        if verbose:
-            logger.info(f"  Added annotated starts: {added_annotated}")
-
-        # Store gene entries for pairing logic
-        self.gene_entries = gene_entries
-
-        # Map entries to transcripts with biologically relevant pairing
-        enhanced_entries = []
-        transcript_assignments = 0
-
-        for gene_id, entries in gene_entries.items():
-            # Only process complete genes (have both annotated and alternatives)
-            has_annotated = any(e.start_type == "Annotated" for e in entries)
-            has_alternatives = any(
-                e.start_type in ["Truncated", "Extended"] for e in entries
-            )
-
-            if not (has_annotated and has_alternatives):
-                continue
-
-            for entry in entries:
-                if entry.start_type == "Annotated":
-                    # For annotated starts, use direct position matching
-                    transcript_id = (
-                        self.transcript_db.select_best_transcript_for_position(
-                            gene_id=entry.gene_id,
-                            target_pos=entry.start_pos,
-                            strand=entry.strand,
-                            max_distance=100,
-                        )
-                    )
-                else:
-                    # For alternatives, find relevant annotated start first
-                    relevant_annotated = self.select_relevant_annotated_start(
-                        gene_id=gene_id,
-                        alternative_pos=entry.start_pos,
-                        alternative_type=entry.start_type,
-                        strand=entry.strand,
-                    )
-
-                    if relevant_annotated:
-                        # Use the transcript from the relevant annotated start
-                        transcript_id = (
-                            self.transcript_db.select_best_transcript_for_position(
-                                gene_id=relevant_annotated.gene_id,
-                                target_pos=relevant_annotated.start_pos,
-                                strand=relevant_annotated.strand,
-                                max_distance=100,
-                            )
-                        )
-                    else:
-                        # Fallback to direct position matching
-                        transcript_id = (
-                            self.transcript_db.select_best_transcript_for_position(
-                                gene_id=entry.gene_id,
-                                target_pos=entry.start_pos,
-                                strand=entry.strand,
-                                max_distance=100,
-                            )
-                        )
-
-                if transcript_id is None:
-                    transcript_id = "NA"
-                else:
-                    transcript_assignments += 1
-
-                # Get RefSeq ID
-                refseq_id = (
-                    self.transcript_db.get_refseq_id(transcript_id)
-                    if transcript_id != "NA"
-                    else "NA"
-                )
-
-                # Create enhanced BED line
-                enhanced_line = f"{entry.chrom}\t{entry.start}\t{entry.end}\t{entry.name}\t{entry.score}\t{entry.strand}\t{transcript_id}\t{refseq_id}"
-                enhanced_entries.append(enhanced_line)
-
-        # Write output
-        output_bed_path = Path(output_bed_path)
-        output_bed_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(output_bed_path, "w") as f:
-            f.write("\n".join(enhanced_entries))
-
-        # Calculate final statistics
-        final_stats = dict(self.stats)
-        final_stats.update(
-            {
-                "added_annotated": added_annotated,
-                "enhanced_entries": len(enhanced_entries),
-                "transcript_assignments": transcript_assignments,
-                "final_genes": len(gene_entries),
-            }
-        )
-
-        if verbose:
-            logger.info(f"  Enhanced entries: {len(enhanced_entries)}")
-            logger.info(f"  Transcript assignments: {transcript_assignments}")
-            logger.info(f"  Output saved: {output_bed_path}")
-
-        return final_stats
-
-
-def comprehensive_cleanup_bed_with_intelligent_selection(
-    input_bed_path: Union[str, Path],
-    gtf_path: Union[str, Path],
-    preferred_transcripts_path: Union[str, Path],
-    output_bed_path: Union[str, Path],
-    refseq_gtf_path: Optional[Union[str, Path]] = None,
-    verbose: bool = True,
-) -> Dict:
-    """Comprehensive BED cleanup with intelligent transcript selection.
-
-    This function provides:
-    1. Improved transcript selection using preferred lists and MANE Select
-    2. Clean, systematic processing pipeline
-    3. Enhanced RefSeq mapping with fallback logic
-    4. Better error handling and statistics
-
-    Args:
-        input_bed_path: Path to input BED file
-        gtf_path: Path to GENCODE GTF annotation file
-        preferred_transcripts_path: Path to preferred transcripts file
-        output_bed_path: Path to save enhanced BED file
-        refseq_gtf_path: Path to RefSeq GTF file (auto-detected if None)
-        verbose: Print detailed progress
-
-    Returns:
-        Dictionary with comprehensive processing statistics
-    """
-    if verbose:
-        logger.info(
-            "🔧 Starting comprehensive BED cleanup with intelligent transcript selection..."
-        )
-        logger.info(f"  Input BED: {input_bed_path}")
-        logger.info(f"  GENCODE GTF: {gtf_path}")
-        logger.info(f"  Preferred transcripts: {preferred_transcripts_path}")
-        logger.info(f"  Output BED: {output_bed_path}")
-
-    # Auto-detect RefSeq GTF if not provided
-    if refseq_gtf_path is None:
-        genome_data_dir = Path(gtf_path).parent
-        refseq_gtf_path = find_refseq_gtf_file(genome_data_dir)
-
-        if refseq_gtf_path is None:
-            if verbose:
-                logger.warning("No RefSeq GTF found! RefSeq mapping will be limited.")
-                logger.info(
-                    "💡 Run: bash 0_download_genome.sh to get RefSeq annotations"
-                )
-
-    if verbose and refseq_gtf_path:
-        logger.info(f"  RefSeq GTF: {refseq_gtf_path}")
-
-    # Build comprehensive transcript database
-    if verbose:
-        logger.info("\n📊 Building transcript database...")
-
-    transcript_db = TranscriptDatabase()
-    transcript_db.load_from_gtf(gtf_path, verbose=verbose)
-    transcript_db.load_preferred_transcripts(
-        preferred_transcripts_path, verbose=verbose
-    )
-
-    if refseq_gtf_path:
-        transcript_db.load_refseq_mapping(refseq_gtf_path, verbose=verbose)
-
-    # Process BED file
-    if verbose:
-        logger.info("\n🔄 Processing BED file...")
-
-    processor = BedProcessor(transcript_db)
-    final_stats = processor.process_bed_file(
-        input_bed_path, output_bed_path, verbose=verbose
-    )
-
-    if verbose:
-        logger.info(f"\n✅ BED cleanup complete!")
-        logger.info(f"  Enhanced entries: {final_stats['enhanced_entries']}")
-        logger.info(
-            f"  Transcript assignments: {final_stats['transcript_assignments']}"
-        )
-        logger.info(f"  Final genes: {final_stats['final_genes']}")
-        logger.info(
-            f"  Success rate: {final_stats['transcript_assignments'] / final_stats['enhanced_entries'] * 100:.1f}%"
-        )
-
-    return final_stats
-
-
-# Helper functions that you can add to your existing utils.py
+# NOTE: TranscriptDatabase, BedProcessor, and related classes removed
+# These were used for the old position-based transcript matching workflow.
+# Current workflow uses pre-assigned transcript IDs from ribosome profiling data.
 
 
 def find_refseq_gtf_file(genome_data_dir: Union[str, Path]) -> Optional[Path]:
@@ -1177,53 +378,7 @@ def parse_gene_list(gene_list_path: Union[str, Path]) -> List[str]:
     return gene_names
 
 
-def subset_gene_list(
-    gene_list_path: Union[str, Path],
-    subset_genes: List[str] = [
-        # Truncations of interest
-        "AKR7A2",
-        "ALDH9A1",
-        "C15orf40",
-        "CHCHD1",
-        "CMPK1",
-        "ERGIC3",
-        "FAAH2",
-        "FH",
-        "GADD45GIP1",
-        "GARS1",
-        "GLRX2",
-        "GSR",
-        "LAGE3",
-        "MYG1",
-        "NAXE",
-        "NTHL1",
-        "PCBD2",
-        "PNPO",
-        "REXO2",
-        "TRNT1",
-        "UXS1",
-        # Extensions of interest
-        "PTEN",
-        "FTL",
-        "MAPK14",
-    ],
-) -> List[str]:
-    """Subset a gene list to only include specified genes.
-
-    Args:
-        gene_list_path: Path to the file containing the full gene list
-        subset_genes: List of gene names to include in the subset (defaults to a predefined list)
-
-    Returns:
-        List of genes from the full list that are in the subset
-    """
-    full_gene_list = parse_gene_list(gene_list_path)
-    subset_set = set(subset_genes)
-    subsetted_genes = [gene for gene in full_gene_list if gene in subset_set]
-    logger.info(
-        f"Subsetted to {len(subsetted_genes)} genes from {len(full_gene_list)} total"
-    )
-    return subsetted_genes
+# NOTE: subset_gene_list() function removed - no longer needed for current workflow
 
 
 def save_gene_level_results(
@@ -1682,3 +837,534 @@ def load_pre_validated_variants(mutations_file: str) -> Dict[str, Set[str]]:
             logger.info(f"  ... and {len(gene_counts) - 10} more genes")
 
     return pre_validated_variants
+
+
+def simple_transcript_based_cleanup(
+    input_bed_path: Union[str, Path],
+    gtf_path: Union[str, Path],
+    output_bed_path: Union[str, Path],
+    refseq_gtf_path: Optional[Union[str, Path]] = None,
+    categories_to_keep: Set[str] = {'Annotated', 'Extended', 'Truncated', 'uORF'},
+    verbose: bool = True
+) -> Dict:
+    """
+    Simplified cleanup for BED files that already have transcript IDs assigned.
+
+    This function is designed for ribosome profiling data where transcript IDs are already
+    in the BED file name field (format: CODON_CATEGORY_GENE_TRANSCRIPT).
+
+    Steps:
+    1. Parse BED entries and extract transcript ID from name field
+    2. Load GTF for transcript → gene mapping
+    3. Load RefSeq mapping
+    4. Validate entries and map to RefSeq IDs
+    5. Add canonical starts where missing (except for uORF-only transcripts)
+    6. Generate statistics including multi-TIS per transcript/category
+
+    Args:
+        input_bed_path: Path to input BED file with transcript IDs in name field
+        gtf_path: Path to GTF annotation file
+        output_bed_path: Path to save enhanced 8-column BED file
+        refseq_gtf_path: Path to RefSeq GTF for mapping (optional)
+        categories_to_keep: Set of categories to include in output
+        verbose: Print detailed progress information
+
+    Returns:
+        Dictionary with comprehensive processing statistics including:
+        - total_entries: Total input entries
+        - filtered_by_category: Entries filtered out
+        - valid_entries: Entries kept after filtering
+        - ensembl_mapped: Entries with Ensembl transcript IDs
+        - refseq_mapped: Entries with RefSeq IDs
+        - canonical_starts_added: Number of canonical starts added
+        - multi_tis_transcripts: Dict of {category: count} for transcripts with multiple TIS
+        - total_transcripts_with_multi_tis: Number of transcripts with any multi-TIS
+        - final_gene_count: Number of unique genes
+    """
+    if verbose:
+        logger.info(f"\n{'='*60}")
+        logger.info("Simple Transcript-Based BED Cleanup")
+        logger.info(f"{'='*60}")
+        logger.info(f"  Input BED: {input_bed_path}")
+        logger.info(f"  GTF: {gtf_path}")
+        logger.info(f"  Output BED: {output_bed_path}")
+
+    # Step 1: Load GTF transcript information
+    if verbose:
+        logger.info("\nStep 1: Loading GTF transcript information...")
+
+    transcript_info = {}  # transcript_id → {gene_id, gene_name, chrom, strand, start_pos}
+    canonical_starts = {}  # transcript_id → {chrom, start, end, strand}
+
+    with open(gtf_path, 'r') as f:
+        for line in f:
+            if line.startswith('#'):
+                continue
+
+            fields = line.strip().split('\t')
+            if len(fields) < 9:
+                continue
+
+            feature = fields[2]
+            attrs = fields[8]
+
+            # Extract transcript info
+            transcript_match = re.search(r'transcript_id "([^"]+)"', attrs)
+            if not transcript_match:
+                continue
+
+            transcript_id = transcript_match.group(1)
+
+            # Get transcript-level info
+            if feature == 'transcript':
+                gene_match = re.search(r'gene_id "([^"]+)"', attrs)
+                gene_name_match = re.search(r'gene_name "([^"]+)"', attrs)
+
+                if gene_match and gene_name_match:
+                    transcript_info[transcript_id] = {
+                        'gene_id': gene_match.group(1),
+                        'gene_name': gene_name_match.group(1),
+                        'chrom': fields[0],
+                        'strand': fields[6],
+                        'start_pos': int(fields[3]) if fields[6] == '+' else int(fields[4])
+                    }
+
+            # Get canonical start codon positions
+            elif feature == 'start_codon' and transcript_id not in canonical_starts:
+                canonical_starts[transcript_id] = {
+                    'chrom': fields[0],
+                    'start': int(fields[3]),  # Keep 1-based to match input BED format
+                    'end': int(fields[4]),
+                    'strand': fields[6]
+                }
+
+    if verbose:
+        logger.info(f"    ✓ Loaded {len(transcript_info)} transcripts")
+        logger.info(f"    ✓ Loaded {len(canonical_starts)} canonical start sites")
+
+    # Step 2: Load RefSeq mapping (with gene name fallback)
+    if verbose:
+        logger.info("\nStep 2: Loading RefSeq mapping...")
+
+    refseq_mapping = {}  # ensembl_base_id → refseq_id
+    refseq_gene_mapping = {}  # gene_name → [refseq_ids]  # For fallback lookups
+
+    if refseq_gtf_path and Path(refseq_gtf_path).exists():
+        with open(refseq_gtf_path, 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+
+                fields = line.strip().split('\t')
+                if len(fields) < 9 or fields[2] != 'transcript':
+                    continue
+
+                attrs = fields[8]
+
+                # Look for Ensembl cross-reference and RefSeq ID
+                ensembl_match = re.search(r'db_xref "Ensembl:([^"]+)"', attrs)
+                refseq_match = re.search(r'transcript_id "([^"]+)"', attrs)
+                gene_name_match = re.search(r'gene "([^"]+)"', attrs)
+
+                refseq_id = refseq_match.group(1) if refseq_match else None
+
+                # Only process RefSeq transcript IDs
+                if refseq_id and refseq_id.startswith(('NM_', 'NR_', 'XM_', 'XR_')):
+                    # Primary mapping: Ensembl ID → RefSeq ID
+                    if ensembl_match:
+                        ensembl_id = ensembl_match.group(1)
+                        base_ensembl = ensembl_id.split('.')[0]
+                        refseq_mapping[base_ensembl] = refseq_id
+                        refseq_mapping[ensembl_id] = refseq_id  # Also store versioned
+
+                    # Secondary mapping: Gene name → RefSeq IDs (for fallback)
+                    if gene_name_match:
+                        gene_name = gene_name_match.group(1)
+                        if gene_name not in refseq_gene_mapping:
+                            refseq_gene_mapping[gene_name] = []
+                        if refseq_id not in refseq_gene_mapping[gene_name]:
+                            refseq_gene_mapping[gene_name].append(refseq_id)
+
+        if verbose:
+            logger.info(f"    ✓ Loaded {len(refseq_mapping)} Ensembl→RefSeq mappings")
+            logger.info(f"    ✓ Loaded {len(refseq_gene_mapping)} gene name→RefSeq mappings (for fallback)")
+    else:
+        if verbose:
+            logger.info(f"    ⚠ RefSeq GTF not found, RefSeq mapping will be limited")
+
+    # Step 3: Parse BED file
+    if verbose:
+        logger.info("\nStep 3: Parsing BED file...")
+
+    stats = defaultdict(int)
+    entries = []
+    transcript_category_counts = defaultdict(lambda: defaultdict(int))  # transcript → category → count
+
+    with open(input_bed_path, 'r') as f:
+        for line in f:
+            if not line.strip():
+                continue
+
+            stats['total_entries'] += 1
+            fields = line.strip().split('\t')
+
+            if len(fields) < 5:
+                stats['invalid_format'] += 1
+                continue
+
+            chrom, start, end, name = fields[:4]
+            # Input BED has 7 columns: chr, start, end, name, strand, dna_sequence, protein_sequence:strand
+            # Input BED has no score column, so always use '0'
+            score = '0'
+            strand = fields[6].split(':')[-1] if len(fields) > 6 and ':' in fields[6] else (fields[4] if len(fields) > 4 else '.')
+
+            # Extract sequences from input
+            dna_seq = fields[5] if len(fields) > 5 else ''
+            # Protein sequence is in column 7, format: "PROTEIN_SEQUENCE:STRAND"
+            protein_seq = fields[6].rsplit(':', 1)[0] if len(fields) > 6 and ':' in fields[6] else ''
+
+            # Parse name: CODON_CATEGORY_GENE_TRANSCRIPT
+            parts = name.split('_')
+            if len(parts) < 4:
+                stats['invalid_name_format'] += 1
+                continue
+
+            codon = parts[0]
+            category = parts[1]
+            gene = parts[2]  # This will be replaced with GTF gene name later
+            transcript = parts[3]
+
+            # Filter by category
+            if category not in categories_to_keep:
+                stats['filtered_by_category'] += 1
+                continue
+
+            # Validate transcript exists in GTF
+            if transcript not in transcript_info:
+                stats['transcript_not_in_gtf'] += 1
+                continue
+
+            stats['valid_entries'] += 1
+
+            # Track transcript-category counts for multi-TIS detection
+            transcript_category_counts[transcript][category] += 1
+
+            entries.append({
+                'chrom': chrom,
+                'start': int(start),
+                'end': int(end),
+                'name': name,
+                'score': score,
+                'strand': strand,
+                'transcript': transcript,
+                'gene': gene,  # Original gene from input; will use GTF name in output
+                'category': category,
+                'codon': codon,  # Store codon for output formatting
+                'dna_sequence': dna_seq,
+                'protein_sequence': protein_seq
+            })
+
+    if verbose:
+        logger.info(f"    ✓ Total entries: {stats['total_entries']}")
+        logger.info(f"    ✓ Valid entries: {stats['valid_entries']}")
+        logger.info(f"    ✓ Filtered by category: {stats['filtered_by_category']}")
+
+    # Step 4: Add missing canonical starts
+    if verbose:
+        logger.info("\nStep 4: Adding missing canonical starts...")
+
+    # Find transcripts with alternatives but no annotated start
+    transcripts_with_annotated = {e['transcript'] for e in entries if e['category'] == 'Annotated'}
+    transcripts_without_annotated = set()
+
+    for entry in entries:
+        if entry['transcript'] not in transcripts_with_annotated:
+            transcripts_without_annotated.add(entry['transcript'])
+
+    added_canonical = 0
+    added_canonical_transcripts = []  # Track which transcripts had canonical starts added
+
+    for transcript_id in transcripts_without_annotated:
+        if transcript_id not in canonical_starts:
+            continue
+
+        # Check if this transcript only has uORFs - skip adding canonical start for uORF-only transcripts
+        transcript_entries = [e for e in entries if e['transcript'] == transcript_id]
+        transcript_categories = {e['category'] for e in transcript_entries}
+        if transcript_categories == {'uORF'}:
+            continue
+
+        canonical = canonical_starts[transcript_id]
+        trans_info = transcript_info[transcript_id]
+
+        # Check if this position already exists
+        existing = any(
+            e['start'] == canonical['start'] and e['transcript'] == transcript_id
+            for e in entries
+        )
+
+        if not existing:
+            entries.append({
+                'chrom': canonical['chrom'],
+                'start': canonical['start'],
+                'end': canonical['end'],
+                'name': f"{trans_info['gene_name']}_{trans_info['gene_id']}_Annotated_ATG",
+                'score': '0',
+                'strand': canonical['strand'],
+                'transcript': transcript_id,
+                'gene': trans_info['gene_name'],
+                'category': 'Annotated',
+                'codon': 'ATG',  # Canonical starts are always ATG
+                'dna_sequence': '',  # No sequence for added canonical starts
+                'protein_sequence': ''
+            })
+            added_canonical += 1
+            added_canonical_transcripts.append(transcript_id)
+            transcript_category_counts[transcript_id]['Annotated'] += 1
+
+    stats['canonical_starts_added'] = added_canonical
+    stats['canonical_starts_added_transcripts'] = added_canonical_transcripts[:10]  # Store up to 10 examples
+
+    if verbose:
+        logger.info(f"    ✓ Added {added_canonical} canonical starts to transcripts with alternatives")
+        if added_canonical > 0 and added_canonical_transcripts:
+            logger.info(f"    Examples: {', '.join(added_canonical_transcripts[:3])}")
+
+    # Step 4b: Validate and deduplicate Annotated starts per transcript
+    if verbose:
+        logger.info("\nStep 4b: Validating Annotated starts (max 1 per transcript)...")
+
+    # Group entries by transcript and category
+    transcript_annotated_map = defaultdict(list)
+    for i, entry in enumerate(entries):
+        if entry['category'] == 'Annotated':
+            transcript_annotated_map[entry['transcript']].append((i, entry))
+
+    # Find transcripts with multiple Annotated starts and keep only the valid one
+    entries_to_remove = set()
+    duplicate_annotated_removed = 0
+    transcripts_with_duplicates = []  # Track affected transcripts
+
+    for transcript_id, annotated_entries in transcript_annotated_map.items():
+        if len(annotated_entries) > 1:
+            transcripts_with_duplicates.append(transcript_id)
+
+            # Keep the one that matches the canonical start position from GTF
+            if transcript_id in canonical_starts:
+                canonical_pos = canonical_starts[transcript_id]['start']
+                valid_entry_idx = None
+                kept_entry_start = None
+
+                for idx, entry in annotated_entries:
+                    if entry['start'] == canonical_pos:
+                        valid_entry_idx = idx
+                        kept_entry_start = canonical_pos
+                        break
+
+                # Only mark entries for removal if we found a valid match
+                if valid_entry_idx is not None:
+                    # Mark all others for removal
+                    for idx, entry in annotated_entries:
+                        if idx != valid_entry_idx:
+                            entries_to_remove.add(idx)
+                            duplicate_annotated_removed += 1
+                else:
+                    # No entry matched canonical position - keep all and log warning
+                    if verbose:
+                        logger.warning(f"    ⚠ Transcript {transcript_id}: No Annotated entry matches GTF canonical position {canonical_pos}")
+                        logger.warning(f"       Found positions: {[e[1]['start'] for e in annotated_entries]}")
+                        logger.warning(f"       Keeping all {len(annotated_entries)} duplicate Annotated entries")
+            else:
+                # No canonical start in GTF - cannot validate, log warning
+                if verbose:
+                    logger.warning(f"    ⚠ Transcript {transcript_id}: No GTF canonical start available for validation")
+                    logger.warning(f"       Keeping all {len(annotated_entries)} duplicate Annotated entries")
+
+    # Remove marked entries and update transcript_category_counts
+    if entries_to_remove:
+        entries = [e for i, e in enumerate(entries) if i not in entries_to_remove]
+        stats['duplicate_annotated_removed'] = duplicate_annotated_removed
+        stats['transcripts_with_duplicate_annotated'] = len(transcripts_with_duplicates)
+        stats['duplicate_annotated_examples'] = transcripts_with_duplicates[:10]  # Store up to 10 examples
+
+        # Update transcript_category_counts to reflect removed entries
+        # This ensures multi-TIS statistics are calculated from FINAL data, not intermediate
+        for transcript_id, annotated_entries in transcript_annotated_map.items():
+            if len(annotated_entries) > 1:
+                # Decrement count by number of removed entries for this transcript
+                removed_for_transcript = sum(1 for idx, _ in annotated_entries if idx in entries_to_remove)
+                if removed_for_transcript > 0:
+                    transcript_category_counts[transcript_id]['Annotated'] -= removed_for_transcript
+
+        if verbose:
+            logger.info(f"    ✓ Removed {duplicate_annotated_removed} duplicate Annotated entries from {len(transcripts_with_duplicates)} transcripts")
+            if transcripts_with_duplicates:
+                logger.info(f"    Examples: {', '.join(transcripts_with_duplicates[:3])}")
+    else:
+        stats['duplicate_annotated_removed'] = 0
+        stats['transcripts_with_duplicate_annotated'] = 0
+        stats['duplicate_annotated_examples'] = []
+        if verbose:
+            logger.info(f"    ✓ No duplicate Annotated entries found")
+
+    # Step 5: Map to Ensembl and RefSeq IDs
+    if verbose:
+        logger.info("\nStep 5: Mapping to Ensembl and RefSeq IDs...")
+
+    output_entries = []
+    refseq_gene_name_matches = 0  # Track fallback successes
+
+    for entry in entries:
+        transcript_id = entry['transcript']
+        base_transcript = transcript_id.split('.')[0]
+
+        # Ensembl ID is already in the entry
+        ensembl_id = transcript_id
+        stats['ensembl_mapped'] += 1
+
+        # Get gene name from GTF (authoritative source, with v47 names)
+        gene_name_from_gtf = transcript_info[transcript_id]['gene_name'] if transcript_id in transcript_info else entry['gene']
+
+        # Primary lookup: Direct Ensembl ID → RefSeq ID mapping
+        refseq_id = refseq_mapping.get(base_transcript, refseq_mapping.get(transcript_id, None))
+
+        # Fallback lookup: Try gene name if direct lookup failed
+        if refseq_id is None and gene_name_from_gtf in refseq_gene_mapping:
+            # Use first RefSeq ID for this gene name
+            refseq_candidates = refseq_gene_mapping[gene_name_from_gtf]
+            if refseq_candidates:
+                refseq_id = refseq_candidates[0]  # Use first match
+                refseq_gene_name_matches += 1
+
+        if refseq_id is None:
+            refseq_id = 'NA'
+
+        if refseq_id != 'NA':
+            stats['refseq_mapped'] += 1
+
+        output_entries.append({
+            **entry,
+            'ensembl_id': ensembl_id,
+            'refseq_id': refseq_id,
+            'gene_name_gtf': gene_name_from_gtf  # Add GTF gene name for output formatting
+        })
+
+    stats['refseq_gene_name_matches'] = refseq_gene_name_matches
+
+    if verbose:
+        logger.info(f"    ✓ Ensembl mapped: {stats['ensembl_mapped']}/{len(output_entries)}")
+        logger.info(f"    ✓ RefSeq mapped: {stats['refseq_mapped']}/{len(output_entries)}")
+        if refseq_gene_name_matches > 0:
+            logger.info(f"    ✓ RefSeq via gene name fallback: {refseq_gene_name_matches}")
+
+        # Show some examples of RefSeq mappings for debugging
+        if stats['refseq_mapped'] > 0:
+            refseq_examples = [e for e in output_entries if e['refseq_id'] != 'NA'][:3]
+            if refseq_examples:
+                logger.info(f"    RefSeq mapping examples:")
+                for ex in refseq_examples:
+                    logger.info(f"      {ex['transcript']} → {ex['refseq_id']}")
+
+    # Step 6: Calculate multi-TIS statistics and collect examples
+    multi_tis_transcripts = defaultdict(int)
+    multi_tis_examples = defaultdict(list)  # Store example transcript IDs per category
+    total_multi_tis_transcripts = set()
+
+    for transcript, category_counts in transcript_category_counts.items():
+        for category, count in category_counts.items():
+            if count > 1:
+                multi_tis_transcripts[category] += 1
+                total_multi_tis_transcripts.add(transcript)
+                # Collect up to 3 examples per category
+                if len(multi_tis_examples[category]) < 3:
+                    multi_tis_examples[category].append(transcript)
+
+    stats['multi_tis_transcripts'] = dict(multi_tis_transcripts)
+    stats['multi_tis_examples'] = {k: v for k, v in multi_tis_examples.items()}  # Convert to regular dict
+    stats['total_transcripts_with_multi_tis'] = len(total_multi_tis_transcripts)
+
+    # Count unique genes
+    unique_genes = {transcript_info[e['transcript']]['gene_name'] for e in output_entries
+                    if e['transcript'] in transcript_info}
+    stats['final_gene_count'] = len(unique_genes)
+    stats['final_entries'] = len(output_entries)  # Total output entries including added canonical starts
+
+    # Step 7: Write output
+    if verbose:
+        logger.info("\nStep 6: Writing output...")
+
+    output_path = Path(output_bed_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_path, 'w') as f:
+        for entry in sorted(output_entries, key=lambda e: (e['chrom'], e['start'])):
+            # Get gene info from GTF (authoritative source)
+            gene_name_from_gtf = entry['gene_name_gtf']
+            gene_id = transcript_info[entry['transcript']]['gene_id'] if entry['transcript'] in transcript_info else 'UNKNOWN'
+
+            # Reformat name to match AlternativeIsoform expected format: GENENAME_GENEID_CATEGORY_CODON
+            # Use GTF gene name, not input BED gene name
+            # Note: Score removed from name (input BED has no score column)
+            # Use stored category and codon from entry dict instead of parsing name
+            new_name = f"{gene_name_from_gtf}_{gene_id}_{entry['category']}_{entry['codon']}"
+
+            # Write output in BED6+ format: standard BED6 columns first, then extra columns
+            # BED6: chr, start, end, name, score, strand
+            # Extra: ensembl_id, refseq_id, dna_sequence, protein_sequence
+            # Use '.' for missing/empty sequences (BED standard)
+            dna_seq = entry['dna_sequence'] if entry['dna_sequence'] else '.'
+            protein_seq = entry['protein_sequence'] if entry['protein_sequence'] else '.'
+
+            f.write(f"{entry['chrom']}\t{entry['start']}\t{entry['end']}\t")
+            f.write(f"{new_name}\t{entry['score']}\t{entry['strand']}\t")
+            f.write(f"{entry['ensembl_id']}\t{entry['refseq_id']}\t")
+            f.write(f"{dna_seq}\t{protein_seq}\n")
+
+    if verbose:
+        logger.info(f"    ✓ Wrote {len(output_entries)} entries to {output_path}")
+
+    # Summary
+    if verbose:
+        logger.info(f"\n{'='*60}")
+        logger.info("Summary")
+        logger.info(f"{'='*60}")
+        logger.info(f"  Total entries processed: {stats['total_entries']}")
+        logger.info(f"  Valid input entries: {stats['valid_entries']}")
+        logger.info(f"  Canonical starts added: {stats['canonical_starts_added']}")
+        logger.info(f"  Duplicate Annotated entries removed: {stats['duplicate_annotated_removed']}")
+        logger.info(f"  Final output entries: {stats['final_entries']}")
+        logger.info(f"  Unique genes: {stats['final_gene_count']}")
+
+        if stats['final_entries'] > 0:
+            logger.info(f"  RefSeq mapping rate: {stats['refseq_mapped']}/{stats['final_entries']} ({stats['refseq_mapped']/stats['final_entries']*100:.1f}%)")
+        else:
+            logger.info(f"  RefSeq mapping rate: N/A (no output entries)")
+
+        logger.info(f"\n  Multi-TIS Statistics:")
+        if stats['multi_tis_transcripts']:
+            logger.info(f"  Transcripts with multiple TIS in same category:")
+            for category in sorted(stats['multi_tis_transcripts'].keys()):
+                count = stats['multi_tis_transcripts'][category]
+                examples = stats.get('multi_tis_examples', {}).get(category, [])
+                if examples:
+                    examples_str = ', '.join(examples[:3])
+                    logger.info(f"    {category}: {count} transcripts (e.g., {examples_str})")
+                else:
+                    logger.info(f"    {category}: {count} transcripts")
+            logger.info(f"  Total transcripts with any multi-TIS: {stats['total_transcripts_with_multi_tis']}")
+        else:
+            logger.info(f"  No transcripts with multiple TIS in same category")
+
+        logger.info(f"\n  Duplicate Annotated Entry Statistics:")
+        if stats.get('transcripts_with_duplicate_annotated', 0) > 0:
+            logger.info(f"  Transcripts with duplicate Annotated entries: {stats['transcripts_with_duplicate_annotated']}")
+            logger.info(f"  Entries removed: {stats['duplicate_annotated_removed']}")
+            examples = stats.get('duplicate_annotated_examples', [])
+            if examples:
+                examples_str = ', '.join(examples[:3])
+                logger.info(f"  Examples: {examples_str}")
+            logger.info(f"  Detailed log: {Path(str(output_bed_path) + '.duplicates_removed.tsv')}")
+        else:
+            logger.info(f"  No duplicate Annotated entries detected")
+
+    return dict(stats)

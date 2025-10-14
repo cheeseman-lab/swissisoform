@@ -18,7 +18,8 @@ class AlternativeIsoform:
     """Handles alternative start sites data from BED format files.
 
     The name field in the BED file is expected to contain gene information in the format:
-    GENE_ENSEMBL_TYPE_CODON_EFFICIENCY (e.g., TIMM10B_ENSG00000132286.11_Annotated_AUG_15.15592)
+    GENE_ENSEMBL_TYPE_CODON (e.g., TIMM10B_ENSG00000132286.11_Annotated_ATG)
+    or legacy format: GENE_ENSEMBL_TYPE_CODON_EFFICIENCY (e.g., TIMM10B_ENSG00000132286.11_Annotated_AUG_15.15592)
 
     This class processes start sites to:
     - Group start sites by gene and type (Annotated, Truncated, Extended)
@@ -109,9 +110,30 @@ class AlternativeIsoform:
                 "Loading dual-transcript 8-column BED format with Ensembl and RefSeq IDs"
             )
 
+        elif num_columns >= 9:
+            # Extended format with 8+ columns (extra columns like sequences are ignored)
+            # Use first 8 columns as standard BED6 + transcript IDs
+            column_names = [
+                "chrom",
+                "start",
+                "end",
+                "name",
+                "score",
+                "strand",
+                "ensembl_transcript_id",
+                "refseq_transcript_id",
+            ]
+            # Add extra column names for any additional columns
+            for i in range(8, num_columns):
+                column_names.append(f"extra_col_{i-7}")
+
+            self._debug_print(
+                f"Loading extended {num_columns}-column BED format (using first 8 columns, ignoring extra {num_columns-8} columns)"
+            )
+
         else:
             raise ValueError(
-                f"Unsupported BED format: {num_columns} columns. Expected 6, 7, or 8."
+                f"Unsupported BED format: {num_columns} columns. Expected 6 or more."
             )
 
         # Read the full file, skipping comment lines
@@ -130,16 +152,20 @@ class AlternativeIsoform:
                 name = str(name)
 
             parts = name.split("_")
-            if len(parts) >= 5 and parts[1].startswith("ENSG"):
-                return {
+            # Support both old format (5 parts with score) and new format (4 parts without score)
+            if len(parts) >= 4 and parts[1].startswith("ENSG"):
+                result = {
                     "gene_name": parts[0],
                     "gene_id": parts[1],
                     "start_type": parts[2],  # Annotated, Truncated, Extended
                     "start_codon": parts[3],
-                    "efficiency": float(parts[4])
-                    if parts[4].replace(".", "").isdigit()
-                    else 0.0,
                 }
+                # Handle optional efficiency/score field (5th part)
+                if len(parts) >= 5 and parts[4].replace(".", "").replace("-", "").isdigit():
+                    result["efficiency"] = float(parts[4])
+                else:
+                    result["efficiency"] = 0.0
+                return result
             else:
                 return {
                     "gene_id": name,

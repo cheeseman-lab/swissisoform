@@ -81,11 +81,25 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 GENE_LIST="$SCRIPT_DIR/test_genes.txt"
 OUTPUT_DIR="$SCRIPT_DIR/test_run_$TIMESTAMP"
 GENOME_DATA="$PROJECT_ROOT/data/genome_data"
-BED_FILE="$PROJECT_ROOT/data/ribosome_profiling/isoforms_with_transcripts.bed"
+
+# Use default hela dataset
+DATASET="hela"
+BED_FILE="$PROJECT_ROOT/data/ribosome_profiling/${DATASET}_isoforms_with_transcripts.bed"
 
 # Configuration
 GENOME_FA="$GENOME_DATA/GRCh38.p7.genome.fa"
-ANNOTATION_GTF="$GENOME_DATA/gencode.v25.annotation.ensembl_cleaned.gtf"
+
+# Use v47names GTF if available (hela uses gencode v25)
+ANNOTATION_GTF_V47="$GENOME_DATA/gencode.v25.annotation.v47names.gtf"
+ANNOTATION_GTF_ORIG="$GENOME_DATA/gencode.v25.annotation.gtf"
+
+if [ -f "$ANNOTATION_GTF_V47" ]; then
+    ANNOTATION_GTF="$ANNOTATION_GTF_V47"
+    echo -e "${GREEN}→${NC} Using v47-updated GTF annotation"
+else
+    ANNOTATION_GTF="$ANNOTATION_GTF_ORIG"
+    echo -e "${YELLOW}→${NC} Using original GTF annotation (v47 update not found)"
+fi
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║           SwissIsoform Pipeline Test Suite                   ║${NC}"
@@ -128,6 +142,7 @@ echo ""
 
 # Display configuration
 echo -e "${BLUE}Configuration:${NC}"
+echo "  Dataset:      $DATASET"
 echo "  Gene list:    $GENE_LIST"
 echo "  Gene count:   $GENE_COUNT"
 echo "  Output dir:   $OUTPUT_DIR"
@@ -186,7 +201,8 @@ PROTEIN_ARGS="$GENE_LIST $OUTPUT_DIR/proteins"
 PROTEIN_ARGS="$PROTEIN_ARGS --genome $GENOME_FA"
 PROTEIN_ARGS="$PROTEIN_ARGS --annotation $ANNOTATION_GTF"
 PROTEIN_ARGS="$PROTEIN_ARGS --bed $BED_FILE"
-PROTEIN_ARGS="$PROTEIN_ARGS --mutations $OUTPUT_DIR/mutations/isoform_level_results.csv"
+PROTEIN_ARGS="$PROTEIN_ARGS --mutations-file $OUTPUT_DIR/mutations/isoform_level_results.csv"
+PROTEIN_ARGS="$PROTEIN_ARGS --fast-mode"
 
 # Add verbosity flags
 if [ $VERBOSITY -eq 1 ]; then
