@@ -125,10 +125,10 @@ class AlternativeIsoform:
             ]
             # Add extra column names for any additional columns
             for i in range(8, num_columns):
-                column_names.append(f"extra_col_{i-7}")
+                column_names.append(f"extra_col_{i - 7}")
 
             self._debug_print(
-                f"Loading extended {num_columns}-column BED format (using first 8 columns, ignoring extra {num_columns-8} columns)"
+                f"Loading extended {num_columns}-column BED format (using first 8 columns, ignoring extra {num_columns - 8} columns)"
             )
 
         else:
@@ -161,7 +161,10 @@ class AlternativeIsoform:
                     "start_codon": parts[3],
                 }
                 # Handle optional efficiency/score field (5th part)
-                if len(parts) >= 5 and parts[4].replace(".", "").replace("-", "").isdigit():
+                if (
+                    len(parts) >= 5
+                    and parts[4].replace(".", "").replace("-", "").isdigit()
+                ):
                     result["efficiency"] = float(parts[4])
                 else:
                     result["efficiency"] = 0.0

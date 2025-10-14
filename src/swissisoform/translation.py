@@ -862,13 +862,17 @@ class AlternativeProteinGenerator:
             )
             if not base_result:
                 if self.debug:
-                    logger.debug("[DEBUG_EMOJI] ❌ Error: Could not extract base extension protein")
+                    logger.debug(
+                        "[DEBUG_EMOJI] ❌ Error: Could not extract base extension protein"
+                    )
                 return None
         else:
             base_result = self.extract_canonical_protein(transcript_id)
             if not base_result:
                 if self.debug:
-                    logger.debug("[DEBUG_EMOJI] ❌ Error: Could not extract base canonical protein")
+                    logger.debug(
+                        "[DEBUG_EMOJI] ❌ Error: Could not extract base canonical protein"
+                    )
                 return None
 
         original_coding_sequence = base_result["coding_sequence"]
@@ -968,8 +972,12 @@ class AlternativeProteinGenerator:
             if self.debug:
                 # Get all CDS and UTR regions for IGV debugging
                 features = self.genome.get_transcript_features(transcript_id)
-                cds_features = features[features["feature_type"] == "CDS"].sort_values("start")
-                utr_features = features[features["feature_type"].str.contains("UTR", na=False)].sort_values("start")
+                cds_features = features[features["feature_type"] == "CDS"].sort_values(
+                    "start"
+                )
+                utr_features = features[
+                    features["feature_type"].str.contains("UTR", na=False)
+                ].sort_values("start")
 
                 logger.debug(
                     f"🚫 Intronic variant: Position {map_position} not in coding sequence"
@@ -981,8 +989,10 @@ class AlternativeProteinGenerator:
                 if not utr_features.empty:
                     logger.debug(f"   UTR regions ({len(utr_features)} total):")
                     for _, utr in utr_features.iterrows():
-                        utr_type = utr['feature_type']
-                        logger.debug(f"     {chromosome}:{utr['start']}-{utr['end']} ({utr_type})")
+                        utr_type = utr["feature_type"]
+                        logger.debug(
+                            f"     {chromosome}:{utr['start']}-{utr['end']} ({utr_type})"
+                        )
             return None
 
         if self.debug:
@@ -2085,7 +2095,9 @@ class AlternativeProteinGenerator:
                 )
                 if not base_result:
                     if self.debug:
-                        logger.debug(f"[DEBUG_EMOJI] ❌ Could not extract base extension protein")
+                        logger.debug(
+                            f"[DEBUG_EMOJI] ❌ Could not extract base extension protein"
+                        )
                     return "unknown"
 
                 mutated_result = self._apply_mutation_to_sequence(
@@ -2104,7 +2116,9 @@ class AlternativeProteinGenerator:
                 base_result = self.extract_canonical_protein(transcript_id)
                 if not base_result:
                     if self.debug:
-                        logger.debug(f"[DEBUG_EMOJI] ❌ Could not extract canonical protein")
+                        logger.debug(
+                            f"[DEBUG_EMOJI] ❌ Could not extract canonical protein"
+                        )
                     return "unknown"
 
                 mutated_result = self._apply_mutation_to_sequence(
@@ -2261,14 +2275,18 @@ class AlternativeProteinGenerator:
 
             # Get CDS and UTR regions
             cds_regions = features[features["feature_type"] == "CDS"]
-            utr_regions = features[features["feature_type"].str.contains("UTR", na=False)]
+            utr_regions = features[
+                features["feature_type"].str.contains("UTR", na=False)
+            ]
 
             # Determine positions to check based on ref_allele length
             ref_len = len(ref_allele) if ref_allele else 1
             positions_to_check = [genomic_pos + i for i in range(ref_len)]
 
             if self.debug and ref_len > 1:
-                logger.debug(f"Multi-bp variant: checking positions {genomic_pos} to {genomic_pos + ref_len - 1}")
+                logger.debug(
+                    f"Multi-bp variant: checking positions {genomic_pos} to {genomic_pos + ref_len - 1}"
+                )
 
             # Check if ALL positions are in CDS or UTR regions
             for pos in positions_to_check:
@@ -2279,7 +2297,9 @@ class AlternativeProteinGenerator:
                     if int(cds["start"]) <= pos <= int(cds["end"]):
                         position_valid = True
                         if self.debug and len(positions_to_check) == 1:
-                            logger.debug(f"✓ Position {pos} is in CDS region {cds['start']}-{cds['end']}")
+                            logger.debug(
+                                f"✓ Position {pos} is in CDS region {cds['start']}-{cds['end']}"
+                            )
                         break
 
                 # If not in CDS, check UTR regions
@@ -2288,16 +2308,26 @@ class AlternativeProteinGenerator:
                         if int(utr["start"]) <= pos <= int(utr["end"]):
                             position_valid = True
                             if self.debug and len(positions_to_check) == 1:
-                                utr_type = utr['feature_type']
-                                logger.debug(f"✓ Position {pos} is in {utr_type} region {utr['start']}-{utr['end']}")
+                                utr_type = utr["feature_type"]
+                                logger.debug(
+                                    f"✓ Position {pos} is in {utr_type} region {utr['start']}-{utr['end']}"
+                                )
                             break
 
                 # If ANY position is not in CDS/UTR, the variant is intronic or boundary-spanning
                 if not position_valid:
                     if self.debug:
                         # Get transcript data for chromosome info
-                        transcript_data = self.genome.get_transcript_features_with_sequence(transcript_id)
-                        chrom = transcript_data["sequence"]["chromosome"] if transcript_data else "?"
+                        transcript_data = (
+                            self.genome.get_transcript_features_with_sequence(
+                                transcript_id
+                            )
+                        )
+                        chrom = (
+                            transcript_data["sequence"]["chromosome"]
+                            if transcript_data
+                            else "?"
+                        )
 
                         if ref_len > 1:
                             logger.debug(
@@ -2314,8 +2344,10 @@ class AlternativeProteinGenerator:
                         if not utr_regions.empty:
                             logger.debug(f"   UTR regions ({len(utr_regions)} total):")
                             for _, utr in utr_regions.sort_values("start").iterrows():
-                                utr_type = utr['feature_type']
-                                logger.debug(f"     {chrom}:{utr['start']}-{utr['end']} ({utr_type})")
+                                utr_type = utr["feature_type"]
+                                logger.debug(
+                                    f"     {chrom}:{utr['start']}-{utr['end']} ({utr_type})"
+                                )
                     return False
 
             # All positions are valid
@@ -2349,7 +2381,9 @@ class AlternativeProteinGenerator:
             genomic_pos = int(genomic_pos)
         except (ValueError, TypeError):
             if self.debug:
-                logger.debug(f"[DEBUG_EMOJI] ❌ Invalid genomic position type: {type(genomic_pos)}")
+                logger.debug(
+                    f"[DEBUG_EMOJI] ❌ Invalid genomic position type: {type(genomic_pos)}"
+                )
             return "unknown"
 
         # Check cache first
@@ -2387,7 +2421,9 @@ class AlternativeProteinGenerator:
 
             # CRITICAL: Check if position (and all spanned positions) are in coding/UTR sequence BEFORE quick classification
             # This prevents us from validating intronic variants and boundary-spanning variants
-            if not self._is_position_in_transcript_regions(transcript_id, genomic_pos, current_feature, ref_allele):
+            if not self._is_position_in_transcript_regions(
+                transcript_id, genomic_pos, current_feature, ref_allele
+            ):
                 if self.debug:
                     logger.debug(
                         f"Position {genomic_pos} not in coding/UTR regions - skipping validation"
@@ -2557,11 +2593,19 @@ class AlternativeProteinGenerator:
                 if self.debug:
                     # Get all CDS and UTR regions for IGV debugging
                     features = self.genome.get_transcript_features(transcript_id)
-                    cds_features = features[features["feature_type"] == "CDS"].sort_values("start")
-                    utr_features = features[features["feature_type"].str.contains("UTR", na=False)].sort_values("start")
+                    cds_features = features[
+                        features["feature_type"] == "CDS"
+                    ].sort_values("start")
+                    utr_features = features[
+                        features["feature_type"].str.contains("UTR", na=False)
+                    ].sort_values("start")
 
                     # Get chromosome from transcript data
-                    chrom = transcript_data["sequence"]["chromosome"] if transcript_data else "?"
+                    chrom = (
+                        transcript_data["sequence"]["chromosome"]
+                        if transcript_data
+                        else "?"
+                    )
 
                     logger.debug(
                         f"🚫 Intronic variant: Position {genomic_pos} not in coding sequence"
@@ -2573,8 +2617,10 @@ class AlternativeProteinGenerator:
                     if not utr_features.empty:
                         logger.debug(f"   UTR regions ({len(utr_features)} total):")
                         for _, utr in utr_features.iterrows():
-                            utr_type = utr['feature_type']
-                            logger.debug(f"     {chrom}:{utr['start']}-{utr['end']} ({utr_type})")
+                            utr_type = utr["feature_type"]
+                            logger.debug(
+                                f"     {chrom}:{utr['start']}-{utr['end']} ({utr_type})"
+                            )
 
                 return "intronic variant"
 
@@ -2692,7 +2738,9 @@ class AlternativeProteinGenerator:
                 )
                 if not result:
                     if self.debug:
-                        logger.debug(f"[DEBUG_EMOJI] ❌ Extension sequence extraction failed")
+                        logger.debug(
+                            f"[DEBUG_EMOJI] ❌ Extension sequence extraction failed"
+                        )
                     raise ValueError(
                         f"Extension sequence extraction failed for {transcript_id} - cannot proceed with mutation analysis"
                     )
@@ -2705,7 +2753,9 @@ class AlternativeProteinGenerator:
                 )
                 if not pos_map:
                     if self.debug:
-                        logger.debug(f"[DEBUG_EMOJI] ❌ Extension position mapping failed")
+                        logger.debug(
+                            f"[DEBUG_EMOJI] ❌ Extension position mapping failed"
+                        )
                     raise ValueError(
                         f"Extension position mapping failed for {transcript_id}"
                     )
@@ -2737,7 +2787,9 @@ class AlternativeProteinGenerator:
 
         except Exception as e:
             if self.debug:
-                logger.debug(f"[DEBUG_EMOJI] ❌ Cache building failed for {transcript_id}: {e}")
+                logger.debug(
+                    f"[DEBUG_EMOJI] ❌ Cache building failed for {transcript_id}: {e}"
+                )
             # Don't cache empty values - let it fail cleanly
             raise
 
@@ -2751,7 +2803,9 @@ class AlternativeProteinGenerator:
 
             if not transcript_data:
                 if self.debug:
-                    logger.debug(f"[DEBUG_EMOJI] ❌ No transcript data for {transcript_id}")
+                    logger.debug(
+                        f"[DEBUG_EMOJI] ❌ No transcript data for {transcript_id}"
+                    )
                 return {}
 
             strand = transcript_data["sequence"]["strand"]
@@ -2767,7 +2821,9 @@ class AlternativeProteinGenerator:
 
             if start_codons.empty:
                 if self.debug:
-                    logger.debug(f"[DEBUG_EMOJI] ⚠️ No start codon annotation for {transcript_id}")
+                    logger.debug(
+                        f"[DEBUG_EMOJI] ⚠️ No start codon annotation for {transcript_id}"
+                    )
                 # Use first CDS as start
                 canonical_start = (
                     cds_regions["start"].min()
@@ -2852,7 +2908,9 @@ class AlternativeProteinGenerator:
         start_codons = features[features["feature_type"] == "start_codon"]
         if start_codons.empty:
             if self.debug:
-                logger.debug(f"[DEBUG_EMOJI] ❌ No start codon found for {transcript_id}")
+                logger.debug(
+                    f"[DEBUG_EMOJI] ❌ No start codon found for {transcript_id}"
+                )
             return {}
 
         canonical_start_pos = (

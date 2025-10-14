@@ -13,6 +13,9 @@ import json
 import asyncio
 import logging
 from pathlib import Path
+import aiohttp
+
+from .config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +29,16 @@ class MutationHandler:
     - COSMIC
     """
 
-    def __init__(self, api_key: Optional[str] = "26214372a9ab53b26a43ba8546f4a5195308", genome_handler=None):
+    def __init__(self, api_key: Optional[str] = None, genome_handler=None):
         """Initialize the mutation handler with API endpoints.
 
         Args:
-            api_key (Optional[str]): Optional API key for NCBI E-utilities. Defaults to a preset key.
+            api_key (Optional[str]): Optional API key for NCBI E-utilities.
+                                    If not provided, loads from Config (environment variables or .env file).
             genome_handler (Optional[GenomeHandler]): Genome handler for sequence extraction (needed for ClinVar deletion inference).
         """
         self._setup_gnomad_client()
-        self._setup_clinvar_endpoints(api_key)
+        self._setup_clinvar_endpoints(api_key or Config.NCBI_API_KEY)
         self._setup_mutation_categories()
         self.cached_data = {}
         self.genome_handler = genome_handler
@@ -46,18 +50,24 @@ class MutationHandler:
         logging.getLogger("gql.transport").setLevel(logging.WARNING)
         logging.getLogger("gql.transport.aiohttp").setLevel(logging.WARNING)
 
-        transport = AIOHTTPTransport(url="https://gnomad.broadinstitute.org/api")
+        # Configure timeout and connection pooling for reliability
+        timeout = aiohttp.ClientTimeout(total=Config.GNOMAD_TIMEOUT)
+        connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
+
+        transport = AIOHTTPTransport(
+            url=Config.GNOMAD_API_URL, timeout=timeout, connector=connector
+        )
         self.gnomad_client = Client(
             transport=transport, fetch_schema_from_transport=True
         )
 
-    def _setup_clinvar_endpoints(self, api_key: str):
+    def _setup_clinvar_endpoints(self, api_key: Optional[str]):
         """Set up ClinVar API endpoint URLs and store the API key.
 
         Args:
-            api_key (str): API key for NCBI E-utilities.
+            api_key (Optional[str]): API key for NCBI E-utilities.
         """
-        self.clinvar_base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+        self.clinvar_base = Config.CLINVAR_BASE_URL
         self.clinvar_endpoints = {
             "esearch": f"{self.clinvar_base}/esearch.fcgi",
             "esummary": f"{self.clinvar_base}/esummary.fcgi",
@@ -171,15 +181,14 @@ class MutationHandler:
     ) -> Dict:
         """Fetch variant data from gnomAD API for a specific gene using GraphQL.
 
+        Implements retry logic with exponential backoff for improved reliability.
+
         Args:
             gene_name (str): Gene symbol (e.g., 'BRCA1').
             reference_genome (str): Reference genome version. Defaults to 'GRCh38'.
 
         Returns:
-            Dict: Processed gnomAD data for the gene.
-
-        Raises:
-            ConnectionError: If the API request fails.
+            Dict: Processed gnomAD data for the gene. Returns empty dict on failure.
         """
         cache_key = f"gnomad_{gene_name}_{reference_genome}"
         if cache_key in self.cached_data:
@@ -188,18 +197,59 @@ class MutationHandler:
         query = self._get_gnomad_query()
         variables = {"geneSymbol": gene_name, "referenceGenome": reference_genome}
 
-        try:
-            result = await self.gnomad_client.execute_async(
-                query, variable_values=variables
-            )
+        # Retry logic with exponential backoff
+        for attempt in range(Config.GNOMAD_MAX_RETRIES):
+            try:
+                result = await self.gnomad_client.execute_async(
+                    query, variable_values=variables
+                )
 
-            if result.get("gene") is not None:
-                self.cached_data[cache_key] = result
-            return result
+                if result.get("gene") is not None:
+                    self.cached_data[cache_key] = result
+                    if attempt > 0:
+                        logger.info(
+                            f"gnomAD request succeeded for {gene_name} on attempt {attempt + 1}"
+                        )
+                    return result
+                else:
+                    # Gene not found in gnomAD (not an error, just no data)
+                    logger.debug(f"Gene {gene_name} not found in gnomAD")
+                    return {}
 
-        except Exception as e:
-            logger.error(f"Failed to fetch gnomAD data: {str(e)}")
-            raise ConnectionError(f"Failed to fetch gnomAD data: {str(e)}")
+            except asyncio.TimeoutError:
+                wait_time = Config.GNOMAD_RETRY_DELAY * (2**attempt)
+                if attempt < Config.GNOMAD_MAX_RETRIES - 1:
+                    logger.warning(
+                        f"gnomAD request timeout for {gene_name}, retrying in {wait_time}s (attempt {attempt + 1}/{Config.GNOMAD_MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"gnomAD request timeout for {gene_name} after {Config.GNOMAD_MAX_RETRIES} attempts"
+                    )
+                    return {}
+
+            except (aiohttp.ClientError, ConnectionError) as e:
+                wait_time = Config.GNOMAD_RETRY_DELAY * (2**attempt)
+                if attempt < Config.GNOMAD_MAX_RETRIES - 1:
+                    logger.warning(
+                        f"gnomAD connection error for {gene_name}: {str(e)}, retrying in {wait_time}s (attempt {attempt + 1}/{Config.GNOMAD_MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"gnomAD connection failed for {gene_name} after {Config.GNOMAD_MAX_RETRIES} attempts: {str(e)}"
+                    )
+                    return {}
+
+            except Exception as e:
+                # Unexpected errors - log and return empty to avoid crashing pipeline
+                logger.error(
+                    f"Unexpected error fetching gnomAD data for {gene_name}: {str(e)}"
+                )
+                return {}
+
+        return {}
 
     def _get_gnomad_query(self):
         """Get the GraphQL query for gnomAD data.
@@ -769,7 +819,7 @@ class MutationHandler:
         }
 
     async def get_cosmic_variants(self, gene_name: str) -> pd.DataFrame:
-        """Get COSMIC variants for a gene using the downloaded TSV/Parquet database.
+        """Get COSMIC variants for a gene using the downloaded Parquet database.
 
         Args:
             gene_name (str): Gene symbol (e.g., 'BRCA1').
@@ -795,7 +845,7 @@ class MutationHandler:
             return pd.DataFrame()
 
     def _find_cosmic_database(self) -> Optional[str]:
-        """Find COSMIC Mutant Census file and return path."""
+        """Find COSMIC variants database file and return path."""
         search_paths = [
             "../data/mutation_data",
             "data/mutation_data",
@@ -807,17 +857,11 @@ class MutationHandler:
             if not path.exists():
                 continue
 
-            # Look for Mutant Census files (Parquet preferred)
-            parquet_files = list(path.glob("*Cosmic_MutantCensus*.parquet"))
-            if parquet_files:
-                logger.info(f"Found COSMIC Mutant Census (Parquet): {parquet_files[0]}")
-                return str(parquet_files[0])
-
-            # Fallback to TSV
-            tsv_files = list(path.glob("*Cosmic_MutantCensus*.tsv"))
-            if tsv_files:
-                logger.info(f"Found COSMIC Mutant Census (TSV): {tsv_files[0]}")
-                return str(tsv_files[0])
+            # Look for cosmic_variants_combined.parquet
+            combined_file = path / "cosmic_variants_combined.parquet"
+            if combined_file.exists():
+                logger.info(f"Found COSMIC variants database: {combined_file}")
+                return str(combined_file)
 
         return None
 
@@ -844,18 +888,18 @@ class MutationHandler:
             return pd.DataFrame()
 
     def _process_cosmic_dataset(self, file_path: str, gene_name: str) -> pd.DataFrame:
-        """Process the COSMIC Mutant Census dataset."""
+        """Process the COSMIC variants dataset."""
         try:
-            logger.info(f"Querying COSMIC Mutant Census for {gene_name}")
+            logger.info(f"Querying COSMIC database for {gene_name}")
 
             result = self._query_parquet_by_gene(file_path, gene_name, "GENE_SYMBOL")
 
             if result is not None and not result.empty:
-                logger.info(f"Found {len(result)} variants in COSMIC Mutant Census")
+                logger.info(f"Found {len(result)} variants in COSMIC database")
                 return result
 
         except Exception as e:
-            logger.warning(f"COSMIC Mutant Census query failed: {str(e)}")
+            logger.warning(f"COSMIC database query failed: {str(e)}")
 
         return pd.DataFrame()
 
@@ -1254,7 +1298,9 @@ class MutationHandler:
         ]
         return pd.DataFrame(columns=standard_columns)
 
-    def _standardize_gnomad_data(self, variants_df: pd.DataFrame, gene_name: str = None) -> pd.DataFrame:
+    def _standardize_gnomad_data(
+        self, variants_df: pd.DataFrame, gene_name: str = None
+    ) -> pd.DataFrame:
         """Standardize gnomAD data."""
         return pd.DataFrame(
             {
@@ -1271,7 +1317,9 @@ class MutationHandler:
                 "allele_frequency": variants_df["allele_frequency"],
                 "allele_count_hom": variants_df["allele_count_hom"],
                 "clinical_significance": None,
-                "chromosome": variants_df["chromosome"] if "chromosome" in variants_df.columns else "",
+                "chromosome": variants_df["chromosome"]
+                if "chromosome" in variants_df.columns
+                else "",
                 "gene_name": gene_name if gene_name else "",
             }
         )
@@ -1336,9 +1384,13 @@ class MutationHandler:
                 # plus the deleted sequence as reference, and just the base before as alternate
                 try:
                     # Get the base before the deletion
-                    anchor_base = str(self.genome_handler.get_sequence(chrom, start - 1, start - 1))
+                    anchor_base = str(
+                        self.genome_handler.get_sequence(chrom, start - 1, start - 1)
+                    )
                     # Get the deleted sequence
-                    deleted_seq = str(self.genome_handler.get_sequence(chrom, start, stop))
+                    deleted_seq = str(
+                        self.genome_handler.get_sequence(chrom, start, stop)
+                    )
 
                     if anchor_base and deleted_seq:
                         # VCF-style deletion format:

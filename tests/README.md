@@ -1,19 +1,13 @@
 # SwissIsoform Test Suite
 
-This directory contains the test suite for the SwissIsoform pipeline.
-
-- ABHD18 has a premature stop (positive extension)
-- DMD has weird mutations that do not functionally work (negative strand truncation)
-- PNPO is a positive strand truncation and extension gene
-- SIX5 is a negative strand truncation and extension gene
-- PSRC1 is a truncation with single bases at cutoffs between exons, represents an edge case
+Comprehensive test suite for the SwissIsoform pipeline.
 
 ## Quick Start
 
-1. **Add test genes** to `test_genes.txt`:
+1. **Edit test gene list**: Add genes to `test_genes.txt` (one per line)
    ```bash
-   echo "TP53" >> tests/test_genes.txt
-   echo "PTEN" >> tests/test_genes.txt
+   echo "ABHD18" >> tests/test_genes.txt
+   echo "ADAR" >> tests/test_genes.txt
    ```
 
 2. **Run the test**:
@@ -21,171 +15,157 @@ This directory contains the test suite for the SwissIsoform pipeline.
    bash tests/run_pipeline_test.sh
    ```
 
-3. **Review results** in `results/test_run_TIMESTAMP/`
+3. **Review results** in `tests/test_run_TIMESTAMP/`
 
-## Running Tests
+## Command Options
 
-### Basic Test
 ```bash
-bash tests/run_pipeline_test.sh
+bash tests/run_pipeline_test.sh [-v|-vv] [--visualize] [--clean]
+
+Options:
+  -v           Info logging (shows progress and summaries)
+  -vv          Debug logging (shows detailed validation)
+  --visualize  Generate mutation visualization plots
+  --clean      Remove previous test results before running
 ```
 
-### With Debug Logging
-```bash
-bash tests/run_pipeline_test.sh --debug
-```
+## What Gets Tested
 
-### With Visualizations
-```bash
-bash tests/run_pipeline_test.sh --visualize
-```
+The pipeline runs two stages:
 
-### Clean Previous Results
-```bash
-bash tests/run_pipeline_test.sh --clean
-```
+### 1. Mutation Analysis
+- Identifies alternative start sites (truncations/extensions)
+- Queries mutation databases (ClinVar, gnomAD, COSMIC)
+- Outputs: `mutations/gene_level_results.csv` and `mutations/isoform_level_results.csv`
 
-### Combine Options
-```bash
-bash tests/run_pipeline_test.sh --debug --visualize --clean
-```
+### 2. Protein Generation
+- Generates canonical and alternative protein sequences
+- Applies mutations to create mutant variants
+- Outputs: `proteins/protein_sequences_with_mutations.csv` and `.fasta`
 
 ## Output Structure
 
-After running, results are saved to `results/test_run_TIMESTAMP/`:
-
 ```
-results/test_run_YYYYMMDD_HHMMSS/
-├── test_config.txt           # Test configuration
-├── SUMMARY.md                # Test summary
+tests/test_run_YYYYMMDD_HHMMSS/
+├── test_config.txt              # Test configuration
+├── pipeline_test.log            # Complete log output
+├── SUMMARY.md                   # Test summary
 ├── mutations/
-│   ├── gene_level_results.csv         # Gene-level mutation summary
-│   ├── truncation_level_results.csv   # Transcript-isoform pairs with mutations
-│   └── visualizations/                # (if --visualize enabled)
+│   ├── gene_level_results.csv           # Summary per gene
+│   └── isoform_level_results.csv        # Transcript-isoform pairs
 └── proteins/
-    ├── protein_sequences_with_mutations.csv    # Protein sequences (CSV format)
-    └── protein_sequences_with_mutations.fasta  # Protein sequences (FASTA format)
+    ├── protein_sequences_with_mutations.csv    # All sequences (CSV)
+    └── protein_sequences_with_mutations.fasta  # All sequences (FASTA)
 ```
 
 ## Interpreting Results
 
-### Mutation Analysis (`mutations/gene_level_results.csv`)
+### Gene-Level Results
+Key columns: `gene_name`, `status`, `total_transcripts`, `alternative_features`, `mutations_*`
 
-Check for:
-- Total mutations found per gene
-- Mutations in alternative isoform regions
-- Breakdown by mutation type (missense, nonsense, frameshift, etc.)
+**Check for:**
+- All genes have `status: success`
+- `alternative_features > 0` for genes with isoforms
+- Mutation counts by type (missense, nonsense, etc.)
 
-### Protein Generation (`proteins/protein_sequences_with_mutations.csv`)
+### Protein Sequences
+Key columns: `gene`, `transcript_id`, `variant_type`, `sequence`, `length`
 
-Check for:
-- **variant_type** column:
-  - `canonical` - Standard protein from annotated start
-  - `alternative` - Protein from alternative start (truncation/extension)
-  - `canonical_mutated` - Canonical protein with mutation applied
-  - `alternative_mutated` - Alternative protein with mutation applied
+**Variant types:**
+- `canonical` - Standard protein from annotated start
+- `alternative` - Protein from alternative start (truncation/extension)
+- `canonical_mutated` - Canonical + mutation
+- `alternative_mutated` - Alternative + mutation
 
-- **Sequence validation:**
-  - All sequences should start with 'M' (methionine)
-  - No premature stop codons (except at the end)
-  - Reasonable length (>20 amino acids for valid proteins)
+**Validate:**
+- All sequences start with 'M' (methionine)
+- No premature stop codons (internal '*')
+- Reasonable lengths (>20 amino acids)
 
-### Common Issues to Check
-
-1. **No results for a gene**
-   - Gene may not be in the BED file
-   - Gene name spelling may differ
-   - Check gene_level_results.csv for error messages
-
-2. **Missing alternative isoforms**
-   - May be out-of-frame (failing validation)
-   - Check debug logs with `--debug` flag
-   - Look for "validation failed" messages
-
-3. **No mutations found**
-   - Gene may not have mutations in the mutation database
-   - Mutations may not overlap with alternative isoform regions
-   - Normal for some genes
-
-## Validating Test Results
-
-### Step 1: Check Gene-Level Results
+## Validation Commands
 
 ```bash
-# View gene-level summary
-column -t -s, results/test_run_*/mutations/gene_level_results.csv | less -S
-```
-
-Expected columns:
-- `gene_name`: Gene symbol
-- `status`: success/error
-- `total_transcripts`: Number of transcripts analyzed
-- `alternative_features`: Number of alternative start sites
-- `transcript_feature_pairs`: Number of transcript-isoform pairs
-- `mutations_*`: Mutation counts by type
-
-### Step 2: Check Transcript-Isoform Pairs
-
-```bash
-# View detailed pairs
-column -t -s, results/test_run_*/mutations/truncation_level_results.csv | less -S
-```
-
-Expected columns include:
-- `transcript_id`, `feature_type`, `feature_position`
-- `mutation_count_total`: Total mutations in this isoform region
-- `mutations_*`: Breakdown by mutation type
-- `variant_ids_*`: Specific variant identifiers
-
-### Step 3: Check Protein Sequences
-
-```bash
-# Count sequences by type
-tail -n +2 results/test_run_*/proteins/protein_sequences_with_mutations.csv | \
+# Count sequences by variant type
+tail -n +2 tests/test_run_*/proteins/protein_sequences_with_mutations.csv | \
   cut -d',' -f6 | sort | uniq -c
+
+# Check all sequences start with M
+tail -n +2 tests/test_run_*/proteins/protein_sequences_with_mutations.csv | \
+  cut -d',' -f8 | grep -v '^M' | wc -l
+# Should output: 0
+
+# Check for premature stops
+tail -n +2 tests/test_run_*/proteins/protein_sequences_with_mutations.csv | \
+  cut -d',' -f8 | grep '\*[A-Z]' | wc -l
+# Should output: 0
 ```
 
-Expected variant types:
-- `canonical`: Standard proteins
-- `alternative`: Truncated/extended proteins
-- `canonical_mutated`: Mutated canonical
-- `alternative_mutated`: Mutated alternative
+## Logging Levels
 
-### Step 4: Validate Protein Quality
+### Standard Output (default)
+Shows warnings and errors only.
 
+### Info Level (`-v`)
+Adds:
+- Progress indicators and summaries
+- Validation disagreements (database vs. sequence analysis)
+- Alternative start site mutations
+
+### Debug Level (`-vv`)
+Adds:
+- Detailed explanations for disagreements
+- Position mapping details
+- Codon-level analysis
+
+**Note**: Agreements between database and validation are silent (not logged) to reduce noise.
+
+## Troubleshooting
+
+### No results for a gene?
+1. Check gene is in BED file:
+   ```bash
+   grep "GENENAME" data/ribosome_profiling/hela_isoforms_with_transcripts.bed
+   ```
+2. Verify exact gene symbol (case-sensitive)
+3. Check error messages in `gene_level_results.csv`
+
+### Missing alternative isoforms?
+This is often expected! Alternatives may fail validation if:
+- Out of frame (creates frameshifts)
+- Contains premature stop codons
+- Results in very short proteins (<20 AA)
+
+Enable debug mode to see why:
 ```bash
-# Check all proteins start with M
-tail -n +2 results/test_run_*/proteins/protein_sequences_with_mutations.csv | \
-  cut -d',' -f8 | grep -v '^M' || echo "All sequences start with M"
-
-# Check for premature stops (should be empty)
-tail -n +2 results/test_run_*/proteins/protein_sequences_with_mutations.csv | \
-  cut -d',' -f8 | grep '\*' | grep -v '\*$' || echo "No premature stop codons"
+bash tests/run_pipeline_test.sh -vv 2>&1 | grep "GENENAME" | grep -i "fail"
 ```
 
-## Debugging Failed Tests
+### No mutations found?
+Normal! Many genes don't have mutations in databases, or mutations don't overlap alternative isoform regions.
 
-### Enable Debug Logging
+## Current Test Genes
 
-```bash
-bash tests/run_pipeline_test.sh --debug 2>&1 | tee test_debug.log
-```
+The test suite runs on genes listed in `test_genes.txt`:
+- **ABHD18** - Positive strand with premature stop (extension)
+- **ACSF3** - Positive strand
+- **ADAR** - Positive strand
+- **CLDND1** - Positive strand
+- **CIB1** - Positive strand
+- **FGF2** - Positive strand
+- **MAPK14** - Negative strand
 
-### Check for Common Errors
+## Test Configuration
 
-1. **File Not Found**
-   - Verify paths in test_config.txt
-   - Check that genome data is downloaded
+- **Dataset**: HeLa ribosome profiling data
+- **Genome**: GRCh38.p7
+- **Annotation**: GENCODE v25 (with v47 gene name updates if available)
+- **BED file**: `data/ribosome_profiling/hela_isoforms_with_transcripts.bed`
+- **Mutation sources**: ClinVar, gnomAD, COSMIC
 
-2. **Gene Not Found**
-   - Verify gene name spelling
-   - Check gene is in BED file: `grep "GENENAME" data/ribosome_profiling/isoforms_with_transcripts.bed`
+## Best Practices
 
-3. **Validation Failures**
-   - Look for "validation failed" in debug logs
-   - Check if alternative isoforms are out-of-frame
-   - This is expected for some edge cases
-
-4. **No Mutations**
-   - Normal for genes without mutations in database
-   - Check mutation database is configured correctly
+1. **Start small** - Test with 3-5 genes first
+2. **Validate results** - Check outputs before expanding
+3. **Use appropriate logging** - `-v` for quality control, `-vv` for debugging
+4. **Document edge cases** - Note genes that fail and investigate why
+5. **Keep successful lists** - Save working gene lists for regression testing
