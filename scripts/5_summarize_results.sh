@@ -1,34 +1,71 @@
 #!/bin/bash
+#
+# SwissIsoform Pipeline Step 5: Summarize Results
+#
+# This script summarizes pipeline results including mutation analysis and
+# localization predictions. It generates comprehensive reports for all
+# processed datasets.
+#
+# Usage:
+#   bash scripts/5_summarize_results.sh
+#
+# Prerequisites:
+#   - 2_analyze_mutations.sh must have been run
+#   - 4_predict_localization.sh must have been run
+#   - Mutation and localization results must exist
+#
 
-# 5_summarize_results.sh
-# Summarizes pipeline results: mutations and localization predictions
+set -e  # Exit on error
 
-echo "=========================================================="
-echo "SwissIsoform Pipeline Step 5: Summarize Results"
-echo "=========================================================="
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
 
-# Check if required input files exist
-echo "Checking for required input files..."
+# Start timing
+START_TIME=$(date +%s)
+
+echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║   SwissIsoform Pipeline Step 5: Summarize Results            ║${NC}"
+echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo "This script analyzes pipeline results and generates comprehensive summaries."
+echo ""
+
+# ============================================================================
+# Validation
+# ============================================================================
+
+echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║  Validation                                                  ║${NC}"
+echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo ""
 
 DATASETS=("reduced" "full")
 required_files=()
 missing_files=()
 
+echo -e "${YELLOW}→${NC} Checking for input files..."
+echo ""
+
 for dataset in "${DATASETS[@]}"; do
     # Mutation analysis results
     mutation_gene_file="../results/$dataset/mutations/gene_level_results.csv"
     mutation_pair_file="../results/$dataset/mutations/truncation_level_results.csv"
-    
+
     # Protein sequences
     proteins_file="../results/$dataset/proteins/protein_sequences_pairs.csv"
     proteins_mut_file="../results/$dataset/proteins/protein_sequences_with_mutations.csv"
-    
+
     # Localization predictions (check for both pairs and mutations)
     loc_pairs_accurate="../results/$dataset/localization/protein_sequences_pairs_Accurate_results.csv"
     loc_pairs_fast="../results/$dataset/localization/protein_sequences_pairs_Fast_results.csv"
     loc_mut_accurate="../results/$dataset/localization/protein_sequences_mutations_Accurate_results.csv"
     loc_mut_fast="../results/$dataset/localization/protein_sequences_mutations_Fast_results.csv"
-    
+
     # Check which files exist
     files_to_check=(
         "$mutation_gene_file"
@@ -40,18 +77,19 @@ for dataset in "${DATASETS[@]}"; do
         "$loc_mut_accurate"
         "$loc_mut_fast"
     )
-    
-    echo ""
-    echo "Checking $dataset dataset files..."
+
+    echo -e "${CYAN}$dataset dataset:${NC}"
     for file in "${files_to_check[@]}"; do
         if [ -f "$file" ]; then
-            echo "✓ $(basename $file)"
+            SIZE=$(du -h "$file" | cut -f1)
+            echo -e "  ${GREEN}✓${NC} $(basename $file) (${SIZE})"
             required_files+=("$file")
         else
-            echo "✗ $(basename $file) missing"
+            echo -e "  ${YELLOW}⚠${NC} $(basename $file) missing"
             missing_files+=("$file")
         fi
     done
+    echo ""
 done
 
 # Check if we have the minimum required files
@@ -62,7 +100,7 @@ for dataset in "${DATASETS[@]}"; do
     if [ -f "../results/$dataset/mutations/gene_level_results.csv" ]; then
         mutation_results_exist=true
     fi
-    
+
     if [ -f "../results/$dataset/localization/protein_sequences_pairs_Accurate_results.csv" ] || \
        [ -f "../results/$dataset/localization/protein_sequences_pairs_Fast_results.csv" ]; then
         localization_results_exist=true
@@ -71,94 +109,186 @@ done
 
 if [ "$mutation_results_exist" = false ]; then
     echo ""
-    echo "❌ No mutation analysis results found!"
+    echo -e "${RED}✗ No mutation analysis results found!${NC}"
     echo "Please run: sbatch 2_analyze_mutations.sh"
     exit 1
 fi
 
 if [ "$localization_results_exist" = false ]; then
     echo ""
-    echo "❌ No localization prediction results found!"
+    echo -e "${RED}✗ No localization prediction results found!${NC}"
     echo "Please run: sbatch 4_predict_localization.sh"
     exit 1
 fi
 
-# Activate conda environment
+echo -e "${GREEN}✓ Minimum required files found${NC}"
+
+# ============================================================================
+# Environment Setup
+# ============================================================================
+
 echo ""
-echo "Activating conda environment..."
+echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║  Environment Setup                                           ║${NC}"
+echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+echo -e "${YELLOW}→${NC} Activating conda environment..."
 source ~/.bashrc
 conda activate swissisoform || {
-    echo "❌ Failed to activate swissisoform conda environment"
+    echo -e "${RED}✗${NC} Failed to activate swissisoform conda environment"
+    echo ""
+    echo "Please run: conda env create --file=../environment.yml"
     exit 1
 }
+echo -e "${GREEN}✓${NC} Environment activated"
 
-# Run summary analysis for both datasets
+# ============================================================================
+# Summary Generation
+# ============================================================================
+
 echo ""
-echo "Starting summary analysis..."
+echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║  Generating Summary                                          ║${NC}"
+echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+echo -e "${YELLOW}→${NC} Analyzing pipeline results..."
+echo ""
 python3 summarize_results.py
 
+# Calculate duration
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+if [ $DURATION -lt 60 ]; then
+    DURATION_STR="${DURATION}s"
+elif [ $DURATION -lt 3600 ]; then
+    MINUTES=$((DURATION / 60))
+    SECS=$((DURATION % 60))
+    DURATION_STR="${MINUTES}m ${SECS}s"
+else
+    HOURS=$((DURATION / 3600))
+    MINUTES=$(((DURATION % 3600) / 60))
+    SECS=$((DURATION % 60))
+    DURATION_STR="${HOURS}h ${MINUTES}m ${SECS}s"
+fi
+
+# ============================================================================
+# Results Display
+# ============================================================================
+
 echo ""
-echo "🎉 Pipeline summary analysis completed!"
+echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║  Summary Complete                                            ║${NC}"
+echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
+echo -e "${GREEN}✓ Pipeline summary analysis completed in $DURATION_STR${NC}"
+echo ""
+
+# Display generated summary files
 echo "Generated summary files by dataset and model:"
+echo ""
 
 for dataset in "${DATASETS[@]}"; do
     summary_dir="../results/$dataset/summary"
     if [ -d "$summary_dir" ]; then
-        echo ""
-        echo "$dataset dataset summary:"
-        echo "  ├─ $dataset/summary/mutation_summary.txt (shared)"
-        
+        echo -e "${CYAN}$dataset dataset summary:${NC}"
+
+        # Check for mutation summary
+        if [ -f "$summary_dir/mutation_summary.txt" ]; then
+            echo -e "  ${GREEN}✓${NC} mutation_summary.txt (shared across models)"
+        fi
+
         # Check for model-specific subdirectories
         for model in "accurate" "fast"; do
             model_dir="$summary_dir/$model"
             if [ -d "$model_dir" ]; then
-                echo "  ├─ $dataset/summary/$model/ (${model^} model results)"
-                echo "  │  ├─ localization_summary.txt"
-                echo "  │  ├─ genes_with_localization_changes.csv"
-                echo "  │  ├─ detailed_localization_analysis.csv"
-                echo "  │  └─ gene_level_summary.csv"
+                echo -e "  ${GREEN}✓${NC} $model/ (${model^} model results)"
+
+                # List files in model directory
+                if [ -f "$model_dir/localization_summary.txt" ]; then
+                    echo -e "    ├─ localization_summary.txt"
+                fi
+                if [ -f "$model_dir/genes_with_localization_changes.csv" ]; then
+                    echo -e "    ├─ genes_with_localization_changes.csv"
+                fi
+                if [ -f "$model_dir/detailed_localization_analysis.csv" ]; then
+                    echo -e "    ├─ detailed_localization_analysis.csv"
+                fi
+                if [ -f "$model_dir/gene_level_summary.csv" ]; then
+                    echo -e "    └─ gene_level_summary.csv"
+                fi
             fi
         done
-        
-        # Show key findings for each dataset and model
         echo ""
-        echo "=== $dataset DATASET KEY FINDINGS ==="
-        
+    fi
+done
+
+# Display key findings
+echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║  Key Findings                                                ║${NC}"
+echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+for dataset in "${DATASETS[@]}"; do
+    summary_dir="../results/$dataset/summary"
+    if [ -d "$summary_dir" ]; then
+        echo -e "${CYAN}═══ $dataset DATASET ═══${NC}"
+        echo ""
+
+        # Show mutation analysis findings
         if [ -f "$summary_dir/mutation_summary.txt" ]; then
-            echo ""
-            echo "MUTATION ANALYSIS (shared across models):"
+            echo -e "${YELLOW}Mutation Analysis:${NC}"
             cat "$summary_dir/mutation_summary.txt"
+            echo ""
         fi
-        
+
         # Show findings for each model
         for model in "accurate" "fast"; do
             model_dir="$summary_dir/$model"
             if [ -d "$model_dir" ]; then
-                echo ""
-                echo "LOCALIZATION ANALYSIS - ${model^} MODEL:"
+                echo -e "${YELLOW}Localization Analysis - ${model^} Model:${NC}"
+
                 if [ -f "$model_dir/localization_summary.txt" ]; then
                     cat "$model_dir/localization_summary.txt"
                 fi
-                
-                # Show preview of genes with localization changes for this model
+
+                # Show preview of genes with localization changes
                 if [ -f "$model_dir/genes_with_localization_changes.csv" ]; then
                     echo ""
-                    echo "GENES WITH LOCALIZATION CHANGES - ${model^} MODEL (Preview):"
+                    echo -e "${CYAN}Genes with Localization Changes (Preview):${NC}"
                     head -n 6 "$model_dir/genes_with_localization_changes.csv"
+
                     total_genes=$(tail -n +2 "$model_dir/genes_with_localization_changes.csv" | wc -l)
                     if [ $total_genes -gt 5 ]; then
-                        echo "... (showing first 5 genes, $total_genes total genes with localization changes in ${model^} model)"
+                        echo "... (showing first 5 genes, $total_genes total with localization changes)"
                     fi
                 fi
+                echo ""
             fi
         done
-        
+
+        echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
         echo ""
-        echo "============================================================"
     fi
 done
 
+# ============================================================================
+# Final Summary
+# ============================================================================
+
+echo -e "${GREEN}✓ Pipeline summary completed successfully!${NC}"
 echo ""
-echo "Pipeline summary completed!"
-echo "Detailed results are available in ../results/[dataset]/summary/[model]/"
+echo "Detailed results available in:"
+for dataset in "${DATASETS[@]}"; do
+    if [ -d "../results/$dataset/summary" ]; then
+        echo "  └─ ../results/$dataset/summary/"
+        echo "     ├─ mutation_summary.txt"
+        for model in "accurate" "fast"; do
+            if [ -d "../results/$dataset/summary/$model" ]; then
+                echo "     └─ $model/"
+            fi
+        done
+    fi
+done
+echo ""

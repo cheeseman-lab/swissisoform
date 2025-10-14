@@ -52,9 +52,19 @@ class TqdmLoggingHandler(logging.Handler):
     """
 
     def __init__(self, level=logging.NOTSET):
+        """Initialize the TqdmLoggingHandler.
+
+        Args:
+            level: Logging level (default: logging.NOTSET).
+        """
         super().__init__(level)
 
     def emit(self, record):
+        """Emit a log record using tqdm.write() or stderr.
+
+        Args:
+            record: LogRecord to emit.
+        """
         try:
             msg = self.format(record)
             # Only use tqdm.write() if we're in an interactive terminal

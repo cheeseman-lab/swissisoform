@@ -50,12 +50,9 @@ class MutationHandler:
         logging.getLogger("gql.transport").setLevel(logging.WARNING)
         logging.getLogger("gql.transport.aiohttp").setLevel(logging.WARNING)
 
-        # Configure timeout and connection pooling for reliability
-        timeout = aiohttp.ClientTimeout(total=Config.GNOMAD_TIMEOUT)
-        connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
-
+        # Configure timeout for reliability (in seconds)
         transport = AIOHTTPTransport(
-            url=Config.GNOMAD_API_URL, timeout=timeout, connector=connector
+            url=Config.GNOMAD_API_URL, timeout=Config.GNOMAD_TIMEOUT
         )
         self.gnomad_client = Client(
             transport=transport, fetch_schema_from_transport=True
@@ -948,15 +945,26 @@ class MutationHandler:
     def _query_parquet_by_gene(
         self, file_path: str, gene_name: str, gene_column: str
     ) -> pd.DataFrame:
-        """Query Parquet file by gene name."""
+        """Query Parquet file by gene name using efficient filtering.
+
+        Uses PyArrow filters to read only relevant rows, avoiding loading entire file.
+        """
         import pyarrow.parquet as pq
-        import pyarrow.compute as pc
+        import pyarrow.dataset as ds
 
-        table = pq.read_table(file_path)
+        # Use PyArrow dataset with filter pushdown for efficient querying
+        # This only reads rows matching the filter, not the entire file
+        dataset = ds.dataset(file_path, format="parquet")
 
-        mask = pc.match_substring(pc.utf8_upper(table[gene_column]), gene_name.upper())
-        filtered_table = table.filter(mask)
-        return filtered_table.to_pandas()
+        # Filter for exact gene name match (case-insensitive)
+        # Note: PyArrow filters are pushed down to the Parquet reader for efficiency
+        table = dataset.to_table(
+            filter=(ds.field(gene_column) == gene_name)
+            | (ds.field(gene_column) == gene_name.upper())
+            | (ds.field(gene_column) == gene_name.lower())
+        )
+
+        return table.to_pandas()
 
     async def get_cosmic_summary(self, gene_name: str) -> Dict:
         """Get summary statistics for COSMIC variants.
