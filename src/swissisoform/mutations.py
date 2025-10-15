@@ -2010,6 +2010,12 @@ class MutationHandler:
                 validated_mutation["validation_method"] = "fast_codon_analysis"
                 validated_mutation["validation_successful"] = True
 
+                # Log intronic variants detected during validation (BUG - shouldn't reach here)
+                if validated_impact == "intronic":
+                    logger.warning(
+                        f"⚠️ VALIDATION BUG: {source}: {variant_id} classified as intronic during validation - should have been filtered earlier!"
+                    )
+
                 # Track agreement/disagreement
                 if original_impact == validated_impact:
                     validated_mutation["impact_agreement"] = True
@@ -2279,6 +2285,11 @@ class MutationHandler:
             pair_results = []
             all_mutations_for_viz = pd.DataFrame()
 
+            # Track errors and warnings for this gene
+            gene_errors = []
+            gene_warnings = []
+            skipped_pairs = 0
+
             # Process each transcript-feature pair individually
             logger.debug(
                 f"Processing {len(transcript_feature_pairs)} transcript-feature pairs..."
@@ -2309,6 +2320,7 @@ class MutationHandler:
 
                 if pair_mutations is None or pair_mutations.empty:
                     logger.debug(f"No mutations found for this pair")
+                    gene_warnings.append(f"no_mutations:{transcript_id}")
                     # Still record the pair with zero counts
                     mutation_categories = {}
                     if impact_types:
@@ -2317,10 +2329,6 @@ class MutationHandler:
                                 f"mutations_{impact_type.replace(' ', '_').lower()}"
                             )
                             mutation_categories[category_key] = 0
-                            impact_key = (
-                                f"variant_ids_{impact_type.replace(' ', '_').lower()}"
-                            )
-                            mutation_categories[impact_key] = ""
 
                     # Initialize per-source counts
                     source_categories = {}
@@ -2348,13 +2356,36 @@ class MutationHandler:
                 logger.debug(f"Found {len(pair_mutations)} mutations")
 
                 # STEP 2: Filter to mutations in the specific alternative region
+                # For multi-bp variants, ensure the ENTIRE variant is within the feature
                 logger.debug(
                     f"Filtering to feature region ({feature_start}-{feature_end})..."
                 )
-                region_mutations = pair_mutations[
-                    (pair_mutations["position"] >= feature_start)
-                    & (pair_mutations["position"] <= feature_end)
+
+                # Calculate end position for each variant based on reference allele length
+                def get_variant_end_pos(row):
+                    ref_len = (
+                        len(str(row.get("reference", "")))
+                        if pd.notna(row.get("reference"))
+                        else 1
+                    )
+                    return row["position"] + ref_len - 1
+
+                pair_mutations_copy = pair_mutations.copy()
+                pair_mutations_copy["variant_end_pos"] = pair_mutations_copy.apply(
+                    get_variant_end_pos, axis=1
+                )
+
+                # Filter: variant start must be >= feature_start AND variant end must be <= feature_end
+                region_mutations = pair_mutations_copy[
+                    (pair_mutations_copy["position"] >= feature_start)
+                    & (pair_mutations_copy["variant_end_pos"] <= feature_end)
                 ].copy()
+
+                # Drop the temporary column
+                if "variant_end_pos" in region_mutations.columns:
+                    region_mutations = region_mutations.drop(
+                        columns=["variant_end_pos"]
+                    )
 
                 if region_mutations.empty:
                     logger.debug(f"No mutations in feature region")
@@ -2365,10 +2396,6 @@ class MutationHandler:
                                 f"mutations_{impact_type.replace(' ', '_').lower()}"
                             )
                             mutation_categories[category_key] = 0
-                            impact_key = (
-                                f"variant_ids_{impact_type.replace(' ', '_').lower()}"
-                            )
-                            mutation_categories[impact_key] = ""
 
                     # Initialize per-source counts
                     source_categories = {}
@@ -2506,6 +2533,7 @@ class MutationHandler:
 
                 if high_impact_mutations.empty:
                     logger.debug(f"No high-impact mutations remain")
+                    gene_warnings.append(f"all_mutations_filtered:{transcript_id}")
                     mutation_categories = {}
                     if impact_types:
                         for impact_type in desired_impact_types:
@@ -2513,10 +2541,6 @@ class MutationHandler:
                                 f"mutations_{impact_type.replace(' ', '_').lower()}"
                             )
                             mutation_categories[category_key] = 0
-                            impact_key = (
-                                f"variant_ids_{impact_type.replace(' ', '_').lower()}"
-                            )
-                            mutation_categories[impact_key] = ""
 
                     # Initialize per-source counts
                     source_categories = {}
@@ -2557,6 +2581,10 @@ class MutationHandler:
                             logger.debug(
                                 f"[DEBUG_EMOJI] 🛑 Protein extraction failed - skipping this pair"
                             )
+                            gene_errors.append(
+                                f"protein_extraction_failed:{transcript_id}"
+                            )
+                            skipped_pairs += 1
                             continue
 
                     validated_mutations = await self._validate_mutation_consequences(
@@ -2566,6 +2594,26 @@ class MutationHandler:
                         current_feature,
                     )
                     logger.debug(f"Validation complete")
+
+                    # Filter out intronic variants detected during validation (shouldn't happen but track it)
+                    if "impact_validated" in validated_mutations.columns:
+                        intronic_mask = (
+                            validated_mutations["impact_validated"] == "intronic"
+                        )
+                        intronic_count = intronic_mask.sum()
+                        if intronic_count > 0:
+                            # Track the variant IDs that were intronic
+                            intronic_variants = validated_mutations[intronic_mask]
+                            for _, row in intronic_variants.iterrows():
+                                variant_id = row.get("variant_id", "unknown")
+                                gene_errors.append(
+                                    f"intronic_in_validation:{variant_id}"
+                                )
+
+                            logger.warning(
+                                f"Filtering {intronic_count} intronic variants detected during validation"
+                            )
+                            validated_mutations = validated_mutations[~intronic_mask]
 
                     # Apply user-specified impact filtering on VALIDATED impacts
                     if (
@@ -2579,7 +2627,7 @@ class MutationHandler:
                             )
                         ]
                         logger.debug(
-                            f"User impact filtering: {pre_filter_count}{len(validated_mutations)} mutations"
+                            f"User impact filtering: {pre_filter_count}→{len(validated_mutations)} mutations"
                         )
 
                 # STEP 5: Collect results for this pair
@@ -2588,22 +2636,36 @@ class MutationHandler:
                 # Initialize default counts for all desired impact types
                 mutation_categories = {}
                 source_categories = {}  # Track per-source counts
+                source_impact_categories = {}  # Track per-source per-impact counts (e.g., clinvar_missense)
+
                 if impact_types:
                     for impact_type in desired_impact_types:
                         category_key = (
                             f"mutations_{impact_type.replace(' ', '_').lower()}"
                         )
                         mutation_categories[category_key] = 0
-                        impact_key = (
-                            f"variant_ids_{impact_type.replace(' ', '_').lower()}"
-                        )
-                        mutation_categories[impact_key] = ""
 
                 # Initialize per-source counts for each requested source
                 if sources:
                     for source in sources:
                         source_key = f"mutations_{source.lower()}"
                         source_categories[source_key] = 0
+
+                        # Initialize per-source per-impact counts (source×impact matrix)
+                        if impact_types:
+                            for impact_type in desired_impact_types:
+                                impact_normalized = impact_type.replace(
+                                    " ", "_"
+                                ).lower()
+                                source_impact_key = (
+                                    f"mutations_{source.lower()}_{impact_normalized}"
+                                )
+                                source_impact_categories[source_impact_key] = 0
+                                # Also track IDs for source×impact
+                                source_impact_id_key = (
+                                    f"variant_ids_{source.lower()}_{impact_normalized}"
+                                )
+                                source_impact_categories[source_impact_id_key] = ""
 
                 variant_ids = []
                 mutation_sources = set()  # Track which sources have mutations
@@ -2624,30 +2686,12 @@ class MutationHandler:
                         ]
                         category_count = len(impact_mutations)
 
-                        # Store count and variant IDs for this impact type
+                        # Store count for this impact type
                         category_key = f"mutations_{impact.replace(' ', '_').lower()}"
                         if category_key in mutation_categories:
                             mutation_categories[category_key] = category_count
 
-                            if "variant_id" in impact_mutations.columns:
-                                impact_ids = (
-                                    impact_mutations["variant_id"]
-                                    .dropna()
-                                    .unique()
-                                    .tolist()
-                                )
-                                impact_ids = [
-                                    str(id).strip()
-                                    for id in impact_ids
-                                    if str(id).strip()
-                                ]
-                                if impact_ids:
-                                    impact_key = f"variant_ids_{impact.replace(' ', '_').lower()}"
-                                    mutation_categories[impact_key] = ",".join(
-                                        impact_ids
-                                    )
-
-                    # Count by source
+                    # Count by source and by source×impact
                     if "source" in validated_mutations.columns:
                         for source in validated_mutations["source"].unique():
                             if pd.notna(source):
@@ -2657,6 +2701,49 @@ class MutationHandler:
                                 ]
                                 source_key = f"mutations_{str(source).lower()}"
                                 source_categories[source_key] = len(source_mutations)
+
+                                # Count by source×impact (e.g., clinvar_missense_variant)
+                                for impact in source_mutations[impact_column].unique():
+                                    if pd.notna(impact):
+                                        source_impact_mutations = source_mutations[
+                                            source_mutations[impact_column] == impact
+                                        ]
+                                        impact_normalized = impact.replace(
+                                            " ", "_"
+                                        ).lower()
+                                        source_impact_key = f"mutations_{str(source).lower()}_{impact_normalized}"
+
+                                        if (
+                                            source_impact_key
+                                            in source_impact_categories
+                                        ):
+                                            source_impact_categories[
+                                                source_impact_key
+                                            ] = len(source_impact_mutations)
+
+                                            # Also collect IDs for source×impact
+                                            if (
+                                                "variant_id"
+                                                in source_impact_mutations.columns
+                                            ):
+                                                source_impact_ids = (
+                                                    source_impact_mutations[
+                                                        "variant_id"
+                                                    ]
+                                                    .dropna()
+                                                    .unique()
+                                                    .tolist()
+                                                )
+                                                source_impact_ids = [
+                                                    str(id).strip()
+                                                    for id in source_impact_ids
+                                                    if str(id).strip()
+                                                ]
+                                                if source_impact_ids:
+                                                    source_impact_id_key = f"variant_ids_{str(source).lower()}_{impact_normalized}"
+                                                    source_impact_categories[
+                                                        source_impact_id_key
+                                                    ] = ",".join(source_impact_ids)
 
                     # Collect all variant IDs
                     if "variant_id" in validated_mutations.columns:
@@ -2691,6 +2778,7 @@ class MutationHandler:
                     "alt_start_site_variant_ids": "",
                     **mutation_categories,
                     **source_categories,  # Add per-source counts
+                    **source_impact_categories,  # Add source×impact matrix (e.g., clinvar_missense_variant)
                 }
 
                 # Add validation metrics if available
@@ -2842,19 +2930,39 @@ class MutationHandler:
             )
 
             logger.debug("Processing complete")
+
+            # Determine status based on errors and results
+            status = "success"
+            error_msg = None
+            if gene_errors:
+                status = "success_with_errors"
+                error_msg = "; ".join(gene_errors[:3])  # Limit to first 3 errors
+                if len(gene_errors) > 3:
+                    error_msg += f" (+{len(gene_errors)-3} more)"
+            elif skipped_pairs > 0 and len(pair_results) == 0:
+                status = "all_pairs_failed"
+                error_msg = f"{skipped_pairs} pairs skipped"
+            elif gene_warnings and len(pair_results) > 0 and total_mutations == 0:
+                # Has pairs but no mutations - might be legitimate or API failure
+                if any("no_mutations" in w for w in gene_warnings):
+                    error_msg = "no_mutations_found"
+
             return {
                 "gene_name": gene_name,
-                "status": "success",
+                "status": status,
                 "total_transcripts": len(transcript_info),
                 "alternative_features": len(alt_features),
                 "transcript_feature_pairs": len(transcript_feature_pairs),
+                "pairs_processed": len(pair_results),
+                "pairs_skipped": skipped_pairs,
                 "mutations_filtered": total_mutations,
                 "mutations_in_alt_start_sites": sum(
                     pair.get("mutations_in_alt_start_site", 0) for pair in pair_results
                 ),
                 "pair_results": pair_results,
                 "consequences_validated": validate_consequences,
-                "error": None,
+                "error": error_msg,
+                "warnings": "; ".join(gene_warnings[:5]) if gene_warnings else None,
             }
 
         except Exception as e:

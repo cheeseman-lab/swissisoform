@@ -271,8 +271,8 @@ class SummaryAnalyzer:
 
                 # Total mutations
                 total_mutations_all = (
-                    pair_results["mutation_count_total"].sum()
-                    if "mutation_count_total" in pair_results.columns
+                    pair_results["total_mutations"].sum()
+                    if "total_mutations" in pair_results.columns
                     else 0
                 )
                 summary_lines.append(
@@ -903,10 +903,8 @@ class SummaryAnalyzer:
                         missense_mutations = gene_mutation_data[
                             "mutations_missense_variant"
                         ].sum()
-                    if "mutation_count_total" in gene_mutation_data.columns:
-                        total_mutations = gene_mutation_data[
-                            "mutation_count_total"
-                        ].sum()
+                    if "total_mutations" in gene_mutation_data.columns:
+                        total_mutations = gene_mutation_data["total_mutations"].sum()
 
                     # Collect variant IDs for each mutation type
                     for _, row in gene_mutation_data.iterrows():

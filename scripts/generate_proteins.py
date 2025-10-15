@@ -299,6 +299,13 @@ if __name__ == "__main__":
     )
     root_logger.addHandler(handler)
 
+    # Ensure all swissisoform loggers inherit the DEBUG level
+    logging.getLogger("swissisoform").setLevel(log_level)
+    logging.getLogger("swissisoform.translation").setLevel(log_level)
+    logging.getLogger("swissisoform.mutations").setLevel(log_level)
+    logging.getLogger("swissisoform.genome").setLevel(log_level)
+    logging.getLogger("swissisoform.alternative_isoforms").setLevel(log_level)
+
     # Suppress verbose logging from external libraries
     logging.getLogger("matplotlib").setLevel(logging.WARNING)
     logging.getLogger("PIL").setLevel(logging.WARNING)

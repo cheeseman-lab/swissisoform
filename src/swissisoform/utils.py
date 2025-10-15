@@ -442,28 +442,96 @@ def save_isoform_level_results(
     # Convert to DataFrame
     pairs_df = pd.DataFrame(all_pairs)
 
-    # Organize columns in preferred order
-    column_order = [
-        "gene_name",  # Gene name first
-        "transcript_id",  # Transcript ID second
-        "feature_id",  # Alternative feature ID third
-        "feature_type",  # truncation or extension
+    # Rename columns for clarity
+    column_renames = {
+        "mutation_count_total": "total_mutations",
+        "mutations_in_alt_start_site": "mutations_in_alt_start",
+        "mutation_sources": "source_databases",
+        "variant_ids": "all_variant_ids",
+        "alt_start_site_variant_ids": "alt_start_variant_ids",
+    }
+
+    # Rename mutation count columns for clarity
+    impact_type_renames = {}
+    for col in pairs_df.columns:
+        if col.startswith("mutations_"):
+            # mutations_missense_variant -> count_missense
+            impact_type = col.replace("mutations_", "")
+            new_name = f"count_{impact_type}"
+            impact_type_renames[col] = new_name
+        elif col.startswith("variant_ids_"):
+            # variant_ids_missense_variant -> ids_missense
+            impact_type = col.replace("variant_ids_", "")
+            new_name = f"ids_{impact_type}"
+            impact_type_renames[col] = new_name
+
+    column_renames.update(impact_type_renames)
+    pairs_df = pairs_df.rename(columns=column_renames)
+
+    # Organize columns in 5-section structure with count+IDs pairing
+    column_order = []
+
+    # SECTION 1: Feature Identification (8 columns)
+    section1 = [
+        "gene_name",
+        "transcript_id",
+        "feature_id",
+        "feature_type",
         "feature_start",
         "feature_end",
-        "mutation_count_total",  # Total mutation count
+        "total_mutations",
+        "source_databases",
+    ]
+    column_order.extend(section1)
+
+    # SECTION 2: Summary Counts ONLY (no IDs - those are redundant)
+    # Order: missense, nonsense, frameshift, inframe_deletion, inframe_insertion, synonymous, mutations_in_alt_start
+    section2 = [
+        "count_missense_variant",
+        "count_nonsense_variant",
+        "count_frameshift_variant",
+        "count_inframe_deletion",
+        "count_inframe_insertion",
+        "count_synonymous_variant",
+        "mutations_in_alt_start",
+    ]
+    column_order.extend(section2)
+
+    # SECTION 3: Per-Source Totals (3 columns)
+    section3 = [
+        "count_clinvar",
+        "count_gnomad",
+        "count_cosmic",
+    ]
+    column_order.extend(section3)
+
+    # SECTION 4: Source×Impact Matrix PAIRED (count immediately followed by IDs)
+    # Order by source (clinvar, gnomad, cosmic), then by impact (missense, nonsense, frameshift, inframe_deletion, inframe_insertion, synonymous)
+    sources = ["clinvar", "gnomad", "cosmic"]
+    impacts = [
+        "missense_variant",
+        "nonsense_variant",
+        "frameshift_variant",
+        "inframe_deletion",
+        "inframe_insertion",
+        "synonymous_variant",
     ]
 
-    # Add mutation category columns to the order (they start with "mutations_")
-    mutation_category_columns = [
-        col for col in pairs_df.columns if col.startswith("mutations_")
-    ]
-    column_order.extend(mutation_category_columns)
+    section4 = []
+    for source in sources:
+        for impact in impacts:
+            count_col = f"count_{source}_{impact}"
+            ids_col = f"ids_{source}_{impact}"
+            # Add both count and IDs in sequence
+            section4.extend([count_col, ids_col])
+    column_order.extend(section4)
 
-    # Add variant IDs columns
-    variant_id_columns = [
-        col for col in pairs_df.columns if col.startswith("variant_ids_")
+    # SECTION 5: Special Columns (2 columns)
+    section5 = [
+        "alt_start_variant_ids",
+        "all_variant_ids",
     ]
-    column_order.extend(variant_id_columns)
+    column_order.extend(section5)
 
     # Reorder columns that exist in the dataframe
     available_columns = [col for col in column_order if col in pairs_df.columns]
@@ -533,8 +601,8 @@ def print_mutation_summary(results_df, output_dir):
 
                     # Get total mutations across all pairs
                     total_pair_mutations = (
-                        pairs_df["mutation_count_total"].sum()
-                        if "mutation_count_total" in pairs_df.columns
+                        pairs_df["total_mutations"].sum()
+                        if "total_mutations" in pairs_df.columns
                         else 0
                     )
                     avg_mutations_per_pair = (
@@ -553,7 +621,7 @@ def print_mutation_summary(results_df, output_dir):
                         logger.info(f"  Breakdown by isoform type:")
 
                         type_mutations = pairs_df.groupby("feature_type")[
-                            "mutation_count_total"
+                            "total_mutations"
                         ].sum()
                         for isoform_type, count in type_mutations.items():
                             type_pairs = len(
@@ -784,15 +852,22 @@ def load_pre_validated_variants(mutations_file: str) -> Dict[str, Set[str]]:
 
     logger.info(f"Found {len(mutations_df)} mutation records")
 
-    # Define the impact-specific variant ID columns
-    variant_id_columns = [
-        "variant_ids_missense_variant",
-        "variant_ids_nonsense_variant",
-        "variant_ids_frameshift_variant",
-        "variant_ids_synonymous_variant",
-        "variant_ids_inframe_deletion",
-        "variant_ids_inframe_insertion",
+    # Build list of source×impact ID columns dynamically
+    # After Task 2, we use source-specific columns instead of summary columns
+    variant_id_columns = []
+    sources = ["clinvar", "gnomad", "cosmic"]
+    impacts = [
+        "missense_variant",
+        "nonsense_variant",
+        "frameshift_variant",
+        "inframe_deletion",
+        "inframe_insertion",
+        "synonymous_variant",
     ]
+
+    for source in sources:
+        for impact in impacts:
+            variant_id_columns.append(f"ids_{source}_{impact}")
 
     # Extract variant IDs by gene
     pre_validated_variants = {}

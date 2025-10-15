@@ -138,7 +138,15 @@ async def main(
     if sources is None:
         sources = ["clinvar"]
     if impact_types is None:
-        impact_types = ["missense variant", "nonsense variant", "frameshift variant"]
+        # Include all protein-relevant mutation types by default
+        impact_types = [
+            "missense variant",
+            "nonsense variant",
+            "frameshift variant",
+            "inframe deletion",
+            "inframe insertion",
+            "synonymous variant",
+        ]
 
     # Convert to the dict format expected by the mutation handler
     impact_types_dict = {sources[0]: impact_types}
@@ -240,6 +248,9 @@ if __name__ == "__main__":
             "missense variant",
             "nonsense variant",
             "frameshift variant",
+            "inframe deletion",
+            "inframe insertion",
+            "synonymous variant",
         ],
         help="Mutation impact types to include (space-separated)",
     )

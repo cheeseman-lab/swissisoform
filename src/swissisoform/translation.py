@@ -296,14 +296,30 @@ class AlternativeProteinGenerator:
         if start_codons.empty:
             self._debug_print("No start codon found for transcript")
             return None
-        if stop_codons.empty:
-            self._debug_print("No stop codon found for transcript")
-            return None
 
         canonical_start_codon_start = int(start_codons.iloc[0]["start"])
         canonical_start_codon_end = int(start_codons.iloc[0]["end"])
-        stop_codon_start = int(stop_codons.iloc[0]["start"])
-        stop_codon_end = int(stop_codons.iloc[0]["end"])
+
+        # Stop codon is optional - fall back to last CDS end if not annotated
+        if stop_codons.empty:
+            self._debug_print("⚠️ No stop codon annotation - will use last CDS end")
+            cds_regions = features[features["feature_type"] == "CDS"]
+            if cds_regions.empty:
+                self._debug_print("No CDS regions found")
+                return None
+
+            if strand == "+":
+                stop_codon_end = int(cds_regions["end"].max())
+                stop_codon_start = stop_codon_end  # Not used for extensions
+            else:
+                stop_codon_start = int(cds_regions["start"].min())
+                stop_codon_end = stop_codon_start  # Not used for extensions
+            self._debug_print(
+                f"Using CDS endpoint as stop: {stop_codon_start}-{stop_codon_end}"
+            )
+        else:
+            stop_codon_start = int(stop_codons.iloc[0]["start"])
+            stop_codon_end = int(stop_codons.iloc[0]["end"])
 
         self._debug_print(
             f"Extension region: {extension_start}-{extension_end} ({strand} strand)"
@@ -573,14 +589,27 @@ class AlternativeProteinGenerator:
         )
         self._debug_print(f"Truncation sequence length: {removed_len} bp")
 
-        # Stop codon for truncation end
+        # Stop codon for truncation end - optional, fall back to last CDS end
         stop_codons = features[features["feature_type"] == "stop_codon"]
         if stop_codons.empty:
-            self._debug_print("No stop codon found for transcript")
-            return None
+            self._debug_print("⚠️ No stop codon annotation - will use last CDS end")
+            cds_regions = features[features["feature_type"] == "CDS"]
+            if cds_regions.empty:
+                self._debug_print("No CDS regions found")
+                return None
 
-        stop_codon_start = stop_codons.iloc[0]["start"]
-        stop_codon_end = stop_codons.iloc[0]["end"]
+            if strand == "+":
+                stop_codon_end = int(cds_regions["end"].max())
+                stop_codon_start = stop_codon_end
+            else:
+                stop_codon_start = int(cds_regions["start"].min())
+                stop_codon_end = stop_codon_start
+            self._debug_print(
+                f"Using CDS endpoint as stop: {stop_codon_start}-{stop_codon_end}"
+            )
+        else:
+            stop_codon_start = stop_codons.iloc[0]["start"]
+            stop_codon_end = stop_codons.iloc[0]["end"]
 
         if strand == "+":
             extract_start = alt_start_pos
@@ -842,7 +871,7 @@ class AlternativeProteinGenerator:
         alt_allele: str,
         sequence_type: str = "canonical",
         extension_feature: Optional[pd.Series] = None,
-    ) -> Optional[Dict]:
+    ) -> Tuple[Optional[Dict], Optional[str]]:
         """Apply mutation to canonical or extension sequence with improved multi-base handling."""
         if self.debug:
             logger.debug(
@@ -993,7 +1022,7 @@ class AlternativeProteinGenerator:
                         logger.debug(
                             f"     {chromosome}:{utr['start']}-{utr['end']} ({utr_type})"
                         )
-            return None
+            return None, "intronic_detected_during_validation"
 
         if self.debug:
             logger.debug(f"Mapped to coding position: {mutation_coding_pos}")
@@ -1058,7 +1087,7 @@ class AlternativeProteinGenerator:
         if mutated_protein == original_protein:
             if self.debug:
                 logger.debug(f"Synonymous mutation - protein unchanged")
-            return None
+            return None, None  # Synonymous - no error
 
         # Calculate amino acid difference
         aa_change = self._calculate_aa_difference(original_protein, mutated_protein)
@@ -1079,7 +1108,7 @@ class AlternativeProteinGenerator:
             "coding_position": mutation_coding_pos,
             "aa_change": aa_change,
             "protein_changed": True,
-        }
+        }, None  # Success - no error
 
     def _map_genomic_to_coding_position(
         self,
@@ -1482,13 +1511,15 @@ class AlternativeProteinGenerator:
                                 extension_feature = pd.Series(feature_info)
 
                             # Apply mutation using unified method
-                            mutation_result_data = self._apply_mutation_to_sequence(
-                                pair["transcript_id"],
-                                genomic_pos,
-                                ref_allele,
-                                alt_allele,
-                                sequence_type,
-                                extension_feature,
+                            mutation_result_data, error_code = (
+                                self._apply_mutation_to_sequence(
+                                    pair["transcript_id"],
+                                    genomic_pos,
+                                    ref_allele,
+                                    alt_allele,
+                                    sequence_type,
+                                    extension_feature,
+                                )
                             )
 
                             if mutation_result_data:
@@ -2021,7 +2052,7 @@ class AlternativeProteinGenerator:
         """
         if self.debug:
             logger.debug(
-                f"Predicting consequence for {ref_allele}>{alt_allele}at {genomic_pos}"
+                f"Predicting consequence for {ref_allele}>{alt_allele} at {genomic_pos}"
             )
             if current_feature is not None:
                 feature_type = current_feature.get("region_type", "unknown")
@@ -2100,7 +2131,7 @@ class AlternativeProteinGenerator:
                         )
                     return "unknown"
 
-                mutated_result = self._apply_mutation_to_sequence(
+                mutated_result, error_code = self._apply_mutation_to_sequence(
                     transcript_id,
                     genomic_pos,
                     ref_clean,
@@ -2121,7 +2152,7 @@ class AlternativeProteinGenerator:
                         )
                     return "unknown"
 
-                mutated_result = self._apply_mutation_to_sequence(
+                mutated_result, error_code = self._apply_mutation_to_sequence(
                     transcript_id, genomic_pos, ref_clean, alt_clean, "canonical"
                 )
 
@@ -2134,9 +2165,18 @@ class AlternativeProteinGenerator:
 
             # Classify the change
             if not mutated_result:
-                if self.debug:
-                    logger.debug(f"No protein change detected - synonymous")
-                return "synonymous variant"
+                # Check if this was an error (intronic) or truly synonymous
+                if error_code == "intronic_detected_during_validation":
+                    if self.debug:
+                        logger.debug(
+                            f"⚠️ VALIDATION BUG: Intronic variant reached validation - should have been filtered earlier!"
+                        )
+                    return "intronic"
+                else:
+                    # Truly synonymous
+                    if self.debug:
+                        logger.debug(f"No protein change detected - synonymous")
+                    return "synonymous variant"
 
             consequence = self.classify_protein_change(
                 base_result["protein"],
