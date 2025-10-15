@@ -2381,6 +2381,27 @@ class MutationHandler:
                     & (pair_mutations_copy["variant_end_pos"] <= feature_end)
                 ].copy()
 
+                # Log boundary-spanning variants that were filtered out
+                boundary_filtered = pair_mutations_copy[
+                    ~(
+                        (pair_mutations_copy["position"] >= feature_start)
+                        & (pair_mutations_copy["variant_end_pos"] <= feature_end)
+                    )
+                ]
+                if not boundary_filtered.empty:
+                    logger.debug(
+                        f"Filtered {len(boundary_filtered)} boundary-spanning variant(s):"
+                    )
+                    for _, var in boundary_filtered.iterrows():
+                        var_id = var.get("variant_id", "unknown")
+                        var_pos = var.get("position", "?")
+                        var_end = var.get("variant_end_pos", "?")
+                        var_ref = var.get("reference", "?")
+                        var_source = var.get("source", "?")
+                        logger.debug(
+                            f"  🚫 {var_id} ({var_source}): pos {var_pos}-{var_end} extends beyond feature boundary ({feature_start}-{feature_end}), ref={var_ref}"
+                        )
+
                 # Drop the temporary column
                 if "variant_end_pos" in region_mutations.columns:
                     region_mutations = region_mutations.drop(
@@ -2579,7 +2600,7 @@ class MutationHandler:
                         )
                         if not test_result:
                             logger.debug(
-                                f"[DEBUG_EMOJI] 🛑 Protein extraction failed - skipping this pair"
+                                f"🛑 Protein extraction failed - skipping this pair"
                             )
                             gene_errors.append(
                                 f"protein_extraction_failed:{transcript_id}"

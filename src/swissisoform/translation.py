@@ -891,17 +891,13 @@ class AlternativeProteinGenerator:
             )
             if not base_result:
                 if self.debug:
-                    logger.debug(
-                        "[DEBUG_EMOJI] ❌ Error: Could not extract base extension protein"
-                    )
+                    logger.debug("❌ Error: Could not extract base extension protein")
                 return None
         else:
             base_result = self.extract_canonical_protein(transcript_id)
             if not base_result:
                 if self.debug:
-                    logger.debug(
-                        "[DEBUG_EMOJI] ❌ Error: Could not extract base canonical protein"
-                    )
+                    logger.debug("❌ Error: Could not extract base canonical protein")
                 return None
 
         original_coding_sequence = base_result["coding_sequence"]
@@ -920,7 +916,7 @@ class AlternativeProteinGenerator:
         )
         if not transcript_data:
             if self.debug:
-                logger.debug("[DEBUG_EMOJI] ❌ No transcript data available")
+                logger.debug("❌ No transcript data available")
             return None
 
         chromosome = transcript_data["sequence"]["chromosome"]
@@ -2126,9 +2122,7 @@ class AlternativeProteinGenerator:
                 )
                 if not base_result:
                     if self.debug:
-                        logger.debug(
-                            f"[DEBUG_EMOJI] ❌ Could not extract base extension protein"
-                        )
+                        logger.debug(f"❌ Could not extract base extension protein")
                     return "unknown"
 
                 mutated_result, error_code = self._apply_mutation_to_sequence(
@@ -2147,9 +2141,7 @@ class AlternativeProteinGenerator:
                 base_result = self.extract_canonical_protein(transcript_id)
                 if not base_result:
                     if self.debug:
-                        logger.debug(
-                            f"[DEBUG_EMOJI] ❌ Could not extract canonical protein"
-                        )
+                        logger.debug(f"❌ Could not extract canonical protein")
                     return "unknown"
 
                 mutated_result, error_code = self._apply_mutation_to_sequence(
@@ -2192,7 +2184,7 @@ class AlternativeProteinGenerator:
 
         except Exception as e:
             if self.debug:
-                logger.debug(f"[DEBUG_EMOJI] ❌ Exception during prediction: {str(e)}")
+                logger.debug(f"❌ Exception during prediction: {str(e)}")
                 import traceback
 
                 logger.debug(f"Traceback: {traceback.format_exc()}")
@@ -2366,7 +2358,7 @@ class AlternativeProteinGenerator:
         # Input validation - only exclude truly invalid cases
         if genomic_pos is None:
             if self.debug:
-                logger.debug(f"[DEBUG_EMOJI] ❌ Invalid genomic position: None")
+                logger.debug(f"❌ Invalid genomic position: None")
             return "unknown"
 
         # Ensure genomic_pos is integer
@@ -2374,9 +2366,7 @@ class AlternativeProteinGenerator:
             genomic_pos = int(genomic_pos)
         except (ValueError, TypeError):
             if self.debug:
-                logger.debug(
-                    f"[DEBUG_EMOJI] ❌ Invalid genomic position type: {type(genomic_pos)}"
-                )
+                logger.debug(f"❌ Invalid genomic position type: {type(genomic_pos)}")
             return "unknown"
 
         # Check cache first
@@ -2495,7 +2485,7 @@ class AlternativeProteinGenerator:
 
         except Exception as e:
             if self.debug:
-                logger.debug(f"[DEBUG_EMOJI] ❌ Fast validation failed: {str(e)}")
+                logger.debug(f"❌ Fast validation failed: {str(e)}")
                 import traceback
 
                 logger.debug(f"Traceback: {traceback.format_exc()}")
@@ -2696,7 +2686,7 @@ class AlternativeProteinGenerator:
 
         except Exception as e:
             if self.debug:
-                logger.debug(f"[DEBUG_EMOJI] ❌ Single BP analysis failed: {str(e)}")
+                logger.debug(f"❌ Single BP analysis failed: {str(e)}")
                 import traceback
 
                 logger.debug(f"Traceback: {traceback.format_exc()}")
@@ -2723,9 +2713,7 @@ class AlternativeProteinGenerator:
                 )
                 if not result:
                     if self.debug:
-                        logger.debug(
-                            f"[DEBUG_EMOJI] ❌ Extension sequence extraction failed"
-                        )
+                        logger.debug(f"❌ Extension sequence extraction failed")
                     raise ValueError(
                         f"Extension sequence extraction failed for {transcript_id} - cannot proceed with mutation analysis"
                     )
@@ -2738,9 +2726,7 @@ class AlternativeProteinGenerator:
                 )
                 if not pos_map:
                     if self.debug:
-                        logger.debug(
-                            f"[DEBUG_EMOJI] ❌ Extension position mapping failed"
-                        )
+                        logger.debug(f"❌ Extension position mapping failed")
                     raise ValueError(
                         f"Extension position mapping failed for {transcript_id}"
                     )
@@ -2772,9 +2758,7 @@ class AlternativeProteinGenerator:
 
         except Exception as e:
             if self.debug:
-                logger.debug(
-                    f"[DEBUG_EMOJI] ❌ Cache building failed for {transcript_id}: {e}"
-                )
+                logger.debug(f"❌ Cache building failed for {transcript_id}: {e}")
             # Don't cache empty values - let it fail cleanly
             raise
 
@@ -2788,9 +2772,7 @@ class AlternativeProteinGenerator:
 
             if not transcript_data:
                 if self.debug:
-                    logger.debug(
-                        f"[DEBUG_EMOJI] ❌ No transcript data for {transcript_id}"
-                    )
+                    logger.debug(f"❌ No transcript data for {transcript_id}")
                 return {}
 
             strand = transcript_data["sequence"]["strand"]
@@ -2801,14 +2783,12 @@ class AlternativeProteinGenerator:
 
             if cds_regions.empty:
                 if self.debug:
-                    logger.debug(f"[DEBUG_EMOJI] ❌ No CDS regions for {transcript_id}")
+                    logger.debug(f"❌ No CDS regions for {transcript_id}")
                 return {}
 
             if start_codons.empty:
                 if self.debug:
-                    logger.debug(
-                        f"[DEBUG_EMOJI] ⚠️ No start codon annotation for {transcript_id}"
-                    )
+                    logger.debug(f"⚠️ No start codon annotation for {transcript_id}")
                 # Use first CDS as start
                 canonical_start = (
                     cds_regions["start"].min()
@@ -2872,7 +2852,7 @@ class AlternativeProteinGenerator:
 
         except Exception as e:
             if self.debug:
-                logger.debug(f"[DEBUG_EMOJI] ❌ Position mapping failed: {e}")
+                logger.debug(f"❌ Position mapping failed: {e}")
             return {}
 
     def _build_extension_position_map(
@@ -2893,9 +2873,7 @@ class AlternativeProteinGenerator:
         start_codons = features[features["feature_type"] == "start_codon"]
         if start_codons.empty:
             if self.debug:
-                logger.debug(
-                    f"[DEBUG_EMOJI] ❌ No start codon found for {transcript_id}"
-                )
+                logger.debug(f"❌ No start codon found for {transcript_id}")
             return {}
 
         canonical_start_pos = (
@@ -2965,7 +2943,7 @@ class AlternativeProteinGenerator:
         cds_regions = features[features["feature_type"] == "CDS"].copy()
         if cds_regions.empty:
             if self.debug:
-                logger.debug(f"[DEBUG_EMOJI] ❌ No CDS regions found")
+                logger.debug(f"❌ No CDS regions found")
             return pos_map
 
         # Sort CDS regions
