@@ -4,13 +4,25 @@
 # Source this file in other scripts with: source utils.sh
 #
 
-# Colors for output
-export RED='\033[0;31m'
-export GREEN='\033[0;32m'
-export YELLOW='\033[1;33m'
-export BLUE='\033[0;34m'
-export CYAN='\033[0;36m'
-export NC='\033[0m' # No Color
+# Detect if output is going to a terminal or a file
+# Disable colors if output is redirected (e.g., in SLURM logs)
+if [ -t 1 ]; then
+    # Output is going to a terminal
+    export RED='\033[0;31m'
+    export GREEN='\033[0;32m'
+    export YELLOW='\033[1;33m'
+    export BLUE='\033[0;34m'
+    export CYAN='\033[0;36m'
+    export NC='\033[0m' # No Color
+else
+    # Output is redirected (e.g., to a file), disable colors
+    export RED=''
+    export GREEN=''
+    export YELLOW=''
+    export BLUE=''
+    export CYAN=''
+    export NC=''
+fi
 
 # Timing utilities
 start_timer() {

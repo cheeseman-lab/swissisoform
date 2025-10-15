@@ -6,7 +6,7 @@
 # It processes BED files and validates them against reference GTF files.
 #
 # Usage:
-#   bash scripts/1_cleanup_files.sh
+#   bash 1_cleanup_files.sh
 #
 # Prerequisites:
 #   - dataset_config.yaml must exist (created by 0_download_genome.sh)

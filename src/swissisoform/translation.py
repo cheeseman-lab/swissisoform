@@ -1314,7 +1314,7 @@ class AlternativeProteinGenerator:
         )
 
         # Get mutations in this region from specified sources
-        mutations = await self.mutation_handler.get_visualization_ready_mutations(
+        mutations = await self.mutation_handler.get_mutations_for_gene(
             gene_name=gene_name, alt_features=region_features, sources=sources
         )
 
@@ -2283,11 +2283,6 @@ class AlternativeProteinGenerator:
             ref_len = len(ref_allele) if ref_allele else 1
             positions_to_check = [genomic_pos + i for i in range(ref_len)]
 
-            if self.debug and ref_len > 1:
-                logger.debug(
-                    f"Multi-bp variant: checking positions {genomic_pos} to {genomic_pos + ref_len - 1}"
-                )
-
             # Check if ALL positions are in CDS or UTR regions
             for pos in positions_to_check:
                 position_valid = False
@@ -2296,10 +2291,6 @@ class AlternativeProteinGenerator:
                 for _, cds in cds_regions.iterrows():
                     if int(cds["start"]) <= pos <= int(cds["end"]):
                         position_valid = True
-                        if self.debug and len(positions_to_check) == 1:
-                            logger.debug(
-                                f"✓ Position {pos} is in CDS region {cds['start']}-{cds['end']}"
-                            )
                         break
 
                 # If not in CDS, check UTR regions
@@ -2307,52 +2298,14 @@ class AlternativeProteinGenerator:
                     for _, utr in utr_regions.iterrows():
                         if int(utr["start"]) <= pos <= int(utr["end"]):
                             position_valid = True
-                            if self.debug and len(positions_to_check) == 1:
-                                utr_type = utr["feature_type"]
-                                logger.debug(
-                                    f"✓ Position {pos} is in {utr_type} region {utr['start']}-{utr['end']}"
-                                )
                             break
 
                 # If ANY position is not in CDS/UTR, the variant is intronic or boundary-spanning
                 if not position_valid:
-                    if self.debug:
-                        # Get transcript data for chromosome info
-                        transcript_data = (
-                            self.genome.get_transcript_features_with_sequence(
-                                transcript_id
-                            )
-                        )
-                        chrom = (
-                            transcript_data["sequence"]["chromosome"]
-                            if transcript_data
-                            else "?"
-                        )
-
-                        if ref_len > 1:
-                            logger.debug(
-                                f"🚫 Boundary-spanning variant: Position {pos} (part of {genomic_pos}-{genomic_pos + ref_len - 1}) not in coding/UTR"
-                            )
-                        else:
-                            logger.debug(
-                                f"🚫 Intronic variant: Position {pos} not in coding/UTR sequence"
-                            )
-                        logger.debug(f"   CDS regions ({len(cds_regions)} total):")
-                        for _, cds in cds_regions.sort_values("start").iterrows():
-                            logger.debug(f"     {chrom}:{cds['start']}-{cds['end']}")
-
-                        if not utr_regions.empty:
-                            logger.debug(f"   UTR regions ({len(utr_regions)} total):")
-                            for _, utr in utr_regions.sort_values("start").iterrows():
-                                utr_type = utr["feature_type"]
-                                logger.debug(
-                                    f"     {chrom}:{utr['start']}-{utr['end']} ({utr_type})"
-                                )
+                    # No detailed logging here - will be handled at bulk level
                     return False
 
             # All positions are valid
-            if self.debug and ref_len > 1:
-                logger.debug(f"✓ All {ref_len} positions are in coding/UTR regions")
             return True
 
         except Exception as e:
@@ -2419,16 +2372,8 @@ class AlternativeProteinGenerator:
                     )
                 return "unknown"
 
-            # CRITICAL: Check if position (and all spanned positions) are in coding/UTR sequence BEFORE quick classification
-            # This prevents us from validating intronic variants and boundary-spanning variants
-            if not self._is_position_in_transcript_regions(
-                transcript_id, genomic_pos, current_feature, ref_allele
-            ):
-                if self.debug:
-                    logger.debug(
-                        f"Position {genomic_pos} not in coding/UTR regions - skipping validation"
-                    )
-                return "intronic variant"
+            # Note: Intronic filtering is now handled via bulk filtering in mutations.py
+            # before individual validation, so we don't need to check here
 
             # Quick classification for obvious cases
             ref_len = len(ref_allele)

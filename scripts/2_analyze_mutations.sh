@@ -7,11 +7,15 @@
 # processes chunks in parallel using SLURM array jobs.
 #
 # Usage:
-#   sbatch scripts/2_analyze_mutations.sh
-#   sbatch --export=DATASET=hela scripts/2_analyze_mutations.sh
+#   sbatch 2_analyze_mutations.sh
+#   sbatch --export=DATASET=hela 2_analyze_mutations.sh
+#   sbatch --export=DATASET=hela,SOURCES="clinvar|cosmic" 2_analyze_mutations.sh
+#   sbatch --export=DATASET=hela,SOURCES="clinvar",IMPACT_TYPES="missense variant|nonsense variant" 2_analyze_mutations.sh
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
+#   SOURCES - Mutation databases to query (default: clinvar, pipe-separated: clinvar|gnomad|cosmic)
+#   IMPACT_TYPES - Mutation types to analyze (default: all types, pipe-separated)
 #
 # Prerequisites:
 #   - 1_cleanup_files.sh must have been run
@@ -23,22 +27,49 @@
 #SBATCH --partition=20                     # Partition name
 #SBATCH --array=1-8                        # 8 chunks for parallel processing
 #SBATCH --cpus-per-task=4                  # CPUs per task
-#SBATCH --mem=16G                          # Memory per task
+#SBATCH --mem=64G                          # Memory per task
 #SBATCH --time=24:00:00                    # Time limit (hrs:min:sec)
 #SBATCH --output=out/mutations-%A_%a.out   # %A = job ID, %a = array task ID
 
 set -e  # Exit on error
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# Source shared utilities (colors, helper functions)
+# Use relative path from scripts directory
+UTILS_PATH="$(dirname "$0")/utils.sh"
+if [ -f "$UTILS_PATH" ]; then
+    source "$UTILS_PATH"
+elif [ -f "utils.sh" ]; then
+    source "utils.sh"
+elif [ -f "scripts/utils.sh" ]; then
+    source "scripts/utils.sh"
+else
+    # Fallback: define colors inline
+    if [ -t 1 ]; then
+        RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+    else
+        RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; NC=''
+    fi
+fi
 
 # Dataset selection (default: hela)
 DATASET="${DATASET:-hela}"
+
+# Sources selection (default: clinvar)
+# Convert pipe-separated string to space-separated for command line
+if [ -z "$SOURCES" ]; then
+    SOURCES_ARGS=("clinvar")
+else
+    IFS='|' read -ra SOURCES_ARGS <<< "$SOURCES"
+fi
+
+# Impact types selection (default: all types)
+# Convert pipe-separated string to space-separated for command line
+if [ -z "$IMPACT_TYPES" ]; then
+    IMPACT_TYPES_ARGS=("missense variant" "nonsense variant" "frameshift variant" "synonymous variant" "inframe deletion" "inframe insertion")
+else
+    IFS='|' read -ra IMPACT_TYPES_ARGS <<< "$IMPACT_TYPES"
+fi
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   SwissIsoform Pipeline Step 2: Analyze Mutations            ║${NC}"
@@ -46,6 +77,8 @@ echo -e "${BLUE}╚════════════════════�
 echo ""
 echo "Array Task ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_MAX}"
 echo "Dataset: $DATASET"
+echo "Sources: ${SOURCES_ARGS[@]}"
+echo "Impact types: ${IMPACT_TYPES_ARGS[@]}"
 echo ""
 
 # ============================================================================
@@ -188,8 +221,8 @@ with open('$CONFIG_FILE') as f:
     config = yaml.safe_load(f)
 
 dataset_config = next(ds for ds in config['datasets'] if ds['name'] == '$DATASET')
-bed_file = f\"../data/ribosome_profiling/$DATASET\_isoforms_with_transcripts.bed\"
-gene_list = f\"../data/ribosome_profiling/$DATASET\_isoforms_gene_list.txt\"
+bed_file = f'../data/ribosome_profiling/${DATASET}_isoforms_with_transcripts.bed'
+gene_list = f'../data/ribosome_profiling/${DATASET}_isoforms_gene_list.txt'
 
 source_gtf_path = Path(dataset_config['source_gtf_path'])
 v47_gtf = source_gtf_path.parent / f\"{source_gtf_path.stem}.v47names.gtf\"
@@ -231,7 +264,7 @@ echo -e "${GREEN}✓${NC} Environment activated"
 
 echo ""
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  Processing Chunk ${SLURM_ARRAY_TASK_ID}                     ║${NC}"
+echo -e "${BLUE}║  Processing Chunk ${SLURM_ARRAY_TASK_ID}                                          ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -266,9 +299,10 @@ python3 analyze_mutations.py "$CHUNK_FILE" "$OUTPUT_DIR" \
   --genome "$GENOME_PATH" \
   --annotation "$ANNOTATION_PATH" \
   --bed "$TRUNCATIONS_PATH" \
-  --sources "clinvar" \
-  --impact-types "missense variant" "nonsense variant" "frameshift variant" "synonymous variant" "inframe deletion" "inframe insertion" \
-  --visualize
+  --sources "${SOURCES_ARGS[@]}" \
+  --impact-types "${IMPACT_TYPES_ARGS[@]}" \
+  --visualize \
+  -v
 
 echo ""
 echo -e "${GREEN}✓${NC} Completed ${DATASET} dataset chunk ${CHUNK_ID}"
@@ -394,7 +428,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
         echo "     └─ [gene_name]/ (visualizations)"
         echo ""
         echo -e "${BLUE}Next step:${NC}"
-        echo "  Run: sbatch --export=DATASET=${DATASET} 3_generate_proteins.sh"
+        echo "  Run: sbatch --export=DATASET=${DATASET} scripts/3_generate_proteins.sh"
         echo ""
 
         # Clean up chunk directories

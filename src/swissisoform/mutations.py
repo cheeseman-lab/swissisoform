@@ -7,7 +7,7 @@ analyzing mutation data from various sources including gnomAD, ClinVar, and COSM
 from gql import gql, Client
 from gql.transport.aiohttp import AIOHTTPTransport
 import pandas as pd
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 import requests
 import json
 import asyncio
@@ -122,7 +122,9 @@ class MutationHandler:
         }
 
         # Define which categories to exclude by default
-        self.low_impact_categories = ["splice", "intronic"]
+        # Note: intronic variants are now handled via bulk filtering before validation
+        # Splice variants are still filtered here as they have VEP annotations
+        self.low_impact_categories = ["splice"]
 
     async def get_gnomad_variants(self, gene_name: str) -> pd.DataFrame:
         """Get processed variant data from gnomAD.
@@ -951,8 +953,8 @@ class MutationHandler:
         if not result_df.empty:
             original_count = len(result_df)
             result_df = result_df.drop_duplicates(
-                subset=['chromosome', 'position', 'reference', 'alternate'],
-                keep='first'
+                subset=["chromosome", "position", "reference", "alternate"],
+                keep="first",
             )
             deduplicated_count = len(result_df)
             if original_count > deduplicated_count:
@@ -1592,6 +1594,82 @@ class MutationHandler:
 
         return filtered_df
 
+    def _bulk_filter_intronic_variants(
+        self,
+        mutations_df: pd.DataFrame,
+        transcript_id: str,
+        protein_generator,
+        current_feature: Optional[pd.Series] = None,
+    ) -> Tuple[pd.DataFrame, List[Dict]]:
+        """Bulk filter out intronic variants using transcript region checks.
+
+        Args:
+            mutations_df: DataFrame with mutations
+            transcript_id: Transcript ID to check regions against
+            protein_generator: AlternativeProteinGenerator instance for region checks
+            current_feature: Optional feature information
+
+        Returns:
+            Tuple of (filtered DataFrame, list of intronic variant info dicts)
+        """
+        if mutations_df.empty:
+            return mutations_df, []
+
+        intronic_variants = []
+        non_intronic_indices = []
+
+        # Check if debug mode is enabled
+        debug_mode = getattr(protein_generator, "debug", False)
+
+        for idx, mutation in mutations_df.iterrows():
+            try:
+                genomic_pos = int(mutation["position"])
+                ref_allele = str(mutation.get("reference", "")).upper()
+                variant_id = mutation.get("variant_id", f"pos_{genomic_pos}")
+                source = mutation.get("source", "unknown")
+
+                # Format position display (range for multi-bp variants)
+                ref_len = len(ref_allele) if ref_allele else 1
+                if ref_len > 1:
+                    pos_display = f"{genomic_pos}-{genomic_pos + ref_len - 1}"
+                else:
+                    pos_display = str(genomic_pos)
+
+                # Use the same position check as predict_consequence_fast
+                is_in_region = protein_generator._is_position_in_transcript_regions(
+                    transcript_id, genomic_pos, current_feature, ref_allele
+                )
+
+                if is_in_region:
+                    non_intronic_indices.append(idx)
+                    if debug_mode:
+                        logger.debug(
+                            f"✓ Position {pos_display} ({variant_id}, {source}) in coding/UTR"
+                        )
+                else:
+                    # Track intronic variant for logging
+                    intronic_variants.append(
+                        {
+                            "position": genomic_pos,
+                            "variant_id": variant_id,
+                            "source": source,
+                        }
+                    )
+                    if debug_mode:
+                        logger.debug(
+                            f"🚫 Position {pos_display} ({variant_id}, {source}) intronic (filtered out)"
+                        )
+
+            except Exception as e:
+                # If check fails, keep the variant (safer to validate than skip)
+                logger.debug(f"Error checking position {mutation.get('position')}: {e}")
+                non_intronic_indices.append(idx)
+
+        # Filter to non-intronic mutations
+        filtered_df = mutations_df.loc[non_intronic_indices].copy()
+
+        return filtered_df, intronic_variants
+
     async def _async_get_request(self, url: str, params: Dict = None) -> str:
         """Make an async GET request.
 
@@ -1621,7 +1699,7 @@ class MutationHandler:
         """Clear the cached API responses."""
         self.cached_data = {}
 
-    async def get_visualization_ready_mutations(
+    async def get_mutations_for_gene(
         self,
         gene_name: str,
         alt_features: Optional[pd.DataFrame] = None,
@@ -1630,7 +1708,10 @@ class MutationHandler:
         custom_parquet_path: Optional[str] = None,
         verbose: bool = False,
     ) -> pd.DataFrame:
-        """Get mutation data from specified sources in a format ready for visualization.
+        """Get mutation data from specified sources for a gene.
+
+        Fetches, standardizes, and combines mutation data from multiple sources
+        (gnomAD, ClinVar, COSMIC, custom parquet files).
 
         Args:
             gene_name (str): Name of the gene.
@@ -1641,7 +1722,7 @@ class MutationHandler:
             verbose (bool): Whether to print detailed information.
 
         Returns:
-            pd.DataFrame: DataFrame containing mutations ready for visualization.
+            pd.DataFrame: DataFrame containing standardized mutations from all requested sources.
         """
         if sources is None:
             sources = ["gnomad", "clinvar", "cosmic"]
@@ -2217,7 +2298,7 @@ class MutationHandler:
 
                 # STEP 1: Get mutations specifically for this transcript-feature pair
                 logger.debug(f"Fetching mutations for {refseq_id or 'gene-level'}...")
-                pair_mutations = await self.get_visualization_ready_mutations(
+                pair_mutations = await self.get_mutations_for_gene(
                     gene_name=gene_name,
                     alt_features=alt_features.loc[[feature_idx]],  # Only this feature
                     sources=sources,
@@ -2314,14 +2395,114 @@ class MutationHandler:
 
                 logger.debug(f"{len(region_mutations)} mutations in feature region")
 
-                # STEP 3: Filter out low impact variants
-                logger.debug(f"Filtering out low impact variants...")
-                high_impact_mutations = self._filter_out_low_impact_variants(
-                    region_mutations
+                # STEP 3: Bulk filter out intronic variants
+                logger.debug(f"Filtering out intronic variants...")
+
+                # Get current feature for context (needed for position checks)
+                current_feature = (
+                    alt_features.loc[feature_idx]
+                    if feature_idx in alt_features.index
+                    else None
                 )
-                logger.debug(
-                    f"{len(high_impact_mutations)} high-impact mutations remain"
-                )
+
+                # Get CDS and UTR regions for debug logging
+                if protein_generator is not None:
+                    try:
+                        features = protein_generator.genome.get_transcript_features(
+                            transcript_id
+                        )
+                        transcript_data = protein_generator.genome.get_transcript_features_with_sequence(
+                            transcript_id
+                        )
+                        strand = (
+                            transcript_data["sequence"]["strand"]
+                            if transcript_data
+                            else "+"
+                        )
+                        chrom = (
+                            transcript_data["sequence"]["chromosome"]
+                            if transcript_data
+                            else "?"
+                        )
+
+                        cds_regions = features[features["feature_type"] == "CDS"]
+                        utr_regions = features[
+                            features["feature_type"].str.contains("UTR", na=False)
+                        ]
+
+                        # Combine and sort all regions by position (strand-aware)
+                        all_regions = []
+                        for _, cds in cds_regions.iterrows():
+                            all_regions.append(
+                                {
+                                    "start": int(cds["start"]),
+                                    "end": int(cds["end"]),
+                                    "type": "CDS",
+                                }
+                            )
+                        for _, utr in utr_regions.iterrows():
+                            all_regions.append(
+                                {
+                                    "start": int(utr["start"]),
+                                    "end": int(utr["end"]),
+                                    "type": "UTR",
+                                }
+                            )
+
+                        # Sort by position (ascending for +, descending for -)
+                        all_regions.sort(
+                            key=lambda x: x["start"], reverse=(strand == "-")
+                        )
+
+                        # Print regions once
+                        logger.debug(
+                            f"Transcript regions ({strand} strand, {len(all_regions)} total):"
+                        )
+                        for region in all_regions:
+                            logger.debug(
+                                f"  {chrom}:{region['start']}-{region['end']} ({region['type']})"
+                            )
+
+                        # Sort mutations by position (same order as regions)
+                        region_mutations_sorted = region_mutations.sort_values(
+                            "position", ascending=(strand != "-")
+                        ).copy()
+
+                        # Perform bulk intronic filtering
+                        high_impact_mutations, intronic_variants = (
+                            self._bulk_filter_intronic_variants(
+                                region_mutations_sorted,
+                                transcript_id,
+                                protein_generator,
+                                current_feature,
+                            )
+                        )
+
+                        # Log breakdown by source
+                        if intronic_variants:
+                            source_counts = {}
+                            for v in intronic_variants:
+                                source = v["source"]
+                                source_counts[source] = source_counts.get(source, 0) + 1
+                            source_summary = ", ".join(
+                                [f"{src}: {cnt}" for src, cnt in source_counts.items()]
+                            )
+                            logger.debug(
+                                f"Intronic variants by source (filtered out): {source_summary}"
+                            )
+
+                        logger.debug(
+                            f"{len(high_impact_mutations)} variants remain after intronic filtering"
+                        )
+
+                    except Exception as e:
+                        logger.debug(
+                            f"Error during intronic filtering: {e}, keeping all variants"
+                        )
+                        high_impact_mutations = region_mutations.copy()
+                else:
+                    # No protein generator available, skip filtering
+                    high_impact_mutations = region_mutations.copy()
 
                 if high_impact_mutations.empty:
                     logger.debug(f"No high-impact mutations remain")
@@ -2365,13 +2546,6 @@ class MutationHandler:
                 if validate_consequences and protein_generator is not None:
                     logger.debug(
                         f"Validating consequences for {len(high_impact_mutations)} mutations..."
-                    )
-
-                    # Get the current feature for context
-                    current_feature = (
-                        alt_features.loc[feature_idx]
-                        if feature_idx in alt_features.index
-                        else None
                     )
 
                     # Simple protein validation check

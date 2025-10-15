@@ -7,7 +7,7 @@
 # a configuration file for downstream processing.
 #
 # Usage:
-#   bash scripts/0_download_genome.sh [--force] [--skip-cosmic]
+#   bash 0_download_genome.sh [--force] [--skip-cosmic]
 #
 # Options:
 #   --force        Force re-download even if files exist

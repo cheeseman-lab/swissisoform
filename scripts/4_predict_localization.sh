@@ -6,7 +6,7 @@
 # It processes protein sequences in parallel across multiple datasets and modes.
 #
 # Usage:
-#   sbatch scripts/4_predict_localization.sh
+#   sbatch 4_predict_localization.sh
 #
 # Prerequisites:
 #   - 3_generate_proteins.sh must have been run
@@ -25,13 +25,24 @@
 
 set -e  # Exit on error
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# Source shared utilities (colors, helper functions)
+# Use relative path from scripts directory
+UTILS_PATH="$(dirname "$0")/utils.sh"
+if [ -f "$UTILS_PATH" ]; then
+    source "$UTILS_PATH"
+elif [ -f "utils.sh" ]; then
+    source "utils.sh"
+elif [ -f "scripts/utils.sh" ]; then
+    source "scripts/utils.sh"
+else
+    # Fallback: define colors inline
+    if [ -t 1 ]; then
+        RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+    else
+        RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; NC=''
+    fi
+fi
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   SwissIsoform Pipeline Step 4: Predict Localization         ║${NC}"

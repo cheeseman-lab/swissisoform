@@ -7,11 +7,15 @@
 # mutated variants.
 #
 # Usage:
-#   sbatch scripts/3_generate_proteins.sh
-#   sbatch --export=DATASET=hela scripts/3_generate_proteins.sh
+#   sbatch 3_generate_proteins.sh
+#   sbatch --export=DATASET=hela 3_generate_proteins.sh
+#   sbatch --export=DATASET=hela,SOURCES="clinvar|gnomad" 3_generate_proteins.sh
+#   sbatch --export=DATASET=hela,SOURCES="clinvar",IMPACT_TYPES="missense variant|nonsense variant" 3_generate_proteins.sh
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
+#   SOURCES - Mutation databases to use (default: clinvar, pipe-separated: clinvar|gnomad|cosmic)
+#   IMPACT_TYPES - Mutation types to include (default: "missense variant", pipe-separated)
 #
 # Prerequisites:
 #   - 1_cleanup_files.sh must have been run
@@ -23,22 +27,49 @@
 #SBATCH --partition=20                     # Partition name
 #SBATCH --array=1-8                        # 8 chunks for parallel processing
 #SBATCH --cpus-per-task=4                  # CPUs per task
-#SBATCH --mem=16G                          # Memory per task
+#SBATCH --mem=64G                          # Memory per task
 #SBATCH --time=24:00:00                    # Time limit (hrs:min:sec)
 #SBATCH --output=out/proteins-%A_%a.out    # %A = job ID, %a = array task ID
 
 set -e  # Exit on error
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# Source shared utilities (colors, helper functions)
+# Use relative path from scripts directory
+UTILS_PATH="$(dirname "$0")/utils.sh"
+if [ -f "$UTILS_PATH" ]; then
+    source "$UTILS_PATH"
+elif [ -f "utils.sh" ]; then
+    source "utils.sh"
+elif [ -f "scripts/utils.sh" ]; then
+    source "scripts/utils.sh"
+else
+    # Fallback: define colors inline
+    if [ -t 1 ]; then
+        RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+        BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+    else
+        RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; NC=''
+    fi
+fi
 
 # Dataset selection (default: hela)
 DATASET="${DATASET:-hela}"
+
+# Sources selection (default: clinvar)
+# Convert pipe-separated string to space-separated for command line
+if [ -z "$SOURCES" ]; then
+    SOURCES_ARGS=("clinvar")
+else
+    IFS='|' read -ra SOURCES_ARGS <<< "$SOURCES"
+fi
+
+# Impact types selection (default: missense variant only)
+# Convert pipe-separated string to space-separated for command line
+if [ -z "$IMPACT_TYPES" ]; then
+    IMPACT_TYPES_ARGS=("missense variant")
+else
+    IFS='|' read -ra IMPACT_TYPES_ARGS <<< "$IMPACT_TYPES"
+fi
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   SwissIsoform Pipeline Step 3: Generate Proteins            ║${NC}"
@@ -46,6 +77,8 @@ echo -e "${BLUE}╚════════════════════�
 echo ""
 echo "Array Task ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_MAX}"
 echo "Dataset: $DATASET"
+echo "Sources: ${SOURCES_ARGS[@]}"
+echo "Impact types: ${IMPACT_TYPES_ARGS[@]}"
 echo ""
 
 # ============================================================================
@@ -203,8 +236,8 @@ with open('$CONFIG_FILE') as f:
     config = yaml.safe_load(f)
 
 dataset_config = next(ds for ds in config['datasets'] if ds['name'] == '$DATASET')
-bed_file = f\"../data/ribosome_profiling/$DATASET\_isoforms_with_transcripts.bed\"
-gene_list = f\"../data/ribosome_profiling/$DATASET\_isoforms_gene_list.txt\"
+bed_file = f'../data/ribosome_profiling/${DATASET}_isoforms_with_transcripts.bed'
+gene_list = f'../data/ribosome_profiling/${DATASET}_isoforms_gene_list.txt'
 
 source_gtf_path = Path(dataset_config['source_gtf_path'])
 v47_gtf = source_gtf_path.parent / f\"{source_gtf_path.stem}.v47names.gtf\"
@@ -246,7 +279,7 @@ echo -e "${GREEN}✓${NC} Environment activated"
 
 echo ""
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  Processing Chunk ${SLURM_ARRAY_TASK_ID}                                           ║${NC}"
+echo -e "${BLUE}║  Processing Chunk ${SLURM_ARRAY_TASK_ID}                                          ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -281,8 +314,8 @@ echo "  Gene list: $GENE_COUNT genes"
 echo ""
 echo "Configuration:"
 echo "  ├─ Pre-validated mutations: $(basename $MUTATIONS_FILE)"
-echo "  ├─ Sources: clinvar"
-echo "  ├─ Impact types: missense variant"
+echo "  ├─ Sources: ${SOURCES_ARGS[@]}"
+echo "  ├─ Impact types: ${IMPACT_TYPES_ARGS[@]}"
 echo "  ├─ Length range: $MIN_LENGTH-$MAX_LENGTH amino acids"
 echo "  └─ Output format: $FORMAT"
 echo ""
@@ -295,12 +328,13 @@ python3 generate_proteins.py "$CHUNK_FILE" "$OUTPUT_DIR" \
   --genome "$GENOME_PATH" \
   --annotation "$ANNOTATION_PATH" \
   --bed "$TRUNCATIONS_PATH" \
-  --sources clinvar \
-  --impact-types "missense variant" \
+  --sources "${SOURCES_ARGS[@]}" \
+  --impact-types "${IMPACT_TYPES_ARGS[@]}" \
   --min-length "$MIN_LENGTH" \
   --max-length "$MAX_LENGTH" \
   --format "$FORMAT" \
-  --fast-mode
+  --fast-mode \
+  -v
 
 exit_code=$?
 
@@ -467,7 +501,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
         echo "  └─ Direct mutation application from step 2 results"
         echo ""
         echo -e "${BLUE}Next step:${NC}"
-        echo "  Run: sbatch --export=DATASET=${DATASET} 4_predict_localization.sh"
+        echo "  Run: sbatch --export=DATASET=${DATASET} scripts/4_predict_localization.sh"
         echo ""
 
         # Clean up chunk directories
