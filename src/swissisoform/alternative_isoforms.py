@@ -821,8 +821,15 @@ class AlternativeIsoform:
 
         return pd.DataFrame(translation_features)
 
-    def get_gene_list(self) -> List[str]:
-        """Get list of all genes in the dataset.
+    def get_gene_list(
+        self, required_categories: Optional[Set[str]] = None
+    ) -> List[str]:
+        """Get list of genes in the dataset, optionally filtered by required categories.
+
+        Args:
+            required_categories: If specified, only include genes that have at least one
+                               entry in at least one of these categories (e.g., {"Truncated", "Extended"}).
+                               If None, returns all genes.
 
         Returns:
             List[str]: List of gene names.
@@ -833,7 +840,15 @@ class AlternativeIsoform:
         if self.start_sites.empty:
             raise ValueError("No data loaded. Please load data first with load_bed().")
 
-        return sorted(self.start_sites["gene_name"].unique().tolist())
+        if required_categories is None:
+            return sorted(self.start_sites["gene_name"].unique().tolist())
+
+        # Filter to genes that have at least one entry in the required categories
+        filtered_data = self.start_sites[
+            self.start_sites["start_type"].isin(required_categories)
+        ]
+
+        return sorted(filtered_data["gene_name"].unique().tolist())
 
     def get_stats(self) -> Dict:
         """Get basic statistics about the loaded start sites.

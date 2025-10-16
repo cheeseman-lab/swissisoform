@@ -1164,6 +1164,53 @@ def simple_transcript_based_cleanup(
         logger.info(f"    ✓ Valid entries: {stats['valid_entries']}")
         logger.info(f"    ✓ Filtered by category: {stats['filtered_by_category']}")
 
+    # Step 3b: Filter out annotated-only transcripts
+    if verbose:
+        logger.info("\nStep 3b: Filtering out annotated-only transcripts...")
+
+    # Group entries by transcript to identify which transcripts only have "Annotated" category
+    transcript_categories = defaultdict(set)
+    for entry in entries:
+        transcript_categories[entry["transcript"]].add(entry["category"])
+
+    # Identify annotated-only transcripts (no alternative isoforms)
+    annotated_only_transcripts = {
+        transcript_id
+        for transcript_id, categories in transcript_categories.items()
+        if categories == {"Annotated"}
+    }
+
+    # Filter out all entries for annotated-only transcripts
+    filtered_entries = []
+    annotated_only_entries_removed = 0
+    annotated_only_genes_removed = set()
+
+    for entry in entries:
+        if entry["transcript"] in annotated_only_transcripts:
+            annotated_only_entries_removed += 1
+            # Track which genes are affected
+            if entry["transcript"] in transcript_info:
+                gene_name = transcript_info[entry["transcript"]]["gene_name"]
+                annotated_only_genes_removed.add(gene_name)
+        else:
+            filtered_entries.append(entry)
+
+    entries = filtered_entries
+
+    stats["annotated_only_transcripts_removed"] = len(annotated_only_transcripts)
+    stats["annotated_only_entries_removed"] = annotated_only_entries_removed
+    stats["annotated_only_genes_affected"] = len(annotated_only_genes_removed)
+    stats["annotated_only_transcript_examples"] = list(annotated_only_transcripts)[:10]
+
+    if verbose:
+        logger.info(
+            f"    ✓ Removed {len(annotated_only_transcripts)} annotated-only transcripts ({annotated_only_entries_removed} entries)"
+        )
+        logger.info(f"    ✓ Affected {len(annotated_only_genes_removed)} genes")
+        if annotated_only_transcripts:
+            examples = list(annotated_only_transcripts)[:3]
+            logger.info(f"    Examples: {', '.join(examples)}")
+
     # Step 4: Add missing canonical starts
     if verbose:
         logger.info("\nStep 4: Adding missing canonical starts...")
@@ -1531,6 +1578,9 @@ def simple_transcript_based_cleanup(
         logger.info(f"{'=' * 60}")
         logger.info(f"  Total entries processed: {stats['total_entries']}")
         logger.info(f"  Valid input entries: {stats['valid_entries']}")
+        logger.info(
+            f"  Annotated-only transcripts removed: {stats['annotated_only_transcripts_removed']} ({stats['annotated_only_entries_removed']} entries)"
+        )
         logger.info(f"  Canonical starts added: {stats['canonical_starts_added']}")
         logger.info(
             f"  Extended/Truncated entries removed (no annotated start): {stats['extended_truncated_removed']}"

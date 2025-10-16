@@ -27,6 +27,7 @@ NC='\033[0m' # No Color
 # Default settings
 FORCE_DOWNLOAD=false
 SKIP_COSMIC=false
+SYNC_MODE=false
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -39,12 +40,17 @@ while [[ $# -gt 0 ]]; do
             SKIP_COSMIC=true
             shift
             ;;
+        --sync)
+            SYNC_MODE=true
+            shift
+            ;;
         -h|--help)
-            echo "Usage: $0 [--force] [--skip-cosmic]"
+            echo "Usage: $0 [--force] [--skip-cosmic] [--sync]"
             echo ""
             echo "Options:"
             echo "  --force        Force re-download even if files exist"
             echo "  --skip-cosmic  Skip COSMIC database download"
+            echo "  --sync         Sync mode: read existing config and download missing files"
             echo "  -h, --help     Show this help message"
             exit 0
             ;;
@@ -57,11 +63,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║   SwissIsoform Pipeline Step 0: Interactive Genome Setup     ║${NC}"
+if [ "$SYNC_MODE" = true ]; then
+    echo -e "${BLUE}║   SwissIsoform Pipeline Step 0: Sync Mode                    ║${NC}"
+else
+    echo -e "${BLUE}║   SwissIsoform Pipeline Step 0: Interactive Genome Setup     ║${NC}"
+fi
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
-echo ""
-echo "This script will help you set up reference files for your datasets."
-echo "It will ask about your BED files and download only what you need."
 echo ""
 
 # Create data directories
@@ -71,6 +78,48 @@ mkdir -p ../data/mutation_data/cosmic_data
 mkdir -p ../data/ribosome_profiling
 echo -e "${GREEN}✓${NC} Directories created"
 echo ""
+
+# ============================================================================
+# Sync Mode: Read existing config and download missing files
+# ============================================================================
+
+if [ "$SYNC_MODE" = true ]; then
+    config_file="../data/ribosome_profiling/dataset_config.yaml"
+
+    if [ ! -f "$config_file" ]; then
+        echo -e "${RED}✗${NC} Config file not found: $config_file"
+        echo "Run without --sync to create initial configuration"
+        exit 1
+    fi
+
+    echo -e "${CYAN}Reading existing configuration...${NC}"
+    echo ""
+
+    # Parse YAML to extract GENCODE versions needed
+    declare -a needed_gencode_versions
+    while IFS= read -r line; do
+        if [[ $line =~ source_gtf:\ *\"gencode_v([0-9]+)\" ]] || [[ $line =~ source_gtf:\ *gencode_v([0-9]+) ]]; then
+            version="${BASH_REMATCH[1]}"
+            needed_gencode_versions+=("v${version}")
+        fi
+    done < "$config_file"
+
+    # Get unique versions
+    unique_versions=($(printf '%s\n' "${needed_gencode_versions[@]}" | sort -u))
+
+    echo -e "${GREEN}✓${NC} Found ${#unique_versions[@]} GENCODE version(s) in config:"
+    for version in "${unique_versions[@]}"; do
+        echo "  → GENCODE $version"
+    done
+    echo ""
+
+    # Skip interactive configuration, go straight to download
+    num_datasets=0  # Not used in sync mode
+
+else
+    echo "This script will help you set up reference files for your datasets."
+    echo "It will ask about your BED files and download only what you need."
+    echo ""
 
 # ============================================================================
 # Interactive Dataset Configuration
@@ -165,7 +214,8 @@ for ((i=1; i<=num_datasets; i++)); do
     echo "Source GENCODE version:"
     echo "  1. GENCODE v24 (2015, GRCh38.p5)"
     echo "  2. GENCODE v25 (2015, GRCh38.p7)"
-    read -p "Select version [1-2]: " gencode_selection
+    echo "  3. GENCODE v44 (2023, GRCh38.p14)"
+    read -p "Select version [1-3]: " gencode_selection
 
     case $gencode_selection in
         1)
@@ -177,6 +227,11 @@ for ((i=1; i<=num_datasets; i++)); do
             dataset_source_gtfs+=("gencode_v25")
             needed_gencode_versions+=("v25")
             echo -e "${GREEN}✓${NC} Source: GENCODE v25"
+            ;;
+        3)
+            dataset_source_gtfs+=("gencode_v44")
+            needed_gencode_versions+=("v44")
+            echo -e "${GREEN}✓${NC} Source: GENCODE v44"
             ;;
         *)
             echo -e "${YELLOW}⚠ Invalid selection, defaulting to v25${NC}"
@@ -206,12 +261,13 @@ cat > "$config_file" << 'EOF'
 #
 # This file describes your datasets and reference files.
 # Used by downstream scripts for standardization and cleanup.
+# NOTE: All paths are relative to the scripts/ directory
 
 genome:
   reference: "GRCh38.p7.genome.fa"
-  reference_path: "../genome_data/GRCh38.p7.genome.fa"
+  reference_path: "../data/genome_data/GRCh38.p7.genome.fa"
   target_standard: "gencode_v25"
-  target_gtf_path: "../genome_data/gencode.v25.annotation.gtf"
+  target_gtf_path: "../data/genome_data/gencode.v25.annotation.gtf"
 
 datasets:
 EOF
@@ -224,7 +280,7 @@ for ((i=0; i<num_datasets; i++)); do
     bed_file: "${dataset_bed_files[$i]}"
     id_type: "${dataset_id_types[$i]}"
     source_gtf: "${dataset_source_gtfs[$i]}"
-    source_gtf_path: "../genome_data/gencode.v${version_num}.annotation.gtf"
+    source_gtf_path: "../data/genome_data/gencode.v${version_num}.annotation.gtf"
 
 EOF
 done
@@ -243,6 +299,8 @@ for ((i=0; i<num_datasets; i++)); do
     echo "       Source: ${dataset_source_gtfs[$i]}"
 done
 echo ""
+
+fi  # End of sync mode check
 
 # ============================================================================
 # Download Reference Files

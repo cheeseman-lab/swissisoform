@@ -102,15 +102,25 @@ for dataset in config["datasets"]:
     # Generate gene list
     alt_isoforms = AlternativeIsoform()
     alt_isoforms.load_bed(output_bed_path)
-    gene_list = alt_isoforms.get_gene_list()
 
-    # Write gene list
+    # Filter gene list to only include genes with truncated or extended isoforms
+    # This excludes genes that only have Annotated + uORF entries
+    # Set required_categories to control which isoform types are included in analysis
+    required_categories = {"Truncated", "Extended"}
+    gene_list = alt_isoforms.get_gene_list(required_categories=required_categories)
+
+    # Write filtered gene list (for analysis)
     gene_list_path = f"../data/ribosome_profiling/{dataset_name}_isoforms_gene_list.txt"
     with open(gene_list_path, "w") as f:
         for gene in gene_list:
             f.write(gene + "\n")
 
-    all_results.append({"dataset": dataset_name, "genes": len(gene_list), **stats})
+    print(f"  {dataset_name}:")
+    print(f"    Gene list (Truncated/Extended only): {len(gene_list)} genes")
+
+    all_results.append(
+        {"dataset": dataset_name, "genes_filtered": len(gene_list), **stats}
+    )
 
 # Final summary
 print(f"\n{'=' * 60}")
@@ -120,7 +130,13 @@ print(f"{'=' * 60}")
 print(f"\nProcessed {len(all_results)} datasets:")
 for result in all_results:
     print(
-        f"  {result['dataset']}: {result['genes']:,} genes, {result['final_entries']:,} entries"
+        f"  {result['dataset']}: {result['genes_filtered']:,} genes (Truncated/Extended only), "
+        f"{result['final_entries']:,} entries"
     )
+
+print(
+    f"\nGene list filtering: Only genes with Truncated or Extended isoforms are included"
+)
+print(f"  Gene lists: <dataset>_isoforms_gene_list.txt")
 
 print(f"\nNext step: sbatch 2_analyze_mutations.sh")

@@ -2959,7 +2959,7 @@ class MutationHandler:
                 status = "success_with_errors"
                 error_msg = "; ".join(gene_errors[:3])  # Limit to first 3 errors
                 if len(gene_errors) > 3:
-                    error_msg += f" (+{len(gene_errors)-3} more)"
+                    error_msg += f" (+{len(gene_errors) - 3} more)"
             elif skipped_pairs > 0 and len(pair_results) == 0:
                 status = "all_pairs_failed"
                 error_msg = f"{skipped_pairs} pairs skipped"

@@ -58,21 +58,61 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 echo -e "${GREEN}✓${NC} dataset_config.yaml found"
 
+# Parse config to extract GTF files and datasets
+echo ""
+echo -e "${YELLOW}→${NC} Parsing configuration..."
+
+declare -a dataset_names
+declare -a bed_files
+declare -a gtf_files
+
+# Extract unique GTF files and dataset info from config
+while IFS= read -r line; do
+    # Extract dataset names
+    if [[ $line =~ name:\ *\"([^\"]+)\" ]] || [[ $line =~ name:\ *([a-zA-Z0-9_]+) ]]; then
+        dataset_name="${BASH_REMATCH[1]}"
+        dataset_names+=("$dataset_name")
+    fi
+
+    # Extract BED files
+    if [[ $line =~ bed_file:\ *\"([^\"]+)\" ]] || [[ $line =~ bed_file:\ *([^ ]+) ]]; then
+        bed_file="${BASH_REMATCH[1]}"
+        bed_files+=("$bed_file")
+    fi
+
+    # Extract GTF files
+    if [[ $line =~ source_gtf_path:\ *\"([^\"]+)\" ]] || [[ $line =~ source_gtf_path:\ *([^ ]+) ]]; then
+        gtf_path="${BASH_REMATCH[1]}"
+        # Convert relative path to absolute from genome_data directory
+        gtf_file=$(basename "$gtf_path")
+        gtf_files+=("$gtf_file")
+    fi
+done < "$CONFIG_FILE"
+
+# Get unique GTF files
+unique_gtfs=($(printf '%s\n' "${gtf_files[@]}" | sort -u))
+
+echo -e "${GREEN}✓${NC} Found ${#dataset_names[@]} dataset(s) and ${#unique_gtfs[@]} GTF file(s)"
+
 # Check for GTF files referenced in config
 echo ""
 echo -e "${YELLOW}→${NC} Checking genome files..."
-if [ -f "$GENOME_DIR/gencode.v25.annotation.gtf" ]; then
-    SIZE=$(du -h "$GENOME_DIR/gencode.v25.annotation.gtf" | cut -f1)
-    echo -e "${GREEN}✓${NC} gencode.v25.annotation.gtf (${SIZE})"
-else
-    echo -e "${YELLOW}⚠${NC} gencode.v25.annotation.gtf missing"
-fi
+missing_gtfs=false
+for gtf_file in "${unique_gtfs[@]}"; do
+    if [ -f "$GENOME_DIR/$gtf_file" ]; then
+        SIZE=$(du -h "$GENOME_DIR/$gtf_file" | cut -f1)
+        echo -e "${GREEN}✓${NC} $gtf_file (${SIZE})"
+    else
+        echo -e "${RED}✗${NC} $gtf_file missing"
+        missing_gtfs=true
+    fi
+done
 
-if [ -f "$GENOME_DIR/gencode.v24.annotation.gtf" ]; then
-    SIZE=$(du -h "$GENOME_DIR/gencode.v24.annotation.gtf" | cut -f1)
-    echo -e "${GREEN}✓${NC} gencode.v24.annotation.gtf (${SIZE})"
-else
-    echo -e "${YELLOW}⚠${NC} gencode.v24.annotation.gtf missing"
+if [ "$missing_gtfs" = true ]; then
+    echo ""
+    echo -e "${RED}Missing GTF files!${NC}"
+    echo "Run: bash 0_download_genome.sh --sync --skip-cosmic"
+    exit 1
 fi
 
 # Check for ribosome profiling BED files
@@ -82,13 +122,13 @@ mkdir -p "$RIBOPROF_DIR"  # Create directory if it doesn't exist
 
 missing_riboprof=false
 
-# Check for the new data files
-for file in "HELA_Ly2024.bed" "HFF_Chen2020.bed" "IPSC_Chen2020.bed"; do
-    if [ -f "$RIBOPROF_DIR/$file" ]; then
-        SIZE=$(du -h "$RIBOPROF_DIR/$file" | cut -f1)
-        echo -e "${GREEN}✓${NC} $file (${SIZE})"
+# Check for BED files from config
+for bed_file in "${bed_files[@]}"; do
+    if [ -f "$RIBOPROF_DIR/$bed_file" ]; then
+        SIZE=$(du -h "$RIBOPROF_DIR/$bed_file" | cut -f1)
+        echo -e "${GREEN}✓${NC} $bed_file (${SIZE})"
     else
-        echo -e "${RED}✗${NC} $file missing"
+        echo -e "${RED}✗${NC} $bed_file missing"
         missing_riboprof=true
     fi
 done
@@ -144,15 +184,13 @@ echo -e "${BLUE}║  Verification                                               
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# Parse datasets from config (simplified check)
-datasets=("hela" "hff" "ipsc")
-
+# Use parsed dataset names from config
 all_outputs_exist=true
 
 echo -e "${YELLOW}→${NC} Checking output files..."
 echo ""
 
-for dataset in "${datasets[@]}"; do
+for dataset in "${dataset_names[@]}"; do
     output_bed="$RIBOPROF_DIR/${dataset}_isoforms_with_transcripts.bed"
     gene_list="$RIBOPROF_DIR/${dataset}_isoforms_gene_list.txt"
 
