@@ -19,6 +19,8 @@ data/ribosome_profiling/*
 data/mutation_data/*
 !data/mutation_data/.gitkeep
 
+data/stop_codon_analysis/*
+
 # results
 results/*
 
