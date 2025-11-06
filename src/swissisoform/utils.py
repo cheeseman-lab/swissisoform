@@ -497,11 +497,13 @@ def save_isoform_level_results(
     ]
     column_order.extend(section2)
 
-    # SECTION 3: Per-Source Totals (3 columns)
+    # SECTION 3: Per-Source Totals (5 columns - includes allele/sample counts)
     section3 = [
         "count_clinvar",
         "count_gnomad",
+        "gnomad_allele_count",
         "count_cosmic",
+        "cosmic_sample_count",
     ]
     column_order.extend(section3)
 

@@ -939,6 +939,7 @@ class MutationHandler:
                 "sample_name": variant.get("SAMPLE_NAME", ""),
                 "cosmic_sample_id": variant.get("COSMIC_SAMPLE_ID", ""),
                 "cosmic_study_id": variant.get("COSMIC_STUDY_ID", ""),
+                "sample_count": variant.get("GENOME_SCREEN_SAMPLE_COUNT", 0),
                 "pubmed_pmid": variant.get("PUBMED_PMID", ""),
                 "somatic_status": variant.get("MUTATION_SOMATIC_STATUS", ""),
                 "zygosity": variant.get("MUTATION_ZYGOSITY", ""),
@@ -1069,6 +1070,7 @@ class MutationHandler:
                 "hgvsc",
                 "hgvsp",
                 "allele_frequency",
+                "allele_count",
                 "allele_count_hom",
                 "clinical_significance",
             ]
@@ -1080,7 +1082,7 @@ class MutationHandler:
                 )
                 # Add missing columns with default values
                 for col in missing_columns:
-                    if col in ["allele_frequency", "allele_count_hom"]:
+                    if col in ["allele_frequency", "allele_count", "allele_count_hom"]:
                         df[col] = None
                     elif col == "source":
                         df[col] = "Custom"
@@ -1319,7 +1321,9 @@ class MutationHandler:
             "hgvsc",
             "hgvsp",
             "allele_frequency",
+            "allele_count",
             "allele_count_hom",
+            "sample_count",
             "clinical_significance",
         ]
         return pd.DataFrame(columns=standard_columns)
@@ -1341,7 +1345,9 @@ class MutationHandler:
                 "hgvsc": variants_df["hgvsc"].apply(self._standardize_hgvsc),
                 "hgvsp": variants_df["hgvsp"].apply(self._standardize_hgvsp),
                 "allele_frequency": variants_df["allele_frequency"],
+                "allele_count": variants_df["allele_count"],
                 "allele_count_hom": variants_df["allele_count_hom"],
+                "sample_count": None,
                 "clinical_significance": None,
                 "chromosome": variants_df["chromosome"]
                 if "chromosome" in variants_df.columns
@@ -1476,7 +1482,9 @@ class MutationHandler:
                 "hgvsc": variants_df["standardized_hgvsc"],
                 "hgvsp": variants_df["standardized_hgvsp"],
                 "allele_frequency": None,
+                "allele_count": None,
                 "allele_count_hom": None,
+                "sample_count": None,
                 "clinical_significance": variants_df["clinical_significance"],
                 "chromosome": variants_df["chromosome"],
                 "gene_name": variants_df["gene_name"],
@@ -1499,7 +1507,9 @@ class MutationHandler:
                 "hgvsc": variants_df["hgvs_coding"].apply(self._standardize_hgvsc),
                 "hgvsp": variants_df["hgvs_protein"].apply(self._standardize_hgvsp),
                 "allele_frequency": None,  # COSMIC doesn't have population frequency
+                "allele_count": None,  # COSMIC doesn't have this field
                 "allele_count_hom": None,  # COSMIC doesn't have this field
+                "sample_count": variants_df["sample_count"] if "sample_count" in variants_df.columns else None,
                 "clinical_significance": None,  # COSMIC doesn't have clinical significance
                 "chromosome": variants_df["chromosome"],
                 "gene_name": variants_df["gene_name"],
@@ -2713,6 +2723,10 @@ class MutationHandler:
                             mutation_categories[category_key] = category_count
 
                     # Count by source and by source×impact
+                    # Also sum allele counts (gnomAD) and sample counts (COSMIC)
+                    gnomad_allele_count_sum = 0
+                    cosmic_sample_count_sum = 0
+
                     if "source" in validated_mutations.columns:
                         for source in validated_mutations["source"].unique():
                             if pd.notna(source):
@@ -2722,6 +2736,14 @@ class MutationHandler:
                                 ]
                                 source_key = f"mutations_{str(source).lower()}"
                                 source_categories[source_key] = len(source_mutations)
+
+                                # Sum allele counts for gnomAD
+                                if str(source).lower() == "gnomad" and "allele_count" in source_mutations.columns:
+                                    gnomad_allele_count_sum = source_mutations["allele_count"].fillna(0).sum()
+
+                                # Sum sample counts for COSMIC
+                                if str(source).lower() == "cosmic" and "sample_count" in source_mutations.columns:
+                                    cosmic_sample_count_sum = source_mutations["sample_count"].fillna(0).sum()
 
                                 # Count by source×impact (e.g., clinvar_missense_variant)
                                 for impact in source_mutations[impact_column].unique():
@@ -2797,6 +2819,8 @@ class MutationHandler:
                     "variant_ids": ",".join(variant_ids) if variant_ids else "",
                     "mutations_in_alt_start_site": 0,
                     "alt_start_site_variant_ids": "",
+                    "gnomad_allele_count": int(gnomad_allele_count_sum),
+                    "cosmic_sample_count": int(cosmic_sample_count_sum),
                     **mutation_categories,
                     **source_categories,  # Add per-source counts
                     **source_impact_categories,  # Add source×impact matrix (e.g., clinvar_missense_variant)
@@ -2979,6 +3003,12 @@ class MutationHandler:
                 "mutations_filtered": total_mutations,
                 "mutations_in_alt_start_sites": sum(
                     pair.get("mutations_in_alt_start_site", 0) for pair in pair_results
+                ),
+                "gnomad_allele_count": sum(
+                    pair.get("gnomad_allele_count", 0) for pair in pair_results
+                ),
+                "cosmic_sample_count": sum(
+                    pair.get("cosmic_sample_count", 0) for pair in pair_results
                 ),
                 "pair_results": pair_results,
                 "consequences_validated": validate_consequences,
