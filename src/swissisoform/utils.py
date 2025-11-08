@@ -445,10 +445,10 @@ def save_isoform_level_results(
     # Rename columns for clarity
     column_renames = {
         "mutation_count_total": "total_mutations",
-        "mutations_in_alt_start_site": "mutations_in_alt_start",
         "mutation_sources": "source_databases",
         "variant_ids": "all_variant_ids",
         "alt_start_site_variant_ids": "alt_start_variant_ids",
+        "canonical_start_site_variant_ids": "canonical_start_variant_ids",
     }
 
     # Rename mutation count columns for clarity
@@ -485,7 +485,7 @@ def save_isoform_level_results(
     column_order.extend(section1)
 
     # SECTION 2: Summary Counts ONLY (no IDs - those are redundant)
-    # Order: missense, nonsense, frameshift, inframe_deletion, inframe_insertion, synonymous, mutations_in_alt_start
+    # Order: missense, nonsense, frameshift, inframe_deletion, inframe_insertion, synonymous, start site counts
     section2 = [
         "count_missense_variant",
         "count_nonsense_variant",
@@ -493,7 +493,10 @@ def save_isoform_level_results(
         "count_inframe_deletion",
         "count_inframe_insertion",
         "count_synonymous_variant",
-        "mutations_in_alt_start",
+        "count_in_alt_start_site",
+        "count_in_canonical_start_site",
+        "alternative_start_loss_count",
+        "canonical_start_loss_count",
     ]
     column_order.extend(section2)
 
@@ -528,9 +531,14 @@ def save_isoform_level_results(
             section4.extend([count_col, ids_col])
     column_order.extend(section4)
 
-    # SECTION 5: Special Columns (2 columns)
+    # SECTION 5: Special Columns - start codons, variant IDs (all_variant_ids last)
     section5 = [
+        "alternative_start_codon",
+        "canonical_start_codon",
         "alt_start_variant_ids",
+        "alternative_start_loss_variant_ids",
+        "canonical_start_variant_ids",
+        "canonical_start_loss_variant_ids",
         "all_variant_ids",
     ]
     column_order.extend(section5)
@@ -834,11 +842,19 @@ def print_translation_summary(
             logger.info(f"  FASTA format saved to: {fasta_file.name}")
 
 
-def load_pre_validated_variants(mutations_file: str) -> Dict[str, Set[str]]:
+def load_pre_validated_variants(
+    mutations_file: str,
+    sources: Optional[List[str]] = None,
+    impact_types: Optional[List[str]] = None,
+) -> Dict[str, Set[str]]:
     """Load pre-validated variant IDs from step 2 results.
 
     Args:
         mutations_file (str): Path to isoform_level_results.csv
+        sources (Optional[List[str]]): List of sources to include (e.g., ['clinvar', 'gnomad'])
+                                       If None, includes all sources.
+        impact_types (Optional[List[str]]): List of impact types to include (e.g., ['missense variant'])
+                                            If None, includes all impact types.
 
     Returns:
         Dict[str, Set[str]]: Dictionary mapping gene_name -> set of variant IDs
@@ -854,22 +870,33 @@ def load_pre_validated_variants(mutations_file: str) -> Dict[str, Set[str]]:
 
     logger.info(f"Found {len(mutations_df)} mutation records")
 
-    # Build list of source×impact ID columns dynamically
-    # After Task 2, we use source-specific columns instead of summary columns
-    variant_id_columns = []
-    sources = ["clinvar", "gnomad", "cosmic"]
-    impacts = [
-        "missense_variant",
-        "nonsense_variant",
-        "frameshift_variant",
-        "inframe_deletion",
-        "inframe_insertion",
-        "synonymous_variant",
-    ]
+    # Set defaults if not specified
+    if sources is None:
+        sources = ["clinvar", "gnomad", "cosmic"]
+    if impact_types is None:
+        impact_types = [
+            "missense variant",
+            "nonsense variant",
+            "frameshift variant",
+            "inframe deletion",
+            "inframe insertion",
+            "synonymous variant",
+        ]
 
+    # Convert impact types to column name format (spaces to underscores)
+    impacts = [impact.replace(" ", "_") for impact in impact_types]
+
+    logger.info(f"Filtering to sources: {sources}")
+    logger.info(f"Filtering to impact types: {impact_types}")
+
+    # Build list of source×impact ID columns dynamically
+    # Only include columns for the specified sources and impact types
+    variant_id_columns = []
     for source in sources:
         for impact in impacts:
             variant_id_columns.append(f"ids_{source}_{impact}")
+
+    logger.debug(f"Reading columns: {variant_id_columns}")
 
     # Extract variant IDs by gene
     pre_validated_variants = {}

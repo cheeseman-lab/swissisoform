@@ -20,6 +20,42 @@ from .config import Config
 logger = logging.getLogger(__name__)
 
 
+def is_start_codon_loss(ref_codon: str, alt_codon: str) -> bool:
+    """Check if a codon change represents a start codon loss.
+
+    Start loss rules:
+    1. AUG → anything else = START LOSS
+    2. CUG/UUG/GUG/ACG → anything except (CUG/UUG/GUG/ACG or AUG) = START LOSS
+
+    Args:
+        ref_codon: Reference codon (RNA notation: AUG, CUG, etc.)
+        alt_codon: Alternate codon after mutation (RNA notation)
+
+    Returns:
+        True if this is a start codon loss, False otherwise
+    """
+    if not ref_codon or not alt_codon:
+        return False
+
+    ref_codon = ref_codon.upper()
+    alt_codon = alt_codon.upper()
+
+    # Define start codons
+    canonical_start = "AUG"
+    alternative_starts = {"CUG", "UUG", "GUG", "ACG"}
+    all_starts = alternative_starts | {canonical_start}
+
+    # Rule 1: AUG → anything else is always a loss
+    if ref_codon == canonical_start and alt_codon != canonical_start:
+        return True
+
+    # Rule 2: Alternative start → non-start (excluding AUG) is a loss
+    if ref_codon in alternative_starts and alt_codon not in all_starts:
+        return True
+
+    return False
+
+
 class MutationHandler:
     """Handles variant data from multiple mutation databases.
 
@@ -1959,6 +1995,7 @@ class MutationHandler:
 
                 # Check if mutation is in alternative start site
                 in_alt_start_site = False
+                is_alt_start_loss = False
                 alt_start_note = ""
 
                 if current_feature is not None:
@@ -1984,6 +2021,39 @@ class MutationHandler:
                             if codon_start <= genomic_pos <= codon_end:
                                 in_alt_start_site = True
                                 validation_stats["alt_start_site_mutations"] += 1
+
+                                # Check for start codon loss (SNVs only for now)
+                                if len(ref_allele) == 1 and len(alt_allele) == 1 and self.genome_handler:
+                                    try:
+                                        # Get reference codon from genome (3 bases)
+                                        if strand == "+":
+                                            ref_codon_seq = self.genome_handler.get_sequence(chrom, codon_start, codon_end)
+                                        else:
+                                            ref_codon_seq = self.genome_handler.get_sequence(chrom, codon_start, codon_end)
+                                            # Reverse complement for minus strand
+                                            complement = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
+                                            ref_codon_seq = ''.join(complement.get(b, b) for b in reversed(ref_codon_seq))
+
+                                        # Convert DNA to RNA
+                                        ref_codon_rna = ref_codon_seq.replace('T', 'U')
+
+                                        # Compute variant position within codon
+                                        if strand == "+":
+                                            variant_pos_in_codon = genomic_pos - codon_start
+                                        else:
+                                            variant_pos_in_codon = codon_end - genomic_pos
+
+                                        # Get mutant codon
+                                        mutant_codon_rna = get_mutant_codon(ref_codon_seq, variant_pos_in_codon, ref_allele, alt_allele, strand)
+
+                                        # Check if this is a start loss
+                                        is_alt_start_loss = is_start_codon_loss(ref_codon_rna, mutant_codon_rna)
+
+                                        if is_alt_start_loss:
+                                            logger.info(f"  Start loss detected: {ref_codon_rna} → {mutant_codon_rna}")
+                                    except Exception as e:
+                                        logger.debug(f"Could not compute start loss for variant: {e}")
+
                                 alt_start_note = (
                                     f" (in alternative start site {start_codon})"
                                 )
@@ -1995,6 +2065,35 @@ class MutationHandler:
                             logger.debug(
                                 f"Warning: Invalid alt_start_pos '{alt_start_pos}'"
                             )
+
+                # Helper function to compute mutant codon
+                def get_mutant_codon(ref_codon_seq: str, variant_pos_in_codon: int, ref_base: str, alt_base: str, strand: str) -> str:
+                    """Compute the mutant codon sequence.
+
+                    Args:
+                        ref_codon_seq: Reference codon sequence (DNA, 3 bases)
+                        variant_pos_in_codon: Position within codon (0, 1, or 2)
+                        ref_base: Reference base from variant
+                        alt_base: Alternate base from variant
+                        strand: Strand ('+' or '-')
+
+                    Returns:
+                        Mutant codon sequence (RNA notation)
+                    """
+                    if len(ref_codon_seq) != 3:
+                        return ""
+
+                    # Convert to list for mutation
+                    mutant_codon = list(ref_codon_seq.upper())
+
+                    # Apply mutation
+                    mutant_codon[variant_pos_in_codon] = alt_base.upper()
+                    mutant_codon_seq = ''.join(mutant_codon)
+
+                    # Convert DNA to RNA (T→U)
+                    mutant_codon_rna = mutant_codon_seq.replace('T', 'U')
+
+                    return mutant_codon_rna
 
                 # Use fast prediction
                 validated_impact = await protein_generator.predict_consequence_fast(
@@ -2016,7 +2115,85 @@ class MutationHandler:
                     validated_impact_with_note
                 )
                 validated_mutation["in_alt_start_site"] = in_alt_start_site
+                validated_mutation["is_alt_start_loss"] = is_alt_start_loss
                 validated_mutation["alt_start_note"] = alt_start_note
+
+                # Check if mutation is in canonical start site
+                in_canonical_start_site = False
+                is_canonical_start_loss = False
+                canonical_start_codon_extracted = ""
+                canonical_start_note = ""
+
+                if current_feature is not None:
+                    # Extract canonical start position from feature
+                    canonical_start_pos = current_feature.get("canonical_start_pos", None)
+                    strand = current_feature.get("strand", "+")
+
+                    if canonical_start_pos is not None:
+                        try:
+                            canonical_start_pos = int(canonical_start_pos)
+
+                            # Handle strand-specific codon coordinates
+                            if strand == "+":
+                                codon_start = canonical_start_pos
+                                codon_end = canonical_start_pos + 2
+                            else:  # strand == "-"
+                                codon_start = canonical_start_pos - 2
+                                codon_end = canonical_start_pos
+
+                            if codon_start <= genomic_pos <= codon_end:
+                                in_canonical_start_site = True
+                                validation_stats["canonical_start_site_mutations"] = (
+                                    validation_stats.get("canonical_start_site_mutations", 0) + 1
+                                )
+
+                                # Check for start codon loss (SNVs only for now)
+                                if len(ref_allele) == 1 and len(alt_allele) == 1 and self.genome_handler:
+                                    try:
+                                        # Get reference codon from genome (3 bases)
+                                        if strand == "+":
+                                            ref_codon_seq = self.genome_handler.get_sequence(chrom, codon_start, codon_end)
+                                        else:
+                                            ref_codon_seq = self.genome_handler.get_sequence(chrom, codon_start, codon_end)
+                                            # Reverse complement for minus strand
+                                            complement = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G'}
+                                            ref_codon_seq = ''.join(complement.get(b, b) for b in reversed(ref_codon_seq))
+
+                                        # Convert DNA to RNA and store
+                                        ref_codon_rna = ref_codon_seq.replace('T', 'U')
+                                        canonical_start_codon_extracted = ref_codon_rna
+
+                                        # Compute variant position within codon
+                                        if strand == "+":
+                                            variant_pos_in_codon = genomic_pos - codon_start
+                                        else:
+                                            variant_pos_in_codon = codon_end - genomic_pos
+
+                                        # Get mutant codon
+                                        mutant_codon_rna = get_mutant_codon(ref_codon_seq, variant_pos_in_codon, ref_allele, alt_allele, strand)
+
+                                        # Check if this is a start loss
+                                        is_canonical_start_loss = is_start_codon_loss(ref_codon_rna, mutant_codon_rna)
+
+                                        if is_canonical_start_loss:
+                                            logger.info(f"  Canonical start loss detected: {ref_codon_rna} → {mutant_codon_rna}")
+                                    except Exception as e:
+                                        logger.debug(f"Could not compute canonical start loss for variant: {e}")
+
+                                canonical_start_note = " (in canonical start site)"
+                                logger.info(
+                                    f"  {source}: {variant_id} | {variant_display} | Canonical start site"
+                                )
+
+                        except (ValueError, TypeError):
+                            logger.debug(
+                                f"Warning: Invalid canonical_start_pos '{canonical_start_pos}'"
+                            )
+
+                validated_mutation["in_canonical_start_site"] = in_canonical_start_site
+                validated_mutation["is_canonical_start_loss"] = is_canonical_start_loss
+                validated_mutation["canonical_start_codon_extracted"] = canonical_start_codon_extracted
+                validated_mutation["canonical_start_note"] = canonical_start_note
                 validated_mutation["validation_method"] = "fast_codon_analysis"
                 validated_mutation["validation_successful"] = True
 
@@ -2068,6 +2245,8 @@ class MutationHandler:
                 validated_mutation["impact_validated_with_note"] = "validation_failed"
                 validated_mutation["in_alt_start_site"] = False
                 validated_mutation["alt_start_note"] = ""
+                validated_mutation["in_canonical_start_site"] = False
+                validated_mutation["canonical_start_note"] = ""
                 validated_mutation["validation_method"] = "fast_codon_analysis"
                 validated_mutation["validation_successful"] = False
                 validated_mutation["validation_error"] = str(e)
@@ -2357,6 +2536,18 @@ class MutationHandler:
                             "mutation_count_total": 0,
                             "mutation_sources": "",  # NEW
                             "variant_ids": "",
+                            "mutations_in_alt_start_site": 0,
+                            "alt_start_site_variant_ids": "",
+                            "mutations_in_canonical_start_site": 0,
+                            "canonical_start_site_variant_ids": "",
+                            "alternative_start_codon": "",
+                            "canonical_start_codon": "AUG",
+                            "alternative_start_loss_count": 0,
+                            "alternative_start_loss_variant_ids": "",
+                            "canonical_start_loss_count": 0,
+                            "canonical_start_loss_variant_ids": "",
+                            "gnomad_allele_count": 0,
+                            "cosmic_sample_count": 0,
                             **mutation_categories,
                             **source_categories,  # NEW
                         }
@@ -2445,6 +2636,18 @@ class MutationHandler:
                             "mutation_count_total": 0,
                             "mutation_sources": "",  # NEW
                             "variant_ids": "",
+                            "mutations_in_alt_start_site": 0,
+                            "alt_start_site_variant_ids": "",
+                            "mutations_in_canonical_start_site": 0,
+                            "canonical_start_site_variant_ids": "",
+                            "alternative_start_codon": "",
+                            "canonical_start_codon": "AUG",
+                            "alternative_start_loss_count": 0,
+                            "alternative_start_loss_variant_ids": "",
+                            "canonical_start_loss_count": 0,
+                            "canonical_start_loss_variant_ids": "",
+                            "gnomad_allele_count": 0,
+                            "cosmic_sample_count": 0,
                             **mutation_categories,
                             **source_categories,  # NEW
                         }
@@ -2819,6 +3022,14 @@ class MutationHandler:
                     "variant_ids": ",".join(variant_ids) if variant_ids else "",
                     "mutations_in_alt_start_site": 0,
                     "alt_start_site_variant_ids": "",
+                    "mutations_in_canonical_start_site": 0,
+                    "canonical_start_site_variant_ids": "",
+                    "alternative_start_codon": "",
+                    "canonical_start_codon": "AUG",
+                    "alternative_start_loss_count": 0,
+                    "alternative_start_loss_variant_ids": "",
+                    "canonical_start_loss_count": 0,
+                    "canonical_start_loss_variant_ids": "",
                     "gnomad_allele_count": int(gnomad_allele_count_sum),
                     "cosmic_sample_count": int(cosmic_sample_count_sum),
                     **mutation_categories,
@@ -2855,6 +3066,112 @@ class MutationHandler:
                             pair_result["alt_start_site_variant_ids"] = (
                                 ",".join(alt_start_ids) if alt_start_ids else ""
                             )
+
+                        # Extract alternative start codon
+                        if current_feature is not None and not alt_start_mutations.empty:
+                            alt_codon = current_feature.get("start_codon", "")
+                            pair_result["alternative_start_codon"] = alt_codon
+
+                        # Check for alternative start losses
+                        if "is_alt_start_loss" in validated_mutations.columns:
+                            alt_start_loss_mutations = validated_mutations[
+                                (validated_mutations["in_alt_start_site"] == True) &
+                                (validated_mutations["is_alt_start_loss"] == True)
+                            ]
+                            pair_result["alternative_start_loss_count"] = len(alt_start_loss_mutations)
+
+                            if (
+                                not alt_start_loss_mutations.empty
+                                and "variant_id" in alt_start_loss_mutations.columns
+                            ):
+                                alt_start_loss_ids = (
+                                    alt_start_loss_mutations["variant_id"]
+                                    .dropna()
+                                    .unique()
+                                    .tolist()
+                                )
+                                alt_start_loss_ids = [
+                                    str(id).strip()
+                                    for id in alt_start_loss_ids
+                                    if str(id).strip()
+                                ]
+                                pair_result["alternative_start_loss_variant_ids"] = (
+                                    ",".join(alt_start_loss_ids) if alt_start_loss_ids else ""
+                                )
+
+                                # Log start losses
+                                if alt_start_loss_ids:
+                                    logger.info(f"Alternative start codon loss: {alt_codon} → variant(s), count={len(alt_start_loss_ids)}, IDs={','.join(alt_start_loss_ids[:3])}{'...' if len(alt_start_loss_ids) > 3 else ''}")
+
+                    # Check for canonical start site mutations
+                    if "in_canonical_start_site" in validated_mutations.columns:
+                        canonical_start_mutations = validated_mutations[
+                            validated_mutations["in_canonical_start_site"] == True
+                        ]
+                        pair_result["mutations_in_canonical_start_site"] = len(
+                            canonical_start_mutations
+                        )
+
+                        if (
+                            not canonical_start_mutations.empty
+                            and "variant_id" in canonical_start_mutations.columns
+                        ):
+                            canonical_start_ids = (
+                                canonical_start_mutations["variant_id"]
+                                .dropna()
+                                .unique()
+                                .tolist()
+                            )
+                            canonical_start_ids = [
+                                str(id).strip()
+                                for id in canonical_start_ids
+                                if str(id).strip()
+                            ]
+                            pair_result["canonical_start_site_variant_ids"] = (
+                                ",".join(canonical_start_ids) if canonical_start_ids else ""
+                            )
+
+                        # Extract canonical start codon if available
+                        if (
+                            not canonical_start_mutations.empty
+                            and "canonical_start_codon_extracted" in canonical_start_mutations.columns
+                        ):
+                            # Get first non-empty extracted codon
+                            extracted_codons = canonical_start_mutations["canonical_start_codon_extracted"].dropna()
+                            extracted_codons = extracted_codons[extracted_codons != ""]
+                            if not extracted_codons.empty:
+                                pair_result["canonical_start_codon"] = extracted_codons.iloc[0]
+
+                        # Check for canonical start losses
+                        if "is_canonical_start_loss" in validated_mutations.columns:
+                            canonical_start_loss_mutations = validated_mutations[
+                                (validated_mutations["in_canonical_start_site"] == True) &
+                                (validated_mutations["is_canonical_start_loss"] == True)
+                            ]
+                            pair_result["canonical_start_loss_count"] = len(canonical_start_loss_mutations)
+
+                            if (
+                                not canonical_start_loss_mutations.empty
+                                and "variant_id" in canonical_start_loss_mutations.columns
+                            ):
+                                canonical_start_loss_ids = (
+                                    canonical_start_loss_mutations["variant_id"]
+                                    .dropna()
+                                    .unique()
+                                    .tolist()
+                                )
+                                canonical_start_loss_ids = [
+                                    str(id).strip()
+                                    for id in canonical_start_loss_ids
+                                    if str(id).strip()
+                                ]
+                                pair_result["canonical_start_loss_variant_ids"] = (
+                                    ",".join(canonical_start_loss_ids) if canonical_start_loss_ids else ""
+                                )
+
+                                # Log start losses
+                                if canonical_start_loss_ids:
+                                    logger.info(f"Canonical start codon loss: AUG → variant(s), count={len(canonical_start_loss_ids)}, IDs={','.join(canonical_start_loss_ids[:3])}{'...' if len(canonical_start_loss_ids) > 3 else ''}")
 
                     # Original validation metrics (if they exist)
                     if "consequence_matches" in validated_mutations.columns:
