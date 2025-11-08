@@ -846,7 +846,7 @@ def load_pre_validated_variants(
     mutations_file: str,
     sources: Optional[List[str]] = None,
     impact_types: Optional[List[str]] = None,
-) -> Dict[str, Set[str]]:
+) -> Dict[Tuple[str, str], Set[str]]:
     """Load pre-validated variant IDs from step 2 results.
 
     Args:
@@ -857,7 +857,7 @@ def load_pre_validated_variants(
                                             If None, includes all impact types.
 
     Returns:
-        Dict[str, Set[str]]: Dictionary mapping gene_name -> set of variant IDs
+        Dict[Tuple[str, str], Set[str]]: Dictionary mapping (gene_name, feature_id) -> set of variant IDs
     """
     logger.info(f"Loading pre-validated variant IDs from {mutations_file}")
 
@@ -874,14 +874,7 @@ def load_pre_validated_variants(
     if sources is None:
         sources = ["clinvar", "gnomad", "cosmic"]
     if impact_types is None:
-        impact_types = [
-            "missense variant",
-            "nonsense variant",
-            "frameshift variant",
-            "inframe deletion",
-            "inframe insertion",
-            "synonymous variant",
-        ]
+        impact_types = ["missense variant"]
 
     # Convert impact types to column name format (spaces to underscores)
     impacts = [impact.replace(" ", "_") for impact in impact_types]
@@ -898,17 +891,20 @@ def load_pre_validated_variants(
 
     logger.debug(f"Reading columns: {variant_id_columns}")
 
-    # Extract variant IDs by gene
+    # Extract variant IDs by gene and feature
     pre_validated_variants = {}
     total_variant_ids = 0
 
     for _, row in mutations_df.iterrows():
         gene_name = row.get("gene_name", "")
-        if not gene_name:
+        feature_id = row.get("feature_id", "")
+        if not gene_name or not feature_id:
             continue
 
-        if gene_name not in pre_validated_variants:
-            pre_validated_variants[gene_name] = set()
+        # Use (gene_name, feature_id) as key to keep variants separate per feature
+        key = (gene_name, feature_id)
+        if key not in pre_validated_variants:
+            pre_validated_variants[key] = set()
 
         # Collect variant IDs from all impact type columns
         for col in variant_id_columns:
@@ -917,28 +913,28 @@ def load_pre_validated_variants(
                 variant_ids = [
                     vid.strip() for vid in str(row[col]).split(",") if vid.strip()
                 ]
-                pre_validated_variants[gene_name].update(variant_ids)
+                pre_validated_variants[key].update(variant_ids)
                 total_variant_ids += len(variant_ids)
 
-    genes_with_variants = len([g for g in pre_validated_variants.values() if g])
+    features_with_variants = len([f for f in pre_validated_variants.values() if f])
     logger.info(
-        f"Loaded {total_variant_ids} pre-validated variant IDs across {genes_with_variants} genes"
+        f"Loaded {total_variant_ids} pre-validated variant IDs across {features_with_variants} features"
     )
 
-    # Print summary by gene (top 10)
-    gene_counts = [
-        (gene, len(variants))
-        for gene, variants in pre_validated_variants.items()
+    # Print summary by feature (top 10)
+    feature_counts = [
+        (key, len(variants))
+        for key, variants in pre_validated_variants.items()
         if variants
     ]
-    gene_counts.sort(key=lambda x: x[1], reverse=True)
+    feature_counts.sort(key=lambda x: x[1], reverse=True)
 
-    if gene_counts:
-        logger.info("Top genes by variant count:")
-        for gene, count in gene_counts[:10]:
-            logger.info(f"  {gene}: {count} variants")
-        if len(gene_counts) > 10:
-            logger.info(f"  ... and {len(gene_counts) - 10} more genes")
+    if feature_counts:
+        logger.info("Top features by variant count:")
+        for (gene, feature), count in feature_counts[:10]:
+            logger.info(f"  {gene} ({feature}): {count} variants")
+        if len(feature_counts) > 10:
+            logger.info(f"  ... and {len(feature_counts) - 10} more features")
 
     return pre_validated_variants
 

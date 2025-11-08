@@ -148,8 +148,11 @@ async def main(
     )
 
     # Load pre-validated variant IDs
+    # Filter by sources and impact_types at CSV load time
     logger.info(f"Loading pre-validated variant IDs from {mutations_file}...")
-    pre_validated_variants = load_pre_validated_variants(mutations_file)
+    pre_validated_variants = load_pre_validated_variants(
+        mutations_file, sources=sources, impact_types=impact_types
+    )
 
     # Read gene list
     logger.info(f"Reading gene list from {gene_list_path}")

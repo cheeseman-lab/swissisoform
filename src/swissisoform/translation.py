@@ -1301,6 +1301,7 @@ class AlternativeProteinGenerator:
         end: int,
         sources: List[str] = None,
         impact_types: List[str] = None,
+        use_prevalidated_mode: bool = False,
     ) -> pd.DataFrame:
         """Get filtered, deduplicated single BP mutations within a specific genomic region.
 
@@ -1310,6 +1311,9 @@ class AlternativeProteinGenerator:
             end (int): Region end position.
             sources (List[str], optional): List of mutation sources to include.
             impact_types (List[str], optional): List of impact types to include.
+                                                Ignored if use_prevalidated_mode=True.
+            use_prevalidated_mode (bool): If True, skip impact_types filtering.
+                                         Pre-validated IDs will be used for filtering instead.
 
         Returns:
             pd.DataFrame: Filtered and deduplicated DataFrame of mutations.
@@ -1323,7 +1327,7 @@ class AlternativeProteinGenerator:
         # Set defaults
         if sources is None:
             sources = ["clinvar"]
-        if impact_types is None:
+        if impact_types is None and not use_prevalidated_mode:
             impact_types = ["missense variant"]
 
         # Create region features for mutation handler
@@ -1344,30 +1348,54 @@ class AlternativeProteinGenerator:
         )
 
         if mutations is None or mutations.empty:
-            self._debug_print(f"No mutations found in region")
+            logger.debug(f"No mutations found in region {start}-{end}")
             return pd.DataFrame()
 
-        # Filter to user-specified impact types
-        mutations = mutations[mutations["impact"].isin(impact_types)].copy()
+        initial_count = len(mutations)
+        logger.debug(
+            f"Fetched {initial_count} mutations from mutation handler for region {start}-{end}"
+        )
 
-        if mutations.empty:
-            self._debug_print(
-                f"No mutations with specified impact types: {impact_types}"
+        # Filter to user-specified impact types ONLY if not using pre-validated mode
+        # In pre-validated mode, impact_types filtering happened at CSV load time
+        if not use_prevalidated_mode:
+            mutations = mutations[mutations["impact"].isin(impact_types)].copy()
+
+            if mutations.empty:
+                logger.debug(
+                    f"No mutations with specified impact types: {impact_types}. Started with {initial_count} mutations."
+                )
+                return pd.DataFrame()
+
+            after_impact_filter = len(mutations)
+            logger.debug(
+                f"After impact type filtering ({impact_types}): {after_impact_filter}/{initial_count} mutations"
             )
-            return pd.DataFrame()
+        else:
+            logger.debug(
+                f"Pre-validated mode: skipping impact_types filtering (will use pre-validated IDs instead)"
+            )
 
         # Filter to only single BP changes using validation
         # valid_mask = mutations.apply(self._validate_single_bp_variant, axis=1)
         # mutations = mutations[valid_mask].copy()
 
         if mutations.empty:
-            self._debug_print(f"No valid single BP variants found")
+            logger.debug(f"No valid single BP variants found")
             return pd.DataFrame()
 
         # Deduplicate by genomic coordinates
+        before_dedup = len(mutations)
         mutations = self._deduplicate_mutations(mutations)
+        after_dedup = len(mutations)
 
-        self._debug_print(f"Found {len(mutations)} variants")
+        logger.debug(
+            f"After deduplication: {after_dedup}/{before_dedup} mutations (removed {before_dedup - after_dedup} duplicates)"
+        )
+        logger.info(
+            f"Found {len(mutations)} variants in region {start}-{end} after filtering"
+        )
+
         return mutations
 
     def _calculate_aa_difference(
@@ -1456,40 +1484,70 @@ class AlternativeProteinGenerator:
             if include_mutations and self.mutation_handler:
                 # Get mutations in this alternative region
                 feature_info = pair["feature_info"]
+
+                # Use pre-validated mode when pre-validated variants are provided
+                # In this mode, impact_types filtering is skipped (it already happened at CSV load time)
+                use_prevalidated = pre_validated_variants is not None
+
                 mutations = await self._get_mutations_in_region(
                     gene_name=gene_name,
                     start=feature_info["start"],
                     end=feature_info["end"],
                     sources=sources,
-                    impact_types=impact_types
-                    if pre_validated_variants is None
-                    else None,
+                    impact_types=impact_types,
+                    use_prevalidated_mode=use_prevalidated,
                 )
 
                 # Filter to only pre-validated variants if provided
+                # Use (gene_name, feature_id) as lookup key to get feature-specific variants
+                feature_key = (gene_name, pair["feature_id"])
                 if (
                     not mutations.empty
                     and pre_validated_variants
-                    and gene_name in pre_validated_variants
+                    and feature_key in pre_validated_variants
                 ):
-                    pre_validated_ids = pre_validated_variants[gene_name]
+                    before_prevalidated_filter = len(mutations)
+                    pre_validated_ids = pre_validated_variants[feature_key]
+                    logger.debug(
+                        f"Pre-validated variant set for {gene_name} ({pair['feature_id']}) contains {len(pre_validated_ids)} variants"
+                    )
+                    logger.debug(
+                        f"Sample pre-validated IDs: {list(pre_validated_ids)[:5]}"
+                    )
+
                     mutations = mutations[
                         mutations["variant_id"].isin(pre_validated_ids)
                     ].copy()
-                    self._debug_print(
-                        f"Filtered to {len(mutations)} pre-validated mutations"
+
+                    logger.info(
+                        f"Pre-validated filter: {len(mutations)}/{before_prevalidated_filter} mutations match pre-validated set "
+                        f"(filtered out {before_prevalidated_filter - len(mutations)})"
                     )
+                    if len(mutations) < len(pre_validated_ids):
+                        logger.warning(
+                            f"Only {len(mutations)} out of {len(pre_validated_ids)} pre-validated variants "
+                            f"were found in this region. Missing {len(pre_validated_ids) - len(mutations)} variants. "
+                            f"This may be due to impact_type filtering or region boundaries."
+                        )
 
                 if not mutations.empty:
-                    self._debug_print(
-                        f"Found {len(mutations)} mutations in alternative region"
+                    logger.info(
+                        f"Processing {len(mutations)} mutations for {gene_name} {pair['feature_id']}"
                     )
 
+                    successful_mutations = 0
+                    failed_mutations = 0
+                    synonymous_mutations = 0
+
                     # Process each mutation
-                    for _, mutation in mutations.iterrows():
+                    for counter, (mut_idx, mutation) in enumerate(
+                        mutations.iterrows(), 1
+                    ):
                         try:
                             variant_id = mutation.get("variant_id", "unknown")
-                            logger.debug(f"Processing variant: {variant_id}")
+                            logger.debug(
+                                f"[{counter}/{len(mutations)}] Processing variant: {variant_id}"
+                            )
                             # Extract mutation data
                             genomic_pos = int(mutation["position"])
                             ref_allele = str(mutation["reference"]).upper()
@@ -1557,20 +1615,34 @@ class AlternativeProteinGenerator:
                                 enhanced_pair["alternative_mutations"].append(
                                     mutation_result
                                 )
+                                successful_mutations += 1
                                 mode = (
                                     "pre-validated" if skip_validation else "validated"
                                 )
-                                self._debug_print(
-                                    f"Successfully created {sequence_type} mutation variant ({mode}) with AA change: {mutation_result_data.get('aa_change', 'N/A')}"
+                                logger.debug(
+                                    f"✓ Successfully created {sequence_type} mutation variant ({mode}) with AA change: {mutation_result_data.get('aa_change', 'N/A')}"
                                 )
                             else:
-                                self._debug_print(
-                                    f"Mutation at {genomic_pos} did not result in protein change (synonymous or failed)"
+                                failed_mutations += 1
+                                logger.debug(
+                                    f"✗ Mutation {variant_id} at {genomic_pos} did not result in protein change. Error code: {error_code}"
                                 )
+                                if error_code:
+                                    synonymous_mutations += 1
 
                         except Exception as e:
-                            self._debug_print(f"Error creating mutation variant: {e}")
+                            failed_mutations += 1
+                            logger.debug(
+                                f"✗ Error creating mutation variant {variant_id}: {e}"
+                            )
                             continue
+
+                    # Summary for this pair
+                    logger.info(
+                        f"Mutation processing complete for {pair['feature_id']}: "
+                        f"{successful_mutations} successful, {failed_mutations} failed "
+                        f"({synonymous_mutations} synonymous)"
+                    )
                 else:
                     self._debug_print("No valid mutations found in this region")
 
