@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Fast protein sequence generator using pre-validated mutation IDs from step 2.
+"""Protein sequence generator using pre-validated missense variants from mutation detection.
 
-This script loads pre-validated variant IDs from step 2 results and passes them
-to the existing AlternativeProteinGenerator methods to enable fast mode processing.
+This script processes pre-validated missense variants from step 2 (mutation detection)
+to generate mutated protein sequences. It works in pre-validated mode only.
 
 Arguments:
     gene_list (str): Path to file containing gene names.
     output_dir (str): Directory to save output files.
-    --mutations-file (str): Path to isoform_level_results.csv from step 2.
+    --mutations-file (str): Path to isoform_level_results.csv from step 2 (required, must have bed_name column).
     --genome (str): Path to genome FASTA file.
     --annotation (str): Path to genome annotation GTF file.
     --bed (str): Path to alternative isoform BED file.
+    --sources (str): Mutation sources to use (default: gnomad).
     --min-length (int): Minimum protein length to include.
     --max-length (int): Maximum protein length to include.
     --format (str): Output format: fasta, csv, or fasta,csv.
-    --fast-mode (bool): Enable fast mode (skip validation).
+
+Note:
+    Only missense variants are processed. The mutations CSV must contain a bed_name column
+    and ids_<source>_missense_variant columns.
 """
 
 import asyncio
@@ -86,27 +90,26 @@ async def main(
     annotation_path: str,
     bed_path: str,
     sources: List[str] = None,
-    impact_types: List[str] = None,
     min_length: int = 10,
     max_length: int = 100000,
     output_format: str = "fasta,csv",
-    fast_mode: bool = True,
 ):
-    """Main function for fast protein sequence generation.
+    """Main function for protein sequence generation using pre-validated missense variants.
+
+    This function processes pre-validated missense variants only, as identified during
+    mutation detection (step 2).
 
     Args:
         gene_list_path (str): Path to file containing gene names
         output_dir (str): Directory to save output files
-        mutations_file (str): Path to isoform_level_results.csv from step 2
+        mutations_file (str): Path to isoform_level_results.csv from step 2 (must have bed_name column)
         genome_path (str): Path to genome FASTA file
         annotation_path (str): Path to genome annotation GTF file
         bed_path (str): Path to alternative isoform BED file
-        sources (List[str]): List of mutation sources to query
-        impact_types (List[str]): List of impact types to include
+        sources (List[str]): List of mutation sources to query (default: gnomad)
         min_length (int): Minimum protein length to include
         max_length (int): Maximum protein length to include
         output_format (str): Output format specification
-        fast_mode (bool): Enable fast mode
 
     Returns:
         None
@@ -114,8 +117,6 @@ async def main(
     # Set defaults
     if sources is None:
         sources = ["clinvar"]
-    if impact_types is None:
-        impact_types = ["missense variant", "nonsense variant", "frameshift variant"]
 
     start_time = datetime.now()
     logger.info(
@@ -147,11 +148,10 @@ async def main(
         debug=False,
     )
 
-    # Load pre-validated variant IDs
-    # Filter by sources and impact_types at CSV load time
+    # Load pre-validated missense variant IDs
     logger.info(f"Loading pre-validated variant IDs from {mutations_file}...")
     pre_validated_variants = load_pre_validated_variants(
-        mutations_file, sources=sources, impact_types=impact_types
+        mutations_file, sources=sources
     )
 
     # Read gene list
@@ -161,10 +161,9 @@ async def main(
     total_genes = len(gene_names)
     logger.info(f"Starting fast protein sequence generation for {total_genes} genes")
     logger.info(f"Configuration:")
-    logger.info(f"  Fast mode: {fast_mode} (skip validation)")
     logger.info(f"  Pre-validated variants file: {mutations_file}")
     logger.info(f"  Sources: {', '.join(sources)}")
-    logger.info(f"  Impact types: {', '.join(impact_types)}")
+    logger.info(f"  Impact types: missense variant (only)")
     logger.info(f"  Length range: {min_length}-{max_length} amino acids")
     logger.info(f"  Output format: {output_format}")
 
@@ -180,18 +179,22 @@ async def main(
         max_length=max_length,
     )
 
-    # Generate mutations dataset using pre-validated variants
-    logger.info("2. Generating mutations dataset with pre-validated variants...")
-    mutations_dataset = await protein_generator.create_protein_sequence_dataset_with_mutations(
-        gene_list=gene_names,
-        include_mutations=True,
-        sources=sources,
-        impact_types=impact_types,
-        output_format=output_format,
-        min_length=min_length,
-        max_length=max_length,
-        pre_validated_variants=pre_validated_variants,  # Pass pre-validated variants
-        skip_validation=fast_mode,  # Enable fast mode
+    # Generate mutations dataset using pre-validated missense variants
+    logger.info(
+        "2. Generating mutations dataset with pre-validated missense variants..."
+    )
+    mutations_dataset = (
+        await protein_generator.create_protein_sequence_dataset_with_mutations(
+            gene_list=gene_names,
+            include_mutations=True,
+            sources=sources,
+            impact_types=["missense variant"],
+            output_format=output_format,
+            min_length=min_length,
+            max_length=max_length,
+            pre_validated_variants=pre_validated_variants,
+            skip_validation=True,  # Always use pre-validated mode
+        )
     )
 
     # Final summary
@@ -252,20 +255,9 @@ if __name__ == "__main__":
         help="Mutation sources to query (space-separated, default: clinvar)",
     )
     parser.add_argument(
-        "--impact-types",
-        nargs="+",
-        default=["missense variant", "nonsense variant", "frameshift variant"],
-        help="Mutation impact types to include (space-separated)",
-    )
-    parser.add_argument(
         "--format",
         default="fasta,csv",
         help="Output format: fasta, csv, or fasta,csv",
-    )
-    parser.add_argument(
-        "--fast-mode",
-        action="store_true",
-        help="Enable fast mode using pre-validated mutations",
     )
     parser.add_argument(
         "--verbose",
@@ -321,6 +313,7 @@ if __name__ == "__main__":
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Run protein generation (pre-validated missense variants only)
     asyncio.run(
         main(
             gene_list_path=args.gene_list,
@@ -330,10 +323,8 @@ if __name__ == "__main__":
             annotation_path=args.annotation,
             bed_path=args.bed,
             sources=args.sources,
-            impact_types=args.impact_types,
             min_length=args.min_length,
             max_length=args.max_length,
             output_format=args.format,
-            fast_mode=args.fast_mode,
         )
     )

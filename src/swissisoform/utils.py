@@ -846,21 +846,22 @@ def print_translation_summary(
 def load_pre_validated_variants(
     mutations_file: str,
     sources: Optional[List[str]] = None,
-    impact_types: Optional[List[str]] = None,
-) -> Dict[Tuple[str, str], Set[str]]:
-    """Load pre-validated variant IDs from step 2 results.
+) -> Dict[str, Set[str]]:
+    """Load pre-validated missense variant IDs from mutation detection results.
+
+    This function is designed to work ONLY with pre-validated variants from mutation
+    detection CSV output. Only missense variants are loaded since other variant types
+    are not supported for protein translation.
 
     Args:
-        mutations_file (str): Path to isoform_level_results.csv
-        sources (Optional[List[str]]): List of sources to include (e.g., ['clinvar', 'gnomad'])
-                                       If None, includes all sources.
-        impact_types (Optional[List[str]]): List of impact types to include (e.g., ['missense variant'])
-                                            If None, includes all impact types.
+        mutations_file (str): Path to isoform_level_results.csv from mutation detection
+        sources (Optional[List[str]]): List of sources to include (e.g., ['clinvar', 'gnomad', 'cosmic'])
+                                       Default: ['clinvar']
 
     Returns:
-        Dict[Tuple[str, str], Set[str]]: Dictionary mapping (gene_name, feature_id) -> set of variant IDs
+        Dict[str, Set[str]]: Dictionary mapping bed_name -> set of missense variant IDs
     """
-    logger.info(f"Loading pre-validated variant IDs from {mutations_file}")
+    logger.info(f"Loading pre-validated missense variant IDs from {mutations_file}")
 
     # Read the mutation results
     mutations_df = pd.read_csv(mutations_file)
@@ -869,73 +870,42 @@ def load_pre_validated_variants(
         logger.warning("No mutation records found in results file")
         return {}
 
-    logger.info(f"Found {len(mutations_df)} mutation records")
-
-    # Set defaults if not specified
+    # Default to ClinVar
     if sources is None:
-        sources = ["clinvar", "gnomad", "cosmic"]
-    if impact_types is None:
-        impact_types = ["missense variant"]
+        sources = ["clinvar"]
 
-    # Convert impact types to column name format (spaces to underscores)
-    impacts = [impact.replace(" ", "_") for impact in impact_types]
+    logger.info(f"Loading missense variants from sources: {', '.join(sources)}")
 
-    logger.info(f"Filtering to sources: {sources}")
-    logger.info(f"Filtering to impact types: {impact_types}")
+    # Build list of missense variant ID columns for specified sources
+    variant_id_columns = [f"ids_{source}_missense_variant" for source in sources]
 
-    # Build list of source×impact ID columns dynamically
-    # Only include columns for the specified sources and impact types
-    variant_id_columns = []
-    for source in sources:
-        for impact in impacts:
-            variant_id_columns.append(f"ids_{source}_{impact}")
-
-    logger.debug(f"Reading columns: {variant_id_columns}")
-
-    # Extract variant IDs by gene and feature
+    # Extract variant IDs by bed_name
     pre_validated_variants = {}
     total_variant_ids = 0
 
     for _, row in mutations_df.iterrows():
-        gene_name = row.get("gene_name", "")
         bed_name = row.get("bed_name", "")
-        if not gene_name or not bed_name:
+        if not bed_name:
             continue
 
-        # Use (gene_name, bed_name) as key to keep variants separate per feature
-        key = (gene_name, bed_name)
-        if key not in pre_validated_variants:
-            pre_validated_variants[key] = set()
+        # Use bed_name as key (already unique)
+        if bed_name not in pre_validated_variants:
+            pre_validated_variants[bed_name] = set()
 
-        # Collect variant IDs from all impact type columns
+        # Collect variant IDs from missense variant columns
         for col in variant_id_columns:
             if col in row and pd.notna(row[col]) and str(row[col]).strip():
                 # Parse comma-separated variant IDs
                 variant_ids = [
                     vid.strip() for vid in str(row[col]).split(",") if vid.strip()
                 ]
-                pre_validated_variants[key].update(variant_ids)
+                pre_validated_variants[bed_name].update(variant_ids)
                 total_variant_ids += len(variant_ids)
 
     features_with_variants = len([f for f in pre_validated_variants.values() if f])
     logger.info(
-        f"Loaded {total_variant_ids} pre-validated variant IDs across {features_with_variants} features"
+        f"Loaded {total_variant_ids} missense variant IDs across {features_with_variants} features"
     )
-
-    # Print summary by feature (top 10)
-    feature_counts = [
-        (key, len(variants))
-        for key, variants in pre_validated_variants.items()
-        if variants
-    ]
-    feature_counts.sort(key=lambda x: x[1], reverse=True)
-
-    if feature_counts:
-        logger.info("Top features by variant count:")
-        for (gene, feature), count in feature_counts[:10]:
-            logger.info(f"  {gene} ({feature}): {count} variants")
-        if len(feature_counts) > 10:
-            logger.info(f"  ... and {len(feature_counts) - 10} more features")
 
     return pre_validated_variants
 

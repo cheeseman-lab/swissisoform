@@ -1485,57 +1485,35 @@ class AlternativeProteinGenerator:
                 # Get mutations in this alternative region
                 feature_info = pair["feature_info"]
 
-                # Use pre-validated mode when pre-validated variants are provided
-                # In this mode, impact_types filtering is skipped (it already happened at CSV load time)
-                use_prevalidated = pre_validated_variants is not None
+                # Fetch mutations from region and filter to pre-validated missense variants
+                bed_name = feature_info.get("name", pair["feature_id"])
 
+                if (
+                    pre_validated_variants is None
+                    or bed_name not in pre_validated_variants
+                ):
+                    logger.warning(
+                        f"No pre-validated variants for {bed_name} - skipping"
+                    )
+                    continue
+
+                pre_validated_ids = pre_validated_variants[bed_name]
+
+                # Fetch mutations from region (using pre-validated mode)
                 mutations = await self._get_mutations_in_region(
                     gene_name=gene_name,
                     start=feature_info["start"],
                     end=feature_info["end"],
                     sources=sources,
-                    impact_types=impact_types,
-                    use_prevalidated_mode=use_prevalidated,
+                    impact_types=["missense variant"],  # Only missense variants
+                    use_prevalidated_mode=True,
                 )
 
-                # Filter to only pre-validated variants if provided
-                # Use bed_name directly from the feature for lookup
-                bed_name = feature_info.get("name", pair["feature_id"])
-                feature_key = (gene_name, bed_name)
-                logger.debug(
-                    f"Using feature_key for pre-validated lookup: {feature_key}"
-                )
-                logger.debug(
-                    f"pre_validated_variants has key? {feature_key in pre_validated_variants if pre_validated_variants else 'N/A - no pre_validated_variants'}"
-                )
-                if (
-                    not mutations.empty
-                    and pre_validated_variants
-                    and feature_key in pre_validated_variants
-                ):
-                    before_prevalidated_filter = len(mutations)
-                    pre_validated_ids = pre_validated_variants[feature_key]
-                    logger.debug(
-                        f"Pre-validated variant set for {gene_name} ({pair['feature_id']}) contains {len(pre_validated_ids)} variants"
-                    )
-                    logger.debug(
-                        f"Sample pre-validated IDs: {list(pre_validated_ids)[:5]}"
-                    )
-
+                # Filter to pre-validated IDs only
+                if not mutations.empty:
                     mutations = mutations[
                         mutations["variant_id"].isin(pre_validated_ids)
                     ].copy()
-
-                    logger.info(
-                        f"Pre-validated filter: {len(mutations)}/{before_prevalidated_filter} mutations match pre-validated set "
-                        f"(filtered out {before_prevalidated_filter - len(mutations)})"
-                    )
-                    if len(mutations) < len(pre_validated_ids):
-                        logger.warning(
-                            f"Only {len(mutations)} out of {len(pre_validated_ids)} pre-validated variants "
-                            f"were found in this region. Missing {len(pre_validated_ids) - len(mutations)} variants. "
-                            f"This may be due to impact_type filtering or region boundaries."
-                        )
 
                 if not mutations.empty:
                     logger.info(

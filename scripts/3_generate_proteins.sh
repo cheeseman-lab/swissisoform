@@ -3,19 +3,21 @@
 # SwissIsoform Pipeline Step 3: Generate Proteins (Parallel)
 #
 # This script generates protein sequences using chunked parallel processing with
-# pre-validated mutations. It processes both canonical/alternative pairs and
-# mutated variants.
+# pre-validated missense mutations from step 2. It processes both canonical/alternative
+# pairs and mutated variants.
 #
 # Usage:
 #   sbatch 3_generate_proteins.sh
 #   sbatch --export=DATASET=hela 3_generate_proteins.sh
-#   sbatch --export=DATASET=hela,SOURCES="clinvar|gnomad" 3_generate_proteins.sh
-#   sbatch --export=DATASET=hela,SOURCES="clinvar",IMPACT_TYPES="missense variant|nonsense variant" 3_generate_proteins.sh
+#   sbatch --export=DATASET=hela,SOURCES="gnomad|cosmic" 3_generate_proteins.sh
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
 #   SOURCES - Mutation databases to use (default: clinvar, pipe-separated: clinvar|gnomad|cosmic)
-#   IMPACT_TYPES - Mutation types to include (default: "missense variant", pipe-separated)
+#
+# Note:
+#   Only missense variants are processed. The mutation CSV from step 2 must contain
+#   a bed_name column and ids_<source>_missense_variant columns.
 #
 # Prerequisites:
 #   - 1_cleanup_files.sh must have been run
@@ -63,14 +65,6 @@ else
     IFS='|' read -ra SOURCES_ARGS <<< "$SOURCES"
 fi
 
-# Impact types selection (default: missense variant only)
-# Convert pipe-separated string to space-separated for command line
-if [ -z "$IMPACT_TYPES" ]; then
-    IMPACT_TYPES_ARGS=("missense variant")
-else
-    IFS='|' read -ra IMPACT_TYPES_ARGS <<< "$IMPACT_TYPES"
-fi
-
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   SwissIsoform Pipeline Step 3: Generate Proteins            ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
@@ -78,7 +72,7 @@ echo ""
 echo "Array Task ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_MAX}"
 echo "Dataset: $DATASET"
 echo "Sources: ${SOURCES_ARGS[@]}"
-echo "Impact types: ${IMPACT_TYPES_ARGS[@]}"
+echo "Impact types: missense variant (only)"
 echo ""
 
 # ============================================================================
@@ -315,7 +309,7 @@ echo ""
 echo "Configuration:"
 echo "  ├─ Pre-validated mutations: $(basename $MUTATIONS_FILE)"
 echo "  ├─ Sources: ${SOURCES_ARGS[@]}"
-echo "  ├─ Impact types: ${IMPACT_TYPES_ARGS[@]}"
+echo "  ├─ Impact types: missense variant (only)"
 echo "  ├─ Length range: $MIN_LENGTH-$MAX_LENGTH amino acids"
 echo "  └─ Output format: $FORMAT"
 echo ""
@@ -329,11 +323,9 @@ python3 generate_proteins.py "$CHUNK_FILE" "$OUTPUT_DIR" \
   --annotation "$ANNOTATION_PATH" \
   --bed "$TRUNCATIONS_PATH" \
   --sources "${SOURCES_ARGS[@]}" \
-  --impact-types "${IMPACT_TYPES_ARGS[@]}" \
   --min-length "$MIN_LENGTH" \
   --max-length "$MAX_LENGTH" \
   --format "$FORMAT" \
-  --fast-mode \
   -v
 
 exit_code=$?
