@@ -95,6 +95,7 @@ async def main(
     sources: List[str] = None,
     impact_types: List[str] = None,
     top_n_per_type: Optional[int] = None,
+    custom_parquet_path: Optional[str] = None,
 ):
     """Main function to process genes for mutation analysis.
 
@@ -108,6 +109,7 @@ async def main(
         sources (Optional[List[str]]): List of mutation sources to query.
         impact_types (Optional[List[str]]): List of mutation impact types to include.
         top_n_per_type (Optional[int]): Number of top alternative start sites to keep per type per transcript (None = all).
+        custom_parquet_path (Optional[str]): Path to custom parquet file with mutation data.
 
     Returns:
         None
@@ -191,6 +193,7 @@ async def main(
             impact_types=impact_types_dict,
             sources=sources,
             top_n_per_type_per_transcript=top_n_per_type,
+            custom_parquet_path=custom_parquet_path,
         )
         results.append(result)
 
@@ -240,6 +243,11 @@ if __name__ == "__main__":
         nargs="+",
         default=["clinvar"],
         help="Mutation sources to query (space-separated)",
+    )
+    parser.add_argument(
+        "--custom-parquet",
+        default=None,
+        help="Path to custom parquet file with mutation data (optional)",
     )
     parser.add_argument(
         "--impact-types",
@@ -318,5 +326,6 @@ if __name__ == "__main__":
             sources=args.sources,
             impact_types=args.impact_types,
             top_n_per_type=args.top_n_per_type,
+            custom_parquet_path=args.custom_parquet,
         )
     )

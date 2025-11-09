@@ -2400,7 +2400,7 @@ class MutationHandler:
         impact_types: Optional[Dict[str, List[str]]] = None,
         custom_parquet_path: Optional[str] = None,
         sources: Optional[List[str]] = None,
-        top_n_per_type_per_transcript: Optional[int] = 1,
+        top_n_per_type_per_transcript: Optional[int] = None,
         validate_consequences: bool = True,
     ) -> Dict:
         """Comprehensive mutation analysis for a gene with transcript-alternative feature pairs.

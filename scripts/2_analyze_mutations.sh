@@ -11,11 +11,15 @@
 #   sbatch --export=DATASET=hela 2_analyze_mutations.sh
 #   sbatch --export=DATASET=hela,SOURCES="clinvar|cosmic" 2_analyze_mutations.sh
 #   sbatch --export=DATASET=hela,SOURCES="clinvar",IMPACT_TYPES="missense variant|nonsense variant" 2_analyze_mutations.sh
+#   sbatch --export=DATASET=hela,CUSTOM_PARQUET="/path/to/custom_mutations.parquet" 2_analyze_mutations.sh
+#   sbatch --export=DATASET=hela,OUTPUT_NAME="hela_bch",CUSTOM_PARQUET="/path/to/bch.parquet" 2_analyze_mutations.sh
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
+#   OUTPUT_NAME - Custom output folder name (default: same as DATASET)
 #   SOURCES - Mutation databases to query (default: clinvar, pipe-separated: clinvar|gnomad|cosmic)
 #   IMPACT_TYPES - Mutation types to analyze (default: all types, pipe-separated)
+#   CUSTOM_PARQUET - Path to custom parquet file with mutation data (optional)
 #
 # Prerequisites:
 #   - 1_cleanup_files.sh must have been run
@@ -55,6 +59,9 @@ fi
 # Dataset selection (default: hela)
 DATASET="${DATASET:-hela}"
 
+# Output name (default: same as DATASET, but can be overridden for custom output folders)
+OUTPUT_NAME="${OUTPUT_NAME:-$DATASET}"
+
 # Sources selection (default: clinvar)
 # Convert pipe-separated string to space-separated for command line
 if [ -z "$SOURCES" ]; then
@@ -71,14 +78,21 @@ else
     IFS='|' read -ra IMPACT_TYPES_ARGS <<< "$IMPACT_TYPES"
 fi
 
+# Custom parquet file (optional)
+CUSTOM_PARQUET="${CUSTOM_PARQUET:-}"
+
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   SwissIsoform Pipeline Step 2: Analyze Mutations            ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo "Array Task ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_MAX}"
 echo "Dataset: $DATASET"
+echo "Output name: $OUTPUT_NAME"
 echo "Sources: ${SOURCES_ARGS[@]}"
 echo "Impact types: ${IMPACT_TYPES_ARGS[@]}"
+if [ -n "$CUSTOM_PARQUET" ]; then
+    echo "Custom parquet: $CUSTOM_PARQUET"
+fi
 echo ""
 
 # ============================================================================
@@ -207,7 +221,7 @@ print(bed_file, gtf_file, gene_list)
     # Create results directory structure
     echo ""
     echo -e "${YELLOW}→${NC} Creating output directories..."
-    mkdir -p "../results/${DATASET}/mutations"
+    mkdir -p "../results/${OUTPUT_NAME}/mutations"
     mkdir -p ../results/temp/chunks
     echo -e "${GREEN}✓${NC} Directories created"
 else
@@ -272,7 +286,7 @@ echo ""
 GENOME_PATH="../data/genome_data/GRCh38.p7.genome.fa"
 ANNOTATION_PATH="$DATASET_GTF"
 TRUNCATIONS_PATH="$DATASET_BED"
-OUTPUT_DIR="../results/${DATASET}/mutations/chunk_${SLURM_ARRAY_TASK_ID}"
+OUTPUT_DIR="../results/${OUTPUT_NAME}/mutations/chunk_${SLURM_ARRAY_TASK_ID}"
 CHUNK_ID=$SLURM_ARRAY_TASK_ID
 TOTAL_CHUNKS=8
 
@@ -295,14 +309,26 @@ echo "  Gene list: $GENE_COUNT genes"
 echo ""
 
 # Run analysis on the gene chunk
-python3 analyze_mutations.py "$CHUNK_FILE" "$OUTPUT_DIR" \
-  --genome "$GENOME_PATH" \
-  --annotation "$ANNOTATION_PATH" \
-  --bed "$TRUNCATIONS_PATH" \
-  --sources "${SOURCES_ARGS[@]}" \
-  --impact-types "${IMPACT_TYPES_ARGS[@]}" \
-  --visualize \
-  -v
+if [ -n "$CUSTOM_PARQUET" ]; then
+    python3 analyze_mutations.py "$CHUNK_FILE" "$OUTPUT_DIR" \
+      --genome "$GENOME_PATH" \
+      --annotation "$ANNOTATION_PATH" \
+      --bed "$TRUNCATIONS_PATH" \
+      --sources "${SOURCES_ARGS[@]}" \
+      --custom-parquet "$CUSTOM_PARQUET" \
+      --impact-types "${IMPACT_TYPES_ARGS[@]}" \
+      --visualize \
+      -v
+else
+    python3 analyze_mutations.py "$CHUNK_FILE" "$OUTPUT_DIR" \
+      --genome "$GENOME_PATH" \
+      --annotation "$ANNOTATION_PATH" \
+      --bed "$TRUNCATIONS_PATH" \
+      --sources "${SOURCES_ARGS[@]}" \
+      --impact-types "${IMPACT_TYPES_ARGS[@]}" \
+      --visualize \
+      -v
+fi
 
 echo ""
 echo -e "${GREEN}✓${NC} Completed ${DATASET} dataset chunk ${CHUNK_ID}"
@@ -327,14 +353,14 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo ""
 
     # Create final output directory
-    FINAL_OUTPUT_DIR="../results/${DATASET}/mutations"
+    FINAL_OUTPUT_DIR="../results/${OUTPUT_NAME}/mutations"
     mkdir -p "$FINAL_OUTPUT_DIR"
 
     # Merge gene level results
     echo -e "${YELLOW}→${NC} Merging gene level results..."
     first_file=true
     for i in {1..8}; do
-        chunk_file="../results/${DATASET}/mutations/chunk_${i}/gene_level_results.csv"
+        chunk_file="../results/${OUTPUT_NAME}/mutations/chunk_${i}/gene_level_results.csv"
         if [ -f "$chunk_file" ]; then
             if [ "$first_file" = true ]; then
                 cp "$chunk_file" "$FINAL_OUTPUT_DIR/gene_level_results.csv"
@@ -356,7 +382,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo -e "${YELLOW}→${NC} Merging isoform level results..."
     first_file=true
     for i in {1..8}; do
-        chunk_file="../results/${DATASET}/mutations/chunk_${i}/isoform_level_results.csv"
+        chunk_file="../results/${OUTPUT_NAME}/mutations/chunk_${i}/isoform_level_results.csv"
         if [ -f "$chunk_file" ]; then
             if [ "$first_file" = true ]; then
                 cp "$chunk_file" "$FINAL_OUTPUT_DIR/isoform_level_results.csv"
@@ -377,7 +403,7 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo ""
     echo -e "${YELLOW}→${NC} Merging visualization files..."
     for i in {1..8}; do
-        chunk_viz_dir="../results/${DATASET}/mutations/chunk_${i}"
+        chunk_viz_dir="../results/${OUTPUT_NAME}/mutations/chunk_${i}"
         if [ -d "$chunk_viz_dir" ]; then
             find "$chunk_viz_dir" -maxdepth 1 -type d -not -name "chunk_*" -exec mv {} "$FINAL_OUTPUT_DIR/" \; 2>/dev/null || true
         fi
@@ -391,8 +417,8 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo ""
 
     expected_files=(
-        "../results/${DATASET}/mutations/gene_level_results.csv"
-        "../results/${DATASET}/mutations/isoform_level_results.csv"
+        "../results/${OUTPUT_NAME}/mutations/gene_level_results.csv"
+        "../results/${OUTPUT_NAME}/mutations/isoform_level_results.csv"
     )
 
     all_files_present=true
@@ -408,8 +434,8 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
 
     # Check for visualization outputs
     echo ""
-    vis_count=$(find "../results/${DATASET}/mutations" -name "*.pdf" -not -path "*/chunk_*/*" 2>/dev/null | wc -l)
-    echo -e "${GREEN}✓${NC} ${DATASET} dataset visualizations: $vis_count PDFs"
+    vis_count=$(find "../results/${OUTPUT_NAME}/mutations" -name "*.pdf" -not -path "*/chunk_*/*" 2>/dev/null | wc -l)
+    echo -e "${GREEN}✓${NC} ${OUTPUT_NAME} dataset visualizations: $vis_count PDFs"
 
     # Summary
     echo ""
@@ -419,24 +445,24 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo ""
 
     if [ "$all_files_present" = true ]; then
-        echo -e "${GREEN}✓ ${DATASET} dataset mutation analysis completed successfully!${NC}"
+        echo -e "${GREEN}✓ ${OUTPUT_NAME} mutation analysis completed successfully!${NC}"
         echo ""
         echo "Generated analysis results:"
-        echo "  └─ ${DATASET}/mutations/"
+        echo "  └─ ${OUTPUT_NAME}/mutations/"
         echo "     ├─ gene_level_results.csv"
         echo "     ├─ isoform_level_results.csv"
         echo "     └─ [gene_name]/ (visualizations)"
         echo ""
         echo -e "${BLUE}Next step:${NC}"
-        echo "  Run: sbatch --export=DATASET=${DATASET} scripts/3_generate_proteins.sh"
+        echo "  Run: sbatch --export=DATASET=${DATASET},OUTPUT_NAME=${OUTPUT_NAME} scripts/3_generate_proteins.sh"
         echo ""
 
         # Clean up chunk directories
         echo -e "${YELLOW}→${NC} Cleaning up chunk directories..."
-        rm -rf "../results/${DATASET}/mutations/chunk_"*
+        rm -rf "../results/${OUTPUT_NAME}/mutations/chunk_"*
         echo -e "${GREEN}✓${NC} Cleanup complete"
     else
-        echo -e "${RED}✗ ${DATASET} dataset mutation analysis failed${NC}"
+        echo -e "${RED}✗ ${OUTPUT_NAME} mutation analysis failed${NC}"
         echo "Some output files are missing. Check the logs for errors."
         exit 1
     fi

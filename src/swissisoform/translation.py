@@ -697,7 +697,7 @@ class AlternativeProteinGenerator:
         }
 
     def extract_gene_proteins(
-        self, gene_name: str, top_n_per_type_per_transcript: Optional[int] = 1
+        self, gene_name: str, top_n_per_type_per_transcript: Optional[int] = None
     ) -> Optional[List[Dict]]:
         """Extract canonical and alternative proteins for all features of a gene.
 
@@ -1760,9 +1760,12 @@ class AlternativeProteinGenerator:
                     for pair in enhanced_pairs:
                         canonical_protein = pair["canonical"]["protein"]
                         alternative_protein = pair["alternative_base"]["protein"]
+                        gene_name_val = pair.get("gene_name", gene_name)
                         transcript_id = pair["transcript_id"]
                         feature_id = pair["feature_id"]
+                        bed_name = pair.get("feature_info", {}).get("name", feature_id)
                         region_type = pair["region_type"]
+                        feature_type = region_type  # region_type is the feature_type
 
                         # Check length constraints
                         if not (min_length <= len(canonical_protein) <= max_length):
@@ -1775,8 +1778,11 @@ class AlternativeProteinGenerator:
                         # ===== COMPARISON SET 1: CANONICAL (always included) =====
                         all_sequences.append(
                             {
-                                "gene": gene_name,
+                                "gene_name": gene_name_val,
                                 "transcript_id": transcript_id,
+                                "feature_id": feature_id,
+                                "bed_name": bed_name,
+                                "feature_type": feature_type,
                                 "variant_id": "canonical",
                                 "sequence": canonical_protein,
                                 "length": len(canonical_protein),
@@ -1800,8 +1806,11 @@ class AlternativeProteinGenerator:
                         # ===== COMPARISON SET 2: ALTERNATIVE (truncated or extended) =====
                         all_sequences.append(
                             {
-                                "gene": gene_name,
+                                "gene_name": gene_name_val,
                                 "transcript_id": transcript_id,
+                                "feature_id": feature_id,
+                                "bed_name": bed_name,
+                                "feature_type": feature_type,
                                 "variant_id": feature_id,
                                 "sequence": alternative_protein,
                                 "length": len(alternative_protein),
@@ -1869,8 +1878,11 @@ class AlternativeProteinGenerator:
 
                             all_sequences.append(
                                 {
-                                    "gene": gene_name,
+                                    "gene_name": gene_name_val,
                                     "transcript_id": transcript_id,
+                                    "feature_id": feature_id,
+                                    "bed_name": bed_name,
+                                    "feature_type": feature_type,
                                     "variant_id": variant_id,
                                     "sequence": mutated_protein,
                                     "length": len(mutated_protein),
@@ -1912,9 +1924,12 @@ class AlternativeProteinGenerator:
                     for pair in gene_pairs:
                         canonical_protein = pair["canonical"]["protein"]
                         alternative_protein = pair["alternative"]["protein"]
+                        gene_name_val = pair.get("gene_name", gene_name)
                         transcript_id = pair["transcript_id"]
                         feature_id = pair["feature_id"]
+                        bed_name = pair.get("feature_info", {}).get("name", feature_id)
                         region_type = pair["region_type"]
+                        feature_type = region_type  # region_type is the feature_type
 
                         # Check length constraints
                         if not (min_length <= len(canonical_protein) <= max_length):
@@ -1927,8 +1942,11 @@ class AlternativeProteinGenerator:
                         # Add canonical sequence
                         all_sequences.append(
                             {
-                                "gene": gene_name,
+                                "gene_name": gene_name_val,
                                 "transcript_id": transcript_id,
+                                "feature_id": feature_id,
+                                "bed_name": bed_name,
+                                "feature_type": feature_type,
                                 "variant_id": "canonical",
                                 "sequence": canonical_protein,
                                 "length": len(canonical_protein),
@@ -1941,8 +1959,11 @@ class AlternativeProteinGenerator:
                         # Add alternative sequence
                         all_sequences.append(
                             {
-                                "gene": gene_name,
+                                "gene_name": gene_name_val,
                                 "transcript_id": transcript_id,
+                                "feature_id": feature_id,
+                                "bed_name": bed_name,
+                                "feature_type": feature_type,
                                 "variant_id": feature_id,
                                 "sequence": alternative_protein,
                                 "length": len(alternative_protein),
@@ -2013,9 +2034,12 @@ class AlternativeProteinGenerator:
                 for pair in gene_result:
                     canonical_protein = pair["canonical"]["protein"]
                     alternative_protein = pair["alternative"]["protein"]
+                    gene_name_val = pair.get("gene_name", gene_name)
                     transcript_id = pair["transcript_id"]
                     feature_id = pair["feature_id"]
+                    bed_name = pair.get("feature_info", {}).get("name", feature_id)
                     region_type = pair["region_type"]
+                    feature_type = region_type  # region_type is the feature_type
 
                     # Check length constraints
                     if not (min_length <= len(canonical_protein) <= max_length):
@@ -2028,8 +2052,11 @@ class AlternativeProteinGenerator:
                     # Add canonical sequence
                     all_sequences.append(
                         {
-                            "gene": gene_name,
+                            "gene_name": gene_name_val,
                             "transcript_id": transcript_id,
+                            "feature_id": feature_id,
+                            "bed_name": bed_name,
+                            "feature_type": feature_type,
                             "variant_id": "canonical",
                             "sequence": canonical_protein,
                             "length": len(canonical_protein),
@@ -2041,8 +2068,11 @@ class AlternativeProteinGenerator:
                     # Add alternative sequence
                     all_sequences.append(
                         {
-                            "gene": gene_name,
+                            "gene_name": gene_name_val,
                             "transcript_id": transcript_id,
+                            "feature_id": feature_id,
+                            "bed_name": bed_name,
+                            "feature_type": feature_type,
                             "variant_id": feature_id,
                             "sequence": alternative_protein,
                             "length": len(alternative_protein),
@@ -3395,7 +3425,7 @@ class AlternativeProteinGenerator:
                 if not exclude_canonical and "canonical" in variants:
                     rows.append(
                         {
-                            "gene": gene_name,
+                            "gene_name": gene_name,
                             "transcript_id": transcript_id,
                             "variant_id": "canonical",
                             "sequence": variants["canonical"],
@@ -3409,7 +3439,7 @@ class AlternativeProteinGenerator:
 
                     rows.append(
                         {
-                            "gene": gene_name,
+                            "gene_name": gene_name,
                             "transcript_id": transcript_id,
                             "variant_id": variant_id,
                             "sequence": seq,
