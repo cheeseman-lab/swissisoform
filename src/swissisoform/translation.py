@@ -1499,8 +1499,15 @@ class AlternativeProteinGenerator:
                 )
 
                 # Filter to only pre-validated variants if provided
-                # Use (gene_name, feature_id) as lookup key to get feature-specific variants
-                feature_key = (gene_name, pair["feature_id"])
+                # Use bed_name directly from the feature for lookup
+                bed_name = feature_info.get("name", pair["feature_id"])
+                feature_key = (gene_name, bed_name)
+                logger.debug(
+                    f"Using feature_key for pre-validated lookup: {feature_key}"
+                )
+                logger.debug(
+                    f"pre_validated_variants has key? {feature_key in pre_validated_variants if pre_validated_variants else 'N/A - no pre_validated_variants'}"
+                )
                 if (
                     not mutations.empty
                     and pre_validated_variants

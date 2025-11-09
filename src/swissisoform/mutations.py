@@ -2511,6 +2511,9 @@ class MutationHandler:
                         "transcript_id": feature_transcript_id,
                         "refseq_id": refseq_id,
                         "feature_id": feature_id,
+                        "bed_name": feature.get(
+                            "name", feature_id
+                        ),  # Add BED name for pre-validated lookup
                         "feature_idx": idx,
                         "feature_type": feature_type,
                         "transcript_start": transcript_start,
@@ -3109,6 +3112,7 @@ class MutationHandler:
                 pair_result = {
                     "transcript_id": transcript_id,
                     "feature_id": feature_id,
+                    "bed_name": pair.get("bed_name", ""),  # BED feature name for lookup
                     "feature_type": feature_type,
                     "feature_start": feature_start,
                     "feature_end": feature_end,

@@ -476,6 +476,7 @@ def save_isoform_level_results(
         "gene_name",
         "transcript_id",
         "feature_id",
+        "bed_name",
         "feature_type",
         "feature_start",
         "feature_end",
@@ -897,12 +898,12 @@ def load_pre_validated_variants(
 
     for _, row in mutations_df.iterrows():
         gene_name = row.get("gene_name", "")
-        feature_id = row.get("feature_id", "")
-        if not gene_name or not feature_id:
+        bed_name = row.get("bed_name", "")
+        if not gene_name or not bed_name:
             continue
 
-        # Use (gene_name, feature_id) as key to keep variants separate per feature
-        key = (gene_name, feature_id)
+        # Use (gene_name, bed_name) as key to keep variants separate per feature
+        key = (gene_name, bed_name)
         if key not in pre_validated_variants:
             pre_validated_variants[key] = set()
 
