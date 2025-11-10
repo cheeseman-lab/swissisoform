@@ -1115,9 +1115,14 @@ class AlternativeProteinGenerator:
         extension_feature: Optional[pd.Series] = None,
     ) -> Optional[int]:
         """Improved genomic to coding position mapping."""
-        # Use context-aware cache key
+        # Use context-aware cache key with feature coordinates
         if extension_feature is not None and sequence_type == "extension":
-            cache_key = f"{transcript_id}_extension"
+            ext_start = extension_feature.get("start", 0)
+            ext_end = extension_feature.get("end", 0)
+            cache_key = f"{transcript_id}_extension_{ext_start}_{ext_end}"
+        elif extension_feature is not None and sequence_type == "truncation":
+            alt_start_pos = extension_feature.get("alternative_start_pos", 0)
+            cache_key = f"{transcript_id}_truncation_{alt_start_pos}"
         else:
             cache_key = f"{transcript_id}_canonical"
 
@@ -2600,7 +2605,16 @@ class AlternativeProteinGenerator:
             # Create context-aware cache key
             if current_feature is not None:
                 feature_type = current_feature.get("region_type", "canonical")
-                cache_key = f"{transcript_id}_{feature_type}"
+                # Include feature coordinates to make cache unique per feature
+                if feature_type == "extension":
+                    ext_start = current_feature.get("start", 0)
+                    ext_end = current_feature.get("end", 0)
+                    cache_key = f"{transcript_id}_extension_{ext_start}_{ext_end}"
+                elif feature_type == "truncation":
+                    alt_start_pos = current_feature.get("alternative_start_pos", 0)
+                    cache_key = f"{transcript_id}_truncation_{alt_start_pos}"
+                else:
+                    cache_key = f"{transcript_id}_{feature_type}"
             else:
                 feature_type = "canonical"
                 cache_key = f"{transcript_id}_canonical"
@@ -3470,7 +3484,9 @@ class AlternativeProteinGenerator:
 
         for _, row in dataset.iterrows():
             if include_mutations and "variant_type" in row:
-                record_id = f"{row['gene_name']}_{row['transcript_id']}_{row['variant_id']}"
+                record_id = (
+                    f"{row['gene_name']}_{row['transcript_id']}_{row['variant_id']}"
+                )
                 description = f"{row['variant_type']} protein"
 
                 if (
@@ -3479,7 +3495,9 @@ class AlternativeProteinGenerator:
                 ):
                     description += f" with mutation {row['mutation_change']}"
             else:
-                record_id = f"{row['gene_name']}_{row['transcript_id']}_{row['variant_id']}"
+                record_id = (
+                    f"{row['gene_name']}_{row['transcript_id']}_{row['variant_id']}"
+                )
                 is_alt = row.get("is_alternative", 0)
                 region_type = row.get("region_type", "unknown")
                 description = f"{'Alternative' if is_alt else 'Canonical'} protein ({region_type})"
