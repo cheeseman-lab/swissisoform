@@ -27,11 +27,12 @@ results/*
 # test notebooks
 
 
-# out files 
+# out files
 scripts/out
 scripts/results
 scripts/results_reduced
 tests/test_run_*
+tests/rerun_translation_only.py
 
 # all DS store files
 .DS_Store

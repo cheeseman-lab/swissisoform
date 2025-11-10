@@ -2,20 +2,32 @@
 
 Comprehensive test suite for the SwissIsoform pipeline.
 
+## Prerequisites
+
+Before running the test suite, ensure you have:
+
+1. **Processed HeLa BED file**: Run steps 0 and 1 to generate `data/ribosome_profiling/hela_isoforms_with_transcripts.bed`
+   ```bash
+   # Step 0: Download genome data
+   bash scripts/0_setup_genome_data.sh
+
+   # Step 1: Process ribosome profiling data
+   bash scripts/1_cleanup_files.sh
+   ```
+
+2. **Test gene list**: Edit `tests/test_genes.txt` with genes of interest (one per line)
+
 ## Quick Start
 
-1. **Edit test gene list**: Add genes to `test_genes.txt` (one per line)
-   ```bash
-   echo "ABHD18" >> tests/test_genes.txt
-   echo "ADAR" >> tests/test_genes.txt
-   ```
+```bash
+# Run the full pipeline test
+bash tests/run_pipeline_test.sh
 
-2. **Run the test**:
-   ```bash
-   bash tests/run_pipeline_test.sh
-   ```
+# Or with verbose logging
+bash tests/run_pipeline_test.sh -vv
+```
 
-3. **Review results** in `tests/test_run_TIMESTAMP/`
+**Review results** in `tests/test_run_TIMESTAMP/`
 
 ## Command Options
 
@@ -69,36 +81,15 @@ Key columns: `gene_name`, `status`, `total_transcripts`, `alternative_features`,
 - Mutation counts by type (missense, nonsense, etc.)
 
 ### Protein Sequences
-Key columns: `gene`, `transcript_id`, `variant_type`, `sequence`, `length`
+Key columns: `gene_name`, `transcript_id`, `feature_id`, `bed_name`, `feature_type`, `variant_type`, `sequence`, `length`
 
 **Variant types:**
 - `canonical` - Standard protein from annotated start
-- `alternative` - Protein from alternative start (truncation/extension)
-- `canonical_mutated` - Canonical + mutation
-- `alternative_mutated` - Alternative + mutation
-
-**Validate:**
-- All sequences start with 'M' (methionine)
-- No premature stop codons (internal '*')
-- Reasonable lengths (>20 amino acids)
-
-## Validation Commands
-
-```bash
-# Count sequences by variant type
-tail -n +2 tests/test_run_*/proteins/protein_sequences_with_mutations.csv | \
-  cut -d',' -f6 | sort | uniq -c
-
-# Check all sequences start with M
-tail -n +2 tests/test_run_*/proteins/protein_sequences_with_mutations.csv | \
-  cut -d',' -f8 | grep -v '^M' | wc -l
-# Should output: 0
-
-# Check for premature stops
-tail -n +2 tests/test_run_*/proteins/protein_sequences_with_mutations.csv | \
-  cut -d',' -f8 | grep '\*[A-Z]' | wc -l
-# Should output: 0
-```
+- `extension` - Protein from upstream alternative start (N-terminal extension)
+- `truncation` - Protein from downstream alternative start (N-terminal truncation)
+- `canonical_mutated` - Canonical + missense mutation
+- `extension_mutated` - Extension + missense mutation
+- `truncation_mutated` - Truncation + missense mutation
 
 ## Logging Levels
 
@@ -145,14 +136,11 @@ Normal! Many genes don't have mutations in databases, or mutations don't overlap
 
 ## Current Test Genes
 
-The test suite runs on genes listed in `test_genes.txt`:
-- **ABHD18** - Positive strand with premature stop (extension)
-- **ACSF3** - Positive strand
-- **ADAR** - Positive strand
-- **CLDND1** - Positive strand
-- **CIB1** - Positive strand
-- **FGF2** - Positive strand
-- **MAPK14** - Negative strand
+The test suite runs on genes listed in `tests/test_genes.txt`:
+- **ADAR** (chr1, negative strand) - Multiple extensions and truncations, tests cache handling for complex features
+- **DYNLRB1** (chr20, positive strand) - Multiple truncations
+- **RBM10** (chrX, positive strand) - Multiple extensions, tests overlapping extension regions
+- **TCP1** (chr6, negative strand) - 4 extensions with overlapping coordinates, critical for testing cache key fix
 
 ## Test Configuration
 
