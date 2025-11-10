@@ -1635,6 +1635,12 @@ class MutationHandler:
         # Clean frequency data
         df["allele_frequency"] = pd.to_numeric(df["allele_frequency"], errors="coerce")
 
+        # Clean count data (gnomAD allele_count, COSMIC sample_count)
+        if "allele_count" in df.columns:
+            df["allele_count"] = pd.to_numeric(df["allele_count"], errors="coerce")
+        if "sample_count" in df.columns:
+            df["sample_count"] = pd.to_numeric(df["sample_count"], errors="coerce")
+
         # Fill missing values
         df["clinical_significance"] = df["clinical_significance"].fillna("Unknown")
         df["impact"] = df["impact"].fillna("Unknown")
