@@ -3470,7 +3470,7 @@ class AlternativeProteinGenerator:
 
         for _, row in dataset.iterrows():
             if include_mutations and "variant_type" in row:
-                record_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
+                record_id = f"{row['gene_name']}_{row['transcript_id']}_{row['variant_id']}"
                 description = f"{row['variant_type']} protein"
 
                 if (
@@ -3479,7 +3479,7 @@ class AlternativeProteinGenerator:
                 ):
                     description += f" with mutation {row['mutation_change']}"
             else:
-                record_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
+                record_id = f"{row['gene_name']}_{row['transcript_id']}_{row['variant_id']}"
                 is_alt = row.get("is_alternative", 0)
                 region_type = row.get("region_type", "unknown")
                 description = f"{'Alternative' if is_alt else 'Canonical'} protein ({region_type})"
@@ -3573,7 +3573,7 @@ class AlternativeProteinGenerator:
                 f"Sequence length range: {dataset['length'].min()}-{dataset['length'].max()}"
             )
 
-            genes_with_data = dataset["gene"].nunique()
+            genes_with_data = dataset["gene_name"].nunique()
             logger.info(f"Genes with valid sequences: {genes_with_data}/{total_genes}")
         else:
             logger.info("No valid sequences generated")
@@ -3625,7 +3625,7 @@ class AlternativeProteinGenerator:
                 f"Sequence length range: {dataset['length'].min()}-{dataset['length'].max()}"
             )
 
-            genes_with_data = dataset["gene"].nunique()
+            genes_with_data = dataset["gene_name"].nunique()
             logger.info(f"Genes with valid sequences: {genes_with_data}/{total_genes}")
         else:
             logger.info("No valid sequences generated")
