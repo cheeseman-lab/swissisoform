@@ -2616,6 +2616,14 @@ class MutationHandler:
                             source_key = f"mutations_{source.lower()}"
                             source_categories[source_key] = 0
 
+                    # Initialize database-specific aggregate columns (only if source is used)
+                    db_aggregates = {}
+                    if sources:
+                        if "gnomad" in [s.lower() for s in sources]:
+                            db_aggregates["gnomad_allele_count"] = 0
+                        if "cosmic" in [s.lower() for s in sources]:
+                            db_aggregates["cosmic_sample_count"] = 0
+
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
@@ -2636,8 +2644,7 @@ class MutationHandler:
                             "alternative_start_loss_variant_ids": "",
                             "canonical_start_loss_count": 0,
                             "canonical_start_loss_variant_ids": "",
-                            "gnomad_allele_count": 0,
-                            "cosmic_sample_count": 0,
+                            **db_aggregates,  # Conditional database-specific columns
                             **mutation_categories,
                             **source_categories,  # NEW
                         }
@@ -2716,6 +2723,14 @@ class MutationHandler:
                             source_key = f"mutations_{source.lower()}"
                             source_categories[source_key] = 0
 
+                    # Initialize database-specific aggregate columns (only if source is used)
+                    db_aggregates = {}
+                    if sources:
+                        if "gnomad" in [s.lower() for s in sources]:
+                            db_aggregates["gnomad_allele_count"] = 0
+                        if "cosmic" in [s.lower() for s in sources]:
+                            db_aggregates["cosmic_sample_count"] = 0
+
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
@@ -2736,8 +2751,7 @@ class MutationHandler:
                             "alternative_start_loss_variant_ids": "",
                             "canonical_start_loss_count": 0,
                             "canonical_start_loss_variant_ids": "",
-                            "gnomad_allele_count": 0,
-                            "cosmic_sample_count": 0,
+                            **db_aggregates,  # Conditional database-specific columns
                             **mutation_categories,
                             **source_categories,  # NEW
                         }
@@ -3109,6 +3123,18 @@ class MutationHandler:
                     )
 
                 # Create result record for this pair
+                # Build database-specific aggregate columns (only if source is used)
+                db_aggregates = {}
+                if sources:
+                    if "gnomad" in [s.lower() for s in sources]:
+                        db_aggregates["gnomad_allele_count"] = int(
+                            gnomad_allele_count_sum
+                        )
+                    if "cosmic" in [s.lower() for s in sources]:
+                        db_aggregates["cosmic_sample_count"] = int(
+                            cosmic_sample_count_sum
+                        )
+
                 pair_result = {
                     "transcript_id": transcript_id,
                     "feature_id": feature_id,
@@ -3131,8 +3157,7 @@ class MutationHandler:
                     "alternative_start_loss_variant_ids": "",
                     "canonical_start_loss_count": 0,
                     "canonical_start_loss_variant_ids": "",
-                    "gnomad_allele_count": int(gnomad_allele_count_sum),
-                    "cosmic_sample_count": int(cosmic_sample_count_sum),
+                    **db_aggregates,  # Conditional database-specific columns
                     **mutation_categories,
                     **source_categories,  # Add per-source counts
                     **source_impact_categories,  # Add source×impact matrix (e.g., clinvar_missense_variant)

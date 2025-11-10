@@ -202,7 +202,6 @@ PROTEIN_ARGS="$PROTEIN_ARGS --genome $GENOME_FA"
 PROTEIN_ARGS="$PROTEIN_ARGS --annotation $ANNOTATION_GTF"
 PROTEIN_ARGS="$PROTEIN_ARGS --bed $BED_FILE"
 PROTEIN_ARGS="$PROTEIN_ARGS --mutations-file $OUTPUT_DIR/mutations/isoform_level_results.csv"
-PROTEIN_ARGS="$PROTEIN_ARGS --fast-mode"
 
 # Add verbosity flags
 if [ $VERBOSITY -eq 1 ]; then
