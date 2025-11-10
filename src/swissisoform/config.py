@@ -76,6 +76,9 @@ class Config:
     GNOMAD_MAX_RETRIES: int = int(os.getenv("GNOMAD_MAX_RETRIES", "3"))
     GNOMAD_RETRY_DELAY: float = float(os.getenv("GNOMAD_RETRY_DELAY", "1.0"))  # seconds
 
+    CLINVAR_MAX_RETRIES: int = int(os.getenv("CLINVAR_MAX_RETRIES", "3"))
+    CLINVAR_RETRY_DELAY: float = float(os.getenv("CLINVAR_RETRY_DELAY", "1.0"))  # seconds
+
     @classmethod
     def validate(cls) -> None:
         """Validate that required configuration is present."""

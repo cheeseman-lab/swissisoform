@@ -478,6 +478,8 @@ class MutationHandler:
     ) -> pd.DataFrame:
         """Get all ClinVar variants for a gene.
 
+        Implements retry logic with exponential backoff for improved reliability.
+
         Args:
             gene_name (str): Gene symbol (e.g., 'BRCA1').
             refseq_id (Optional[str]): RefSeq transcript ID to filter ClinVar variants (transcript-level query).
@@ -489,23 +491,60 @@ class MutationHandler:
         if cache_key in self.cached_data:
             return self.cached_data[cache_key]
 
-        try:
-            variant_ids = await self._fetch_clinvar_variant_ids(gene_name, refseq_id)
-            if not variant_ids:
+        # Retry logic with exponential backoff
+        for attempt in range(Config.CLINVAR_MAX_RETRIES):
+            try:
+                variant_ids = await self._fetch_clinvar_variant_ids(gene_name, refseq_id)
+                if not variant_ids:
+                    return pd.DataFrame()
+
+                all_variants = await self._process_clinvar_batches(variant_ids)
+
+                if all_variants:
+                    final_df = pd.concat(all_variants, ignore_index=True)
+                    self.cached_data[cache_key] = final_df
+                    if attempt > 0:
+                        logger.info(
+                            f"ClinVar request succeeded for {gene_name} on attempt {attempt + 1}"
+                        )
+                    return final_df
+
                 return pd.DataFrame()
 
-            all_variants = await self._process_clinvar_batches(variant_ids)
+            except asyncio.TimeoutError:
+                wait_time = Config.CLINVAR_RETRY_DELAY * (2**attempt)
+                if attempt < Config.CLINVAR_MAX_RETRIES - 1:
+                    logger.warning(
+                        f"ClinVar request timeout for {gene_name}, retrying in {wait_time}s (attempt {attempt + 1}/{Config.CLINVAR_MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"ClinVar request timeout for {gene_name} after {Config.CLINVAR_MAX_RETRIES} attempts"
+                    )
+                    return pd.DataFrame()
 
-            if all_variants:
-                final_df = pd.concat(all_variants, ignore_index=True)
-                self.cached_data[cache_key] = final_df
-                return final_df
+            except (aiohttp.ClientError, ConnectionError, requests.exceptions.ConnectionError) as e:
+                wait_time = Config.CLINVAR_RETRY_DELAY * (2**attempt)
+                if attempt < Config.CLINVAR_MAX_RETRIES - 1:
+                    logger.warning(
+                        f"ClinVar connection error for {gene_name}: {str(e)}, retrying in {wait_time}s (attempt {attempt + 1}/{Config.CLINVAR_MAX_RETRIES})"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(
+                        f"ClinVar connection failed for {gene_name} after {Config.CLINVAR_MAX_RETRIES} attempts: {str(e)}"
+                    )
+                    return pd.DataFrame()
 
-            return pd.DataFrame()
+            except Exception as e:
+                # Unexpected errors - log and return empty to avoid crashing pipeline
+                logger.error(
+                    f"Unexpected error fetching ClinVar data for {gene_name}: {str(e)}"
+                )
+                return pd.DataFrame()
 
-        except Exception as e:
-            logger.error(f"Error fetching ClinVar data: {str(e)}")
-            return pd.DataFrame()
+        return pd.DataFrame()
 
     async def _fetch_clinvar_variant_ids(
         self, gene_name: str, refseq_id: str = None

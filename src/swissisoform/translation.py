@@ -1515,6 +1515,7 @@ class AlternativeProteinGenerator:
                 )
 
                 # Filter to pre-validated IDs only
+                total_in_region = len(mutations) if not mutations.empty else 0
                 if not mutations.empty:
                     mutations = mutations[
                         mutations["variant_id"].isin(pre_validated_ids)
@@ -1522,7 +1523,7 @@ class AlternativeProteinGenerator:
 
                 if not mutations.empty:
                     logger.info(
-                        f"Processing {len(mutations)} mutations for {gene_name} {pair['feature_id']}"
+                        f"Processing {len(mutations)}/{total_in_region} pre-validated mutations for {gene_name} {pair['feature_id']}"
                     )
 
                     successful_mutations = 0
