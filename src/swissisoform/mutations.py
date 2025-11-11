@@ -494,7 +494,9 @@ class MutationHandler:
         # Retry logic with exponential backoff
         for attempt in range(Config.CLINVAR_MAX_RETRIES):
             try:
-                variant_ids = await self._fetch_clinvar_variant_ids(gene_name, refseq_id)
+                variant_ids = await self._fetch_clinvar_variant_ids(
+                    gene_name, refseq_id
+                )
                 if not variant_ids:
                     return pd.DataFrame()
 
@@ -524,7 +526,11 @@ class MutationHandler:
                     )
                     return pd.DataFrame()
 
-            except (aiohttp.ClientError, ConnectionError, requests.exceptions.ConnectionError) as e:
+            except (
+                aiohttp.ClientError,
+                ConnectionError,
+                requests.exceptions.ConnectionError,
+            ) as e:
                 wait_time = Config.CLINVAR_RETRY_DELAY * (2**attempt)
                 if attempt < Config.CLINVAR_MAX_RETRIES - 1:
                     logger.warning(
@@ -2185,9 +2191,11 @@ class MutationHandler:
                     return mutant_codon_rna
 
                 # Use fast prediction
-                validated_impact = await protein_generator.predict_consequence_fast(
+                result = await protein_generator.predict_consequence_fast(
                     transcript_id, genomic_pos, ref_allele, alt_allele, current_feature
                 )
+                validated_impact = result["consequence"]
+                aa_change_validated = result.get("aa_change", "")
 
                 # Add annotation for alternative start site mutations
                 if in_alt_start_site:
@@ -2203,6 +2211,7 @@ class MutationHandler:
                 validated_mutation["impact_validated_with_note"] = (
                     validated_impact_with_note
                 )
+                validated_mutation["aa_change_validated"] = aa_change_validated
                 validated_mutation["in_alt_start_site"] = in_alt_start_site
                 validated_mutation["is_alt_start_loss"] = is_alt_start_loss
                 validated_mutation["alt_start_note"] = alt_start_note
@@ -3480,6 +3489,66 @@ class MutationHandler:
                         ),
                         padding=100,
                     )
+
+                    # Save mutation-level CSV for this feature
+                    if not pair_viz_mutations.empty:
+                        # Filter to only successfully validated mutations
+                        successful_mutations = pair_viz_mutations.copy()
+                        if "validation_successful" in successful_mutations.columns:
+                            successful_mutations = successful_mutations[
+                                successful_mutations["validation_successful"] == True
+                            ]
+
+                        # Save to CSV if we have any successful validations
+                        if not successful_mutations.empty:
+                            # Reorganize columns for human readability
+                            column_order = [
+                                # Feature context
+                                "chromosome",
+                                "gene_name",
+                                "alt_feature_region",
+                                "alt_feature_name",
+                                # Variant identity
+                                "position",
+                                "variant_id",
+                                "reference",
+                                "alternate",
+                                "source",
+                                # Functional impact
+                                "impact",
+                                "impact_validated",
+                                "impact_agreement",
+                                "aa_change_validated",  # NEW!
+                                "hgvsc",
+                                "hgvsp",
+                                # Start site effects
+                                "in_alt_start_site",
+                                "is_alt_start_loss",
+                                "in_canonical_start_site",
+                                "is_canonical_start_loss",
+                                "canonical_start_codon_extracted",
+                                # Population data
+                                "allele_frequency",
+                                "allele_count",
+                                "allele_count_hom",
+                                "sample_count",
+                                "clinical_significance",
+                            ]
+
+                            # Select only columns that exist and are in our desired order
+                            columns_to_keep = [
+                                col
+                                for col in column_order
+                                if col in successful_mutations.columns
+                            ]
+                            successful_mutations = successful_mutations[columns_to_keep]
+
+                            csv_filename = f"{pair_base_filename}_mutations.csv"
+                            csv_path = transcript_dir / csv_filename
+                            successful_mutations.to_csv(csv_path, index=False)
+                            logger.debug(
+                                f"Saved {len(successful_mutations)} validated mutations to {csv_filename}"
+                            )
 
             # Calculate total mutations across all pairs
             total_mutations = (

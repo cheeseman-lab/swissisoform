@@ -2446,13 +2446,17 @@ class AlternativeProteinGenerator:
         ref_allele: str,
         alt_allele: str,
         current_feature: Optional[pd.Series] = None,
-    ) -> str:
-        """FAST: Predict consequence with caching and simple rules."""
+    ) -> Dict[str, str]:
+        """FAST: Predict consequence with caching and simple rules.
+
+        Returns:
+            Dict with keys: "consequence" (str), "aa_change" (str)
+        """
         # Input validation - only exclude truly invalid cases
         if genomic_pos is None:
             if self.debug:
                 logger.debug(f"❌ Invalid genomic position: None")
-            return "unknown"
+            return {"consequence": "unknown", "aa_change": ""}
 
         # Ensure genomic_pos is integer
         try:
@@ -2460,7 +2464,7 @@ class AlternativeProteinGenerator:
         except (ValueError, TypeError):
             if self.debug:
                 logger.debug(f"❌ Invalid genomic position type: {type(genomic_pos)}")
-            return "unknown"
+            return {"consequence": "unknown", "aa_change": ""}
 
         # Check cache first
         cached = self.validation_cache.get_cached_result(
@@ -2468,7 +2472,11 @@ class AlternativeProteinGenerator:
         )
         if cached:
             # Don't log cached results - it's just noise
-            return cached
+            # Handle both string (old cache) and dict (new cache) formats
+            if isinstance(cached, dict):
+                return cached
+            else:
+                return {"consequence": cached, "aa_change": ""}
 
         try:
             # Handle allele conversion and validation - allow empty strings for indels
@@ -2493,7 +2501,7 @@ class AlternativeProteinGenerator:
                     logger.debug(
                         f"❌ Both alleles invalid: '{ref_allele}', '{alt_allele}'"
                     )
-                return "unknown"
+                return {"consequence": "unknown", "aa_change": ""}
 
             # Note: Intronic filtering is now handled via bulk filtering in mutations.py
             # before individual validation, so we don't need to check here
@@ -2521,15 +2529,16 @@ class AlternativeProteinGenerator:
                 else:
                     consequence = "frameshift variant"
 
+                result = {"consequence": consequence, "aa_change": ""}
                 self.validation_cache.cache_result(
-                    transcript_id, genomic_pos, ref_allele, alt_allele, consequence
+                    transcript_id, genomic_pos, ref_allele, alt_allele, result
                 )
                 if self.debug:
                     logger.debug(f"⚡ Length-based classification: {consequence}")
                     logger.debug(
                         f"Reason: {abs(length_diff)} bp change {'in-frame' if length_diff % 3 == 0 else 'causes frameshift'}"
                     )
-                return consequence
+                return result
 
             # RULE 2: Single BP substitutions - use codon analysis
             if ref_len == 1 and alt_len == 1:
@@ -2538,26 +2547,28 @@ class AlternativeProteinGenerator:
                         f"⚡ Single BP substitution - analyzing codon context..."
                     )
 
-                consequence = self._analyze_single_bp_fast(
+                result = self._analyze_single_bp_fast(
                     transcript_id, genomic_pos, ref_allele, alt_allele, current_feature
                 )
 
                 self.validation_cache.cache_result(
-                    transcript_id, genomic_pos, ref_allele, alt_allele, consequence
+                    transcript_id, genomic_pos, ref_allele, alt_allele, result
                 )
                 if self.debug:
-                    logger.debug(f"⚡ Codon-based classification: {consequence}")
-                return consequence
+                    logger.debug(
+                        f"⚡ Codon-based classification: {result['consequence']}"
+                    )
+                return result
 
             # RULE 3: No change (both empty or identical)
             if ref_allele == alt_allele:
-                consequence = "synonymous variant"
+                result = {"consequence": "synonymous variant", "aa_change": ""}
                 self.validation_cache.cache_result(
-                    transcript_id, genomic_pos, ref_allele, alt_allele, consequence
+                    transcript_id, genomic_pos, ref_allele, alt_allele, result
                 )
                 if self.debug:
-                    logger.debug(f"⚡ No change: {consequence}")
-                return consequence
+                    logger.debug(f"⚡ No change: {result['consequence']}")
+                return result
 
             # RULE 4: Complex cases - fallback to full translation
             if self.debug:
@@ -2569,12 +2580,13 @@ class AlternativeProteinGenerator:
                 transcript_id, genomic_pos, ref_allele, alt_allele, current_feature
             )
 
+            result = {"consequence": consequence, "aa_change": ""}
             self.validation_cache.cache_result(
-                transcript_id, genomic_pos, ref_allele, alt_allele, consequence
+                transcript_id, genomic_pos, ref_allele, alt_allele, result
             )
             if self.debug:
                 logger.debug(f"Full translation result: {consequence}")
-            return consequence
+            return result
 
         except Exception as e:
             if self.debug:
@@ -2582,7 +2594,7 @@ class AlternativeProteinGenerator:
                 import traceback
 
                 logger.debug(f"Traceback: {traceback.format_exc()}")
-            return "unknown"
+            return {"consequence": "unknown", "aa_change": ""}
 
     def _analyze_single_bp_fast(
         self,
@@ -2764,27 +2776,31 @@ class AlternativeProteinGenerator:
             except Exception as e:
                 if self.debug:
                     logger.debug(f"Translation failed: {e}")
-                return "unknown"
+                return {"consequence": "unknown", "aa_change": ""}
 
-            # Classify the change
+            # Classify the change and extract AA change
             if original_aa == mutated_aa:
                 consequence = "synonymous variant"
                 reason = "no amino acid change"
+                aa_change = ""
             elif mutated_aa == "*":
                 consequence = "nonsense variant"
                 reason = f"introduces stop codon at position {codon_number}"
+                aa_change = f"{original_aa}{codon_number}*"
             elif original_aa == "*":
                 consequence = "stop lost variant"
                 reason = f"removes stop codon at position {codon_number}"
+                aa_change = f"*{codon_number}{mutated_aa}"
             else:
                 consequence = "missense variant"
                 reason = f"amino acid change {original_aa}{codon_number}{mutated_aa}"
+                aa_change = f"{original_aa}{codon_number}{mutated_aa}"
 
             if self.debug:
                 logger.debug(f"FINAL CLASSIFICATION: {consequence}")
                 logger.debug(f"Reason: {reason}")
 
-            return consequence
+            return {"consequence": consequence, "aa_change": aa_change}
 
         except Exception as e:
             if self.debug:

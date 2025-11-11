@@ -9,7 +9,7 @@
 # Usage:
 #   sbatch 2_analyze_mutations.sh
 #   sbatch --export=DATASET=hela 2_analyze_mutations.sh
-#   sbatch --export=DATASET=hela,SOURCES="clinvar|cosmic" 2_analyze_mutations.sh
+#   sbatch --export=DATASET=hela,SOURCES="clinvar|cosmic|gnomad" 2_analyze_mutations.sh
 #   sbatch --export=DATASET=hela,SOURCES="clinvar",IMPACT_TYPES="missense variant|nonsense variant" 2_analyze_mutations.sh
 #   sbatch --export=DATASET=hela,CUSTOM_PARQUET="/path/to/custom_mutations.parquet" 2_analyze_mutations.sh
 #   sbatch --export=DATASET=hela,OUTPUT_NAME="hela_bch",CUSTOM_PARQUET="/path/to/bch.parquet" 2_analyze_mutations.sh
