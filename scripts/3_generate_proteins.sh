@@ -342,6 +342,12 @@ echo -e "${GREEN}✓${NC} Completed chunk ${CHUNK_ID}"
 # Clean up chunk file
 rm -f "$CHUNK_FILE"
 
+# Create completion marker for this task
+MARKER_DIR="../results/temp/protein_markers"
+mkdir -p "$MARKER_DIR"
+touch "$MARKER_DIR/chunk_${CHUNK_ID}.done"
+echo -e "${GREEN}✓${NC} Created completion marker for chunk ${CHUNK_ID}"
+
 # ============================================================================
 # Result Merging and Verification (Task 8 Only)
 # ============================================================================
@@ -350,7 +356,40 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     # Wait for other tasks to finish
     echo ""
     echo -e "${YELLOW}→${NC} Waiting for all tasks to complete..."
-    sleep 30
+
+    # Wait for all completion markers (1-8)
+    MAX_WAIT=7200  # 2 hours maximum wait
+    WAIT_INTERVAL=10
+    elapsed=0
+
+    while [ $elapsed -lt $MAX_WAIT ]; do
+        all_done=true
+        missing_tasks=""
+
+        for i in {1..8}; do
+            if [ ! -f "$MARKER_DIR/chunk_${i}.done" ]; then
+                all_done=false
+                missing_tasks="$missing_tasks $i"
+            fi
+        done
+
+        if [ "$all_done" = true ]; then
+            echo -e "${GREEN}✓${NC} All tasks completed!"
+            break
+        fi
+
+        echo "  Waiting for tasks:$missing_tasks (${elapsed}s elapsed)"
+        sleep $WAIT_INTERVAL
+        elapsed=$((elapsed + WAIT_INTERVAL))
+    done
+
+    if [ "$all_done" != true ]; then
+        echo -e "${RED}✗${NC} Timeout waiting for all tasks to complete"
+        echo "Missing tasks:$missing_tasks"
+        exit 1
+    fi
+
+    sleep 5  # Brief additional wait for filesystem sync
 
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -509,6 +548,7 @@ fi
 
 # Final cleanup
 if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
-    sleep 30
+    sleep 5
     rm -rf ../results/temp/protein_chunks
+    rm -rf "$MARKER_DIR"
 fi
