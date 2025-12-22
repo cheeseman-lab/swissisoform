@@ -43,3 +43,7 @@ scripts/.DS_Store
 
 # deeploc2
 deeploc-2.1.All.tar.gz
+
+# 5_utr_specific files
+5_prime_UTR_analysis/data
+5_prime_UTR_analysis/results
