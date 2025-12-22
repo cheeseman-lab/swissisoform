@@ -37,6 +37,7 @@ RESULTS_DIR = SCRIPT_DIR / "results"
 CLINVAR_FILE = DATA_DIR / "variant_summary.txt.gz"
 GENCODE_GTF = DATA_DIR / "gencode.v47.annotation.gtf.gz"
 REFSEQ_GTF = DATA_DIR / "GRCh38_latest_genomic.gtf.gz"
+TRUNCATED_GENES_FILE = DATA_DIR / "hela_truncated_genes.txt"
 
 # Download URLs
 CLINVAR_URL = "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz"
@@ -82,6 +83,18 @@ def download_data(force: bool = False) -> bool:
     success &= download_file(REFSEQ_URL, REFSEQ_GTF, "RefSeq GTF")
 
     return success
+
+
+def load_truncated_genes() -> set:
+    """Load set of genes with truncated isoforms from HeLa ribosome profiling data."""
+    truncated_genes = set()
+    if TRUNCATED_GENES_FILE.exists():
+        with open(TRUNCATED_GENES_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    truncated_genes.add(line)
+    return truncated_genes
 
 
 def build_mane_select_mapping() -> tuple[set, dict, dict]:
@@ -269,7 +282,7 @@ def extract_5utr_variants(mane_refseq: set, utr_intervals: dict) -> pd.DataFrame
     print("=" * 60)
 
     variants = []
-    variant_types = {"Deletion", "Duplication", "Insertion"}
+    variant_types = {"Deletion", "Duplication", "Insertion", "Indel"}
 
     # Build gene name -> UTR intervals lookup (for genes we have UTR data for)
     genes_with_utr = set(utr_intervals.keys())
@@ -366,7 +379,7 @@ def extract_5utr_variants(mane_refseq: set, utr_intervals: dict) -> pd.DataFrame
     print(f"  Start in 5' UTR: {start_in_utr_count}")
     print(f"  Both start AND stop in 5' UTR: {both_in_utr_count}")
     print(f"  Unique variants (start in UTR): {len(df)}")
-    for vtype in ["deletion", "insertion", "duplication"]:
+    for vtype in ["deletion", "insertion", "duplication", "indel"]:
         count = len(df[df["variant_type"] == vtype]) if not df.empty else 0
         print(f"    {vtype.capitalize()}s: {count}")
 
@@ -493,6 +506,52 @@ def parse_duplication_size(hgvsc: str) -> int:
     return 1  # Default to 1bp if can't parse
 
 
+def parse_delins_size(hgvsc: str) -> int:
+    """
+    Parse net size change from delins (indel) HGVS notation.
+
+    Delins variants delete a region and insert a different sequence.
+    Net change = len(inserted) - len(deleted)
+
+    Examples:
+        c.-44_-42delinsATG -> delete 3bp, insert 3bp = 0
+        c.80_83delinsTGCTGTAAACTGTAACTGTAAA -> delete 4bp, insert 22bp = +18
+        c.-218delinsCGTGCGTGC -> delete 1bp, insert 9bp = +8
+    """
+    if not hgvsc or not isinstance(hgvsc, str):
+        return 0
+
+    # Range delins: c.X_Ydelins[SEQ]
+    range_match = re.match(r'c\.(-?\d+)_(-?\d+)delins([ACGT]+)', hgvsc)
+    if range_match:
+        start = int(range_match.group(1))
+        end = int(range_match.group(2))
+        inserted_seq = range_match.group(3)
+
+        # Calculate deleted length (handle negative positions correctly)
+        if start < 0 and end < 0:
+            deleted_len = abs(start) - abs(end) + 1
+        elif start < 0 and end >= 1:
+            # Crosses into CDS - only count UTR portion
+            deleted_len = abs(start)
+        else:
+            deleted_len = abs(end - start) + 1
+
+        return len(inserted_seq) - deleted_len
+
+    # Single position delins: c.Xdelins[SEQ]
+    single_match = re.match(r'c\.(-?\d+)delins([ACGT]+)', hgvsc)
+    if single_match:
+        inserted_seq = single_match.group(2)
+        return len(inserted_seq) - 1  # Delete 1bp, insert len(seq)
+
+    # Delins without explicit sequence (rare) - assume net zero
+    if 'delins' in hgvsc:
+        return 0
+
+    return 0
+
+
 def calculate_utr_changes(df: pd.DataFrame, utr_lengths: dict) -> pd.DataFrame:
     """
     Calculate size changes and mutant UTR lengths.
@@ -531,6 +590,9 @@ def calculate_utr_changes(df: pd.DataFrame, utr_lengths: dict) -> pd.DataFrame:
         elif vtype == "duplication":
             # Duplications: parse HGVS for duplicated range
             return parse_duplication_size(row["hgvsc"])
+        elif vtype == "indel":
+            # Indels (delins): parse HGVS for net size change
+            return parse_delins_size(row["hgvsc"])
         else:
             return 0
 
@@ -560,13 +622,15 @@ def crosses_threshold(row: pd.Series, threshold: int) -> bool:
     """Check if a variant crosses a specific threshold."""
     wt = row["wt_utr_length"]
     mut = row["mutant_utr_length"]
-    vtype = row["variant_type"]
+    size_change = row["size_change"]
 
-    if vtype == "deletion":
-        # Deletion crosses if: WT > threshold AND Mut <= threshold
+    if size_change < 0:
+        # UTR shrinks (deletions, or indels with net deletion)
+        # Crosses if: WT > threshold AND Mut <= threshold
         return wt > threshold and mut <= threshold
     else:
-        # Insertion/duplication crosses if: WT < threshold AND Mut >= threshold
+        # UTR grows (insertions, duplications, or indels with net insertion)
+        # Crosses if: WT < threshold AND Mut >= threshold
         return wt < threshold and mut >= threshold
 
 
@@ -608,8 +672,9 @@ def filter_variants(df: pd.DataFrame, min_size: int, thresholds: list[int]) -> t
         del_count = len(df_crossing[df_crossing["variant_type"] == "deletion"])
         ins_count = len(df_crossing[df_crossing["variant_type"] == "insertion"])
         dup_count = len(df_crossing[df_crossing["variant_type"] == "duplication"])
+        indel_count = len(df_crossing[df_crossing["variant_type"] == "indel"])
 
-        print(f"    {threshold}bp: {len(df_crossing)} variants (del: {del_count}, ins: {ins_count}, dup: {dup_count})")
+        print(f"    {threshold}bp: {len(df_crossing)} variants (del: {del_count}, ins: {ins_count}, dup: {dup_count}, indel: {indel_count})")
 
     # Add summary column showing all thresholds crossed
     def get_crossed_thresholds(row):
@@ -681,6 +746,10 @@ def format_output(df: pd.DataFrame) -> pd.DataFrame:
     # Add thresholds_crossed summary if present
     if "thresholds_crossed" in df.columns:
         output_cols.append("thresholds_crossed")
+
+    # Add truncated isoform flag if present
+    if "has_truncated_isoform" in df.columns:
+        output_cols.append("has_truncated_isoform")
 
     # Add remaining columns
     output_cols.extend([
@@ -791,12 +860,21 @@ def main():
     # Step 2: Build MANE Select mapping
     mane_refseq, utr_lengths, utr_intervals = build_mane_select_mapping()
 
+    # Load truncated genes list (for annotation)
+    truncated_genes = load_truncated_genes()
+    if truncated_genes:
+        print(f"\n  Loaded {len(truncated_genes)} genes with truncated isoforms (HeLa)")
+
     # Step 3: Extract 5' UTR variants (using genomic coordinate validation)
     df_all = extract_5utr_variants(mane_refseq, utr_intervals)
 
     if df_all.empty:
         print("\nNo 5' UTR variants found!")
         sys.exit(1)
+
+    # Add truncated isoform annotation
+    if truncated_genes:
+        df_all["has_truncated_isoform"] = df_all["gene_name"].isin(truncated_genes)
 
     # Save intermediate: all variants where START is in UTR
     start_in_utr_output = RESULTS_DIR / "5utr_variants_start_in_utr.csv"
@@ -868,17 +946,20 @@ def main():
     print(f"         Deletions:    {len(df_all[df_all['variant_type'] == 'deletion'])}")
     print(f"         Insertions:   {len(df_all[df_all['variant_type'] == 'insertion'])}")
     print(f"         Duplications: {len(df_all[df_all['variant_type'] == 'duplication'])}")
+    print(f"         Indels:       {len(df_all[df_all['variant_type'] == 'indel'])}")
 
     print(f"\n[Step 2] BOTH start AND stop in 5' UTR: {len(df_both)}")
     print(f"         (Both coordinates within GENCODE 5' UTR regions)")
     print(f"         Deletions:    {len(df_both[df_both['variant_type'] == 'deletion'])}")
     print(f"         Insertions:   {len(df_both[df_both['variant_type'] == 'insertion'])}")
     print(f"         Duplications: {len(df_both[df_both['variant_type'] == 'duplication'])}")
+    print(f"         Indels:       {len(df_both[df_both['variant_type'] == 'indel'])}")
 
     print(f"\n[Step 3] Size change >= {args.min_size}bp: {len(df_sized)}")
     print(f"         Deletions:    {len(df_sized[df_sized['variant_type'] == 'deletion'])}")
     print(f"         Insertions:   {len(df_sized[df_sized['variant_type'] == 'insertion'])}")
     print(f"         Duplications: {len(df_sized[df_sized['variant_type'] == 'duplication'])}")
+    print(f"         Indels:       {len(df_sized[df_sized['variant_type'] == 'indel'])}")
 
     print(f"\n[Step 4] Threshold crossings:")
     for threshold in thresholds:
@@ -886,7 +967,8 @@ def main():
         del_count = len(df_crossing[df_crossing['variant_type'] == 'deletion'])
         ins_count = len(df_crossing[df_crossing['variant_type'] == 'insertion'])
         dup_count = len(df_crossing[df_crossing['variant_type'] == 'duplication'])
-        print(f"         {threshold}bp: {len(df_crossing)} variants (del: {del_count}, ins: {ins_count}, dup: {dup_count})")
+        indel_count = len(df_crossing[df_crossing['variant_type'] == 'indel'])
+        print(f"         {threshold}bp: {len(df_crossing)} variants (del: {del_count}, ins: {ins_count}, dup: {dup_count}, indel: {indel_count})")
 
     # Show variants that cross any threshold
     any_crossing = df_sized[df_sized["thresholds_crossed"] != ""]
