@@ -471,7 +471,7 @@ def save_isoform_level_results(
     # Organize columns in 5-section structure with count+IDs pairing
     column_order = []
 
-    # SECTION 1: Feature Identification (8 columns)
+    # SECTION 1: Feature Identification (11 columns)
     section1 = [
         "gene_name",
         "transcript_id",
@@ -480,6 +480,8 @@ def save_isoform_level_results(
         "feature_type",
         "feature_start",
         "feature_end",
+        "feature_length_aa",
+        "aa_difference_from_canonical",
         "total_mutations",
         "source_databases",
     ]
@@ -501,13 +503,27 @@ def save_isoform_level_results(
     ]
     column_order.extend(section2)
 
-    # SECTION 3: Per-Source Totals (5 columns - includes allele/sample counts)
+    # SECTION 3: Per-Source Totals and Per-Impact Allele/Sample Counts
     section3 = [
         "count_clinvar",
         "count_gnomad",
         "gnomad_allele_count",
+        # Per-impact gnomAD allele counts
+        "gnomad_allele_count_missense_variant",
+        "gnomad_allele_count_nonsense_variant",
+        "gnomad_allele_count_frameshift_variant",
+        "gnomad_allele_count_inframe_deletion",
+        "gnomad_allele_count_inframe_insertion",
+        "gnomad_allele_count_synonymous_variant",
         "count_cosmic",
         "cosmic_sample_count",
+        # Per-impact COSMIC sample counts
+        "cosmic_sample_count_missense_variant",
+        "cosmic_sample_count_nonsense_variant",
+        "cosmic_sample_count_frameshift_variant",
+        "cosmic_sample_count_inframe_deletion",
+        "cosmic_sample_count_inframe_insertion",
+        "cosmic_sample_count_synonymous_variant",
     ]
     column_order.extend(section3)
 

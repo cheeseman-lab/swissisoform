@@ -162,6 +162,55 @@ class MutationHandler:
         # Splice variants are still filtered here as they have VEP annotations
         self.low_impact_categories = ["splice"]
 
+    def _calculate_cds_length_in_region(
+        self, transcript_id: str, region_start: int, region_end: int
+    ) -> int:
+        """Calculate the number of coding nucleotides within a genomic region.
+
+        This method calculates the actual CDS length (excluding introns) for a
+        genomic region, which is necessary for accurate amino acid length calculations.
+
+        Args:
+            transcript_id: Ensembl transcript ID
+            region_start: Genomic start position of region
+            region_end: Genomic end position of region
+
+        Returns:
+            Number of coding nucleotides (excludes introns)
+        """
+        if self.genome_handler is None:
+            return 0
+
+        try:
+            features = self.genome_handler.get_transcript_features(transcript_id)
+            if features is None or features.empty:
+                return 0
+
+            cds_regions = features[features["feature_type"] == "CDS"]
+            if cds_regions.empty:
+                return 0
+
+            total_cds_length = 0
+            for _, cds in cds_regions.iterrows():
+                cds_start = int(cds["start"])
+                cds_end = int(cds["end"])
+
+                # Check for overlap with our region
+                if cds_end < region_start or cds_start > region_end:
+                    continue
+
+                # Calculate overlapping portion
+                effective_start = max(cds_start, region_start)
+                effective_end = min(cds_end, region_end)
+
+                if effective_end >= effective_start:
+                    total_cds_length += effective_end - effective_start + 1
+
+            return total_cds_length
+        except Exception as e:
+            logger.debug(f"Error calculating CDS length for {transcript_id}: {e}")
+            return 0
+
     async def get_gnomad_variants(self, gene_name: str) -> pd.DataFrame:
         """Get processed variant data from gnomAD.
 
@@ -3059,6 +3108,22 @@ class MutationHandler:
                                 )
                                 source_impact_categories[source_impact_id_key] = ""
 
+                # Initialize per-impact allele count (gnomAD) and sample count (COSMIC) dictionaries
+                gnomad_allele_count_by_impact = {}
+                cosmic_sample_count_by_impact = {}
+
+                if sources and impact_types:
+                    for impact_type in desired_impact_types:
+                        impact_normalized = impact_type.replace(" ", "_").lower()
+                        if "gnomad" in [s.lower() for s in sources]:
+                            gnomad_allele_count_by_impact[
+                                f"gnomad_allele_count_{impact_normalized}"
+                            ] = 0
+                        if "cosmic" in [s.lower() for s in sources]:
+                            cosmic_sample_count_by_impact[
+                                f"cosmic_sample_count_{impact_normalized}"
+                            ] = 0
+
                 variant_ids = []
                 mutation_sources = set()  # Track which sources have mutations
                 if pair_mutation_count > 0:
@@ -3159,6 +3224,38 @@ class MutationHandler:
                                                         source_impact_id_key
                                                     ] = ",".join(source_impact_ids)
 
+                                        # Sum allele counts for gnomAD per impact type
+                                        if (
+                                            str(source).lower() == "gnomad"
+                                            and "allele_count"
+                                            in source_impact_mutations.columns
+                                        ):
+                                            key = f"gnomad_allele_count_{impact_normalized}"
+                                            if key in gnomad_allele_count_by_impact:
+                                                gnomad_allele_count_by_impact[key] = int(
+                                                    source_impact_mutations[
+                                                        "allele_count"
+                                                    ]
+                                                    .fillna(0)
+                                                    .sum()
+                                                )
+
+                                        # Sum sample counts for COSMIC per impact type
+                                        if (
+                                            str(source).lower() == "cosmic"
+                                            and "sample_count"
+                                            in source_impact_mutations.columns
+                                        ):
+                                            key = f"cosmic_sample_count_{impact_normalized}"
+                                            if key in cosmic_sample_count_by_impact:
+                                                cosmic_sample_count_by_impact[key] = int(
+                                                    source_impact_mutations[
+                                                        "sample_count"
+                                                    ]
+                                                    .fillna(0)
+                                                    .sum()
+                                                )
+
                     # Collect all variant IDs
                     if "variant_id" in validated_mutations.columns:
                         variant_ids = (
@@ -3177,6 +3274,20 @@ class MutationHandler:
                     )
 
                 # Create result record for this pair
+                # Calculate feature length in amino acids (CDS only, no introns)
+                cds_length_bp = self._calculate_cds_length_in_region(
+                    transcript_id, feature_start, feature_end
+                )
+                feature_length_aa = cds_length_bp // 3 if cds_length_bp > 0 else 0
+
+                # Calculate signed difference (negative=truncation, positive=extension)
+                if feature_type == "truncation":
+                    aa_difference_from_canonical = -feature_length_aa
+                elif feature_type == "extension":
+                    aa_difference_from_canonical = feature_length_aa
+                else:
+                    aa_difference_from_canonical = 0
+
                 # Build database-specific aggregate columns (only if source is used)
                 db_aggregates = {}
                 if sources:
@@ -3196,6 +3307,8 @@ class MutationHandler:
                     "feature_type": feature_type,
                     "feature_start": feature_start,
                     "feature_end": feature_end,
+                    "feature_length_aa": feature_length_aa,
+                    "aa_difference_from_canonical": aa_difference_from_canonical,
                     "mutation_count_total": pair_mutation_count,
                     "mutation_sources": ",".join(sorted(mutation_sources))
                     if mutation_sources
@@ -3212,6 +3325,8 @@ class MutationHandler:
                     "canonical_start_loss_count": 0,
                     "canonical_start_loss_variant_ids": "",
                     **db_aggregates,  # Conditional database-specific columns
+                    **gnomad_allele_count_by_impact,  # Per-impact gnomAD allele counts
+                    **cosmic_sample_count_by_impact,  # Per-impact COSMIC sample counts
                     **mutation_categories,
                     **source_categories,  # Add per-source counts
                     **source_impact_categories,  # Add source×impact matrix (e.g., clinvar_missense_variant)
