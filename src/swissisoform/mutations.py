@@ -3232,12 +3232,14 @@ class MutationHandler:
                                         ):
                                             key = f"gnomad_allele_count_{impact_normalized}"
                                             if key in gnomad_allele_count_by_impact:
-                                                gnomad_allele_count_by_impact[key] = int(
-                                                    source_impact_mutations[
-                                                        "allele_count"
-                                                    ]
-                                                    .fillna(0)
-                                                    .sum()
+                                                gnomad_allele_count_by_impact[key] = (
+                                                    int(
+                                                        source_impact_mutations[
+                                                            "allele_count"
+                                                        ]
+                                                        .fillna(0)
+                                                        .sum()
+                                                    )
                                                 )
 
                                         # Sum sample counts for COSMIC per impact type
@@ -3248,12 +3250,14 @@ class MutationHandler:
                                         ):
                                             key = f"cosmic_sample_count_{impact_normalized}"
                                             if key in cosmic_sample_count_by_impact:
-                                                cosmic_sample_count_by_impact[key] = int(
-                                                    source_impact_mutations[
-                                                        "sample_count"
-                                                    ]
-                                                    .fillna(0)
-                                                    .sum()
+                                                cosmic_sample_count_by_impact[key] = (
+                                                    int(
+                                                        source_impact_mutations[
+                                                            "sample_count"
+                                                        ]
+                                                        .fillna(0)
+                                                        .sum()
+                                                    )
                                                 )
 
                     # Collect all variant IDs

@@ -358,8 +358,8 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo -e "${YELLOW}→${NC} Waiting for all tasks to complete..."
 
     # Wait for all completion markers (1-8)
-    MAX_WAIT=7200  # 2 hours maximum wait
-    WAIT_INTERVAL=10
+    MAX_WAIT=259200  # 72 hours maximum wait (matches job time limit)
+    WAIT_INTERVAL=1800  # Check every 30 minutes
     elapsed=0
 
     while [ $elapsed -lt $MAX_WAIT ]; do

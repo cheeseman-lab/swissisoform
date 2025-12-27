@@ -13,6 +13,7 @@
 #   sbatch --export=DATASET=hela,SOURCES="clinvar",IMPACT_TYPES="missense variant|nonsense variant" 2_analyze_mutations.sh
 #   sbatch --export=DATASET=hela,CUSTOM_PARQUET="/path/to/custom_mutations.parquet" 2_analyze_mutations.sh
 #   sbatch --export=DATASET=hela,OUTPUT_NAME="hela_bch",CUSTOM_PARQUET="/path/to/bch.parquet" 2_analyze_mutations.sh
+#   sbatch --export=DATASET=hela,ANNOTATE_MANE=false 2_analyze_mutations.sh  # Skip MANE annotation
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
@@ -20,6 +21,7 @@
 #   SOURCES - Mutation databases to query (default: clinvar, pipe-separated: clinvar|gnomad|cosmic)
 #   IMPACT_TYPES - Mutation types to analyze (default: all types, pipe-separated)
 #   CUSTOM_PARQUET - Path to custom parquet file with mutation data (optional)
+#   ANNOTATE_MANE - Add MANE Select annotations to results (default: true, set to "false" to skip)
 #
 # Prerequisites:
 #   - 1_cleanup_files.sh must have been run
@@ -81,6 +83,9 @@ fi
 # Custom parquet file (optional)
 CUSTOM_PARQUET="${CUSTOM_PARQUET:-}"
 
+# MANE annotation toggle (default: true)
+ANNOTATE_MANE="${ANNOTATE_MANE:-true}"
+
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   SwissIsoform Pipeline Step 2: Analyze Mutations            ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
@@ -93,6 +98,7 @@ echo "Impact types: ${IMPACT_TYPES_ARGS[@]}"
 if [ -n "$CUSTOM_PARQUET" ]; then
     echo "Custom parquet: $CUSTOM_PARQUET"
 fi
+echo "MANE annotation: $ANNOTATE_MANE"
 echo ""
 
 # ============================================================================
@@ -352,8 +358,8 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo -e "${YELLOW}→${NC} Waiting for all tasks to complete..."
 
     # Wait for all completion markers (1-8)
-    MAX_WAIT=7200  # 2 hours maximum wait
-    WAIT_INTERVAL=10
+    MAX_WAIT=259200  # 72 hours maximum wait (matches job time limit)
+    WAIT_INTERVAL=1800  # Check every 30 minutes
     elapsed=0
 
     while [ $elapsed -lt $MAX_WAIT ]; do
@@ -438,15 +444,40 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
         fi
     done
 
-    # Merge visualization files
+    # Move gene visualization folders from chunks to main directory
     echo ""
-    echo -e "${YELLOW}→${NC} Merging visualization files..."
+    echo -e "${YELLOW}→${NC} Moving gene visualization folders..."
+    moved_count=0
     for i in {1..8}; do
-        chunk_viz_dir="../results/${OUTPUT_NAME}/mutations/chunk_${i}"
-        if [ -d "$chunk_viz_dir" ]; then
-            find "$chunk_viz_dir" -maxdepth 1 -type d -not -name "chunk_*" -exec mv {} "$FINAL_OUTPUT_DIR/" \; 2>/dev/null || true
+        chunk_dir="../results/${OUTPUT_NAME}/mutations/chunk_${i}"
+        if [ -d "$chunk_dir" ]; then
+            for gene_dir in "$chunk_dir"/*/; do
+                if [ -d "$gene_dir" ]; then
+                    mv "$gene_dir" "$FINAL_OUTPUT_DIR/" 2>/dev/null && ((moved_count++)) || true
+                fi
+            done
         fi
     done
+    echo -e "${GREEN}✓${NC} Moved $moved_count gene folders"
+
+    # Annotate with MANE Select information and create Excel output
+    if [ "$ANNOTATE_MANE" = "true" ]; then
+        echo ""
+        echo -e "${YELLOW}→${NC} Annotating with MANE Select information..."
+
+        python3 annotate_mane.py \
+            --input "$FINAL_OUTPUT_DIR/isoform_level_results.csv" \
+            --output "$FINAL_OUTPUT_DIR/isoform_level_results_mane"
+
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✓${NC} Created MANE-annotated CSV and Excel files"
+        else
+            echo -e "${YELLOW}⚠${NC} MANE annotation failed (non-critical)"
+        fi
+    else
+        echo ""
+        echo -e "${YELLOW}→${NC} Skipping MANE annotation (ANNOTATE_MANE=false)"
+    fi
 
     # Verification
     echo ""
@@ -459,6 +490,12 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
         "../results/${OUTPUT_NAME}/mutations/gene_level_results.csv"
         "../results/${OUTPUT_NAME}/mutations/isoform_level_results.csv"
     )
+    if [ "$ANNOTATE_MANE" = "true" ]; then
+        expected_files+=(
+            "../results/${OUTPUT_NAME}/mutations/isoform_level_results_mane.csv"
+            "../results/${OUTPUT_NAME}/mutations/isoform_level_results_mane.xlsx"
+        )
+    fi
 
     all_files_present=true
     for file in "${expected_files[@]}"; do
@@ -490,6 +527,8 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
         echo "  └─ ${OUTPUT_NAME}/mutations/"
         echo "     ├─ gene_level_results.csv"
         echo "     ├─ isoform_level_results.csv"
+        echo "     ├─ isoform_level_results_mane.csv"
+        echo "     ├─ isoform_level_results_mane.xlsx"
         echo "     └─ [gene_name]/ (visualizations)"
         echo ""
         echo -e "${BLUE}Next step:${NC}"
