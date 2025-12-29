@@ -211,6 +211,55 @@ class MutationHandler:
             logger.debug(f"Error calculating CDS length for {transcript_id}: {e}")
             return 0
 
+    def _calculate_exonic_length_in_region(
+        self, transcript_id: str, region_start: int, region_end: int
+    ) -> int:
+        """Calculate the number of exonic nucleotides within a genomic region.
+
+        This method calculates the actual exonic length (excluding introns) for a
+        genomic region. Used for extensions which are in the 5'UTR (not CDS).
+
+        Args:
+            transcript_id: Ensembl transcript ID
+            region_start: Genomic start position of region
+            region_end: Genomic end position of region
+
+        Returns:
+            Number of exonic nucleotides (excludes introns)
+        """
+        if self.genome_handler is None:
+            return 0
+
+        try:
+            features = self.genome_handler.get_transcript_features(transcript_id)
+            if features is None or features.empty:
+                return 0
+
+            exon_regions = features[features["feature_type"] == "exon"]
+            if exon_regions.empty:
+                return 0
+
+            total_exonic_length = 0
+            for _, exon in exon_regions.iterrows():
+                exon_start = int(exon["start"])
+                exon_end = int(exon["end"])
+
+                # Check for overlap with our region
+                if exon_end < region_start or exon_start > region_end:
+                    continue
+
+                # Calculate overlapping portion
+                effective_start = max(exon_start, region_start)
+                effective_end = min(exon_end, region_end)
+
+                if effective_end >= effective_start:
+                    total_exonic_length += effective_end - effective_start + 1
+
+            return total_exonic_length
+        except Exception as e:
+            logger.debug(f"Error calculating exonic length for {transcript_id}: {e}")
+            return 0
+
     async def get_gnomad_variants(self, gene_name: str) -> pd.DataFrame:
         """Get processed variant data from gnomAD.
 
@@ -2727,6 +2776,33 @@ class MutationHandler:
                         if "cosmic" in [s.lower() for s in sources]:
                             db_aggregates["cosmic_sample_count"] = 0
 
+                    # Calculate feature length even for empty results
+                    if feature_type == "extension":
+                        exonic_length_bp = self._calculate_exonic_length_in_region(
+                            transcript_id, feature_start, feature_end
+                        )
+                        # Subtract 1 AA to exclude the shared start codon from the count
+                        feature_length_aa = (
+                            max(0, (exonic_length_bp // 3) - 1)
+                            if exonic_length_bp > 0
+                            else 0
+                        )
+                    else:
+                        cds_length_bp = self._calculate_cds_length_in_region(
+                            transcript_id, feature_start, feature_end
+                        )
+                        # Subtract 1 AA to exclude the shared start codon from the count
+                        feature_length_aa = (
+                            max(0, (cds_length_bp // 3) - 1) if cds_length_bp > 0 else 0
+                        )
+
+                    if feature_type == "truncation":
+                        aa_difference_from_canonical = -feature_length_aa
+                    elif feature_type == "extension":
+                        aa_difference_from_canonical = feature_length_aa
+                    else:
+                        aa_difference_from_canonical = 0
+
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
@@ -2734,6 +2810,8 @@ class MutationHandler:
                             "feature_type": feature_type,
                             "feature_start": feature_start,
                             "feature_end": feature_end,
+                            "feature_length_aa": feature_length_aa,
+                            "aa_difference_from_canonical": aa_difference_from_canonical,
                             "mutation_count_total": 0,
                             "mutation_sources": "",  # NEW
                             "variant_ids": "",
@@ -2834,6 +2912,33 @@ class MutationHandler:
                         if "cosmic" in [s.lower() for s in sources]:
                             db_aggregates["cosmic_sample_count"] = 0
 
+                    # Calculate feature length even for empty results
+                    if feature_type == "extension":
+                        exonic_length_bp = self._calculate_exonic_length_in_region(
+                            transcript_id, feature_start, feature_end
+                        )
+                        # Subtract 1 AA to exclude the shared start codon from the count
+                        feature_length_aa = (
+                            max(0, (exonic_length_bp // 3) - 1)
+                            if exonic_length_bp > 0
+                            else 0
+                        )
+                    else:
+                        cds_length_bp = self._calculate_cds_length_in_region(
+                            transcript_id, feature_start, feature_end
+                        )
+                        # Subtract 1 AA to exclude the shared start codon from the count
+                        feature_length_aa = (
+                            max(0, (cds_length_bp // 3) - 1) if cds_length_bp > 0 else 0
+                        )
+
+                    if feature_type == "truncation":
+                        aa_difference_from_canonical = -feature_length_aa
+                    elif feature_type == "extension":
+                        aa_difference_from_canonical = feature_length_aa
+                    else:
+                        aa_difference_from_canonical = 0
+
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
@@ -2841,6 +2946,8 @@ class MutationHandler:
                             "feature_type": feature_type,
                             "feature_start": feature_start,
                             "feature_end": feature_end,
+                            "feature_length_aa": feature_length_aa,
+                            "aa_difference_from_canonical": aa_difference_from_canonical,
                             "mutation_count_total": 0,
                             "mutation_sources": "",  # NEW
                             "variant_ids": "",
@@ -2990,6 +3097,33 @@ class MutationHandler:
                             source_key = f"mutations_{source.lower()}"
                             source_categories[source_key] = 0
 
+                    # Calculate feature length even for empty results
+                    if feature_type == "extension":
+                        exonic_length_bp = self._calculate_exonic_length_in_region(
+                            transcript_id, feature_start, feature_end
+                        )
+                        # Subtract 1 AA to exclude the shared start codon from the count
+                        feature_length_aa = (
+                            max(0, (exonic_length_bp // 3) - 1)
+                            if exonic_length_bp > 0
+                            else 0
+                        )
+                    else:
+                        cds_length_bp = self._calculate_cds_length_in_region(
+                            transcript_id, feature_start, feature_end
+                        )
+                        # Subtract 1 AA to exclude the shared start codon from the count
+                        feature_length_aa = (
+                            max(0, (cds_length_bp // 3) - 1) if cds_length_bp > 0 else 0
+                        )
+
+                    if feature_type == "truncation":
+                        aa_difference_from_canonical = -feature_length_aa
+                    elif feature_type == "extension":
+                        aa_difference_from_canonical = feature_length_aa
+                    else:
+                        aa_difference_from_canonical = 0
+
                     pair_results.append(
                         {
                             "transcript_id": transcript_id,
@@ -2997,6 +3131,8 @@ class MutationHandler:
                             "feature_type": feature_type,
                             "feature_start": feature_start,
                             "feature_end": feature_end,
+                            "feature_length_aa": feature_length_aa,
+                            "aa_difference_from_canonical": aa_difference_from_canonical,
                             "mutation_count_total": 0,
                             "mutation_sources": "",
                             "variant_ids": "",
@@ -3278,11 +3414,29 @@ class MutationHandler:
                     )
 
                 # Create result record for this pair
-                # Calculate feature length in amino acids (CDS only, no introns)
-                cds_length_bp = self._calculate_cds_length_in_region(
-                    transcript_id, feature_start, feature_end
-                )
-                feature_length_aa = cds_length_bp // 3 if cds_length_bp > 0 else 0
+                # Calculate feature length in amino acids
+                # For truncations: use CDS overlap (truncations are within the CDS)
+                # For extensions: use exonic overlap (extensions are in the 5'UTR, not CDS)
+                if feature_type == "extension":
+                    # Extensions are in the 5'UTR - use exonic length
+                    exonic_length_bp = self._calculate_exonic_length_in_region(
+                        transcript_id, feature_start, feature_end
+                    )
+                    # Subtract 1 AA to exclude the shared start codon from the count
+                    feature_length_aa = (
+                        max(0, (exonic_length_bp // 3) - 1)
+                        if exonic_length_bp > 0
+                        else 0
+                    )
+                else:
+                    # Truncations are in the CDS - use CDS length
+                    cds_length_bp = self._calculate_cds_length_in_region(
+                        transcript_id, feature_start, feature_end
+                    )
+                    # Subtract 1 AA to exclude the shared start codon from the count
+                    feature_length_aa = (
+                        max(0, (cds_length_bp // 3) - 1) if cds_length_bp > 0 else 0
+                    )
 
                 # Calculate signed difference (negative=truncation, positive=extension)
                 if feature_type == "truncation":
