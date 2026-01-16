@@ -508,6 +508,7 @@ def save_isoform_level_results(
         "count_clinvar",
         "count_gnomad",
         "gnomad_allele_count",
+        "gnomad_allele_count_hom",
         # Per-impact gnomAD allele counts
         "gnomad_allele_count_missense_variant",
         "gnomad_allele_count_nonsense_variant",

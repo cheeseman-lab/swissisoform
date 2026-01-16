@@ -299,8 +299,8 @@ TOTAL_CHUNKS=8
 # Create task-specific output directory
 mkdir -p "$OUTPUT_DIR"
 
-# Create gene chunk for this task
-CHUNK_FILE="../results/temp/chunks/${DATASET}_chunk_${CHUNK_ID}.txt"
+# Create gene chunk for this task (use OUTPUT_NAME for isolation between concurrent jobs)
+CHUNK_FILE="../results/temp/chunks/${OUTPUT_NAME}_chunk_${CHUNK_ID}.txt"
 split_gene_list "$GENE_LIST" "$TOTAL_CHUNKS" "$CHUNK_ID" "$CHUNK_FILE"
 
 # Skip if no genes in chunk
@@ -342,8 +342,8 @@ echo -e "${GREEN}✓${NC} Completed ${DATASET} dataset chunk ${CHUNK_ID}"
 # Clean up chunk file
 rm -f "$CHUNK_FILE"
 
-# Create completion marker for this task
-MARKER_DIR="../results/temp/markers"
+# Create completion marker for this task (use OUTPUT_NAME for isolation between concurrent jobs)
+MARKER_DIR="../results/temp/markers/${OUTPUT_NAME}"
 mkdir -p "$MARKER_DIR"
 touch "$MARKER_DIR/chunk_${CHUNK_ID}.done"
 echo -e "${GREEN}✓${NC} Created completion marker for chunk ${CHUNK_ID}"
@@ -546,9 +546,9 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     fi
 fi
 
-# Final cleanup
+# Final cleanup (only remove this job's files, not other concurrent jobs)
 if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     sleep 5
-    rm -rf ../results/temp/chunks
+    rm -f ../results/temp/chunks/${OUTPUT_NAME}_chunk_*.txt
     rm -rf "$MARKER_DIR"
 fi

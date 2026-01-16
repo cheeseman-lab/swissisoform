@@ -751,6 +751,8 @@ class MutationHandler:
             "review_status": "",
             "clinical_significance": "",
             "last_evaluated": "",
+            "condition": "",
+            "star_rating": 0,
             "molecular_consequences": "",
             "protein_change": variant_data.get("protein_change", ""),
             "chromosome": "",
@@ -808,7 +810,53 @@ class MutationHandler:
                     variant_info["last_evaluated"] = classification.get(
                         "last_evaluated", ""
                     )
+                    # Extract condition/disease from trait_set
+                    trait_set = classification.get("trait_set", [])
+                    if trait_set:
+                        conditions = [
+                            t.get("trait_name", "")
+                            for t in trait_set
+                            if t.get("trait_name")
+                            and t.get("trait_name") != "not provided"
+                        ]
+                        variant_info["condition"] = (
+                            "; ".join(conditions) if conditions else ""
+                        )
+                    else:
+                        variant_info["condition"] = ""
+                    # Calculate star rating from review_status
+                    variant_info["star_rating"] = self._get_clinvar_star_rating(
+                        variant_info["review_status"]
+                    )
                     break
+
+    def _get_clinvar_star_rating(self, review_status: str) -> int:
+        """Convert ClinVar review_status to star rating (0-4).
+
+        Star ratings indicate confidence level:
+        - 0 stars: no assertion criteria provided
+        - 1 star: single submitter or conflicting interpretations
+        - 2 stars: multiple submitters, no conflicts
+        - 3 stars: reviewed by expert panel
+        - 4 stars: practice guideline
+        """
+        if not review_status:
+            return 0
+
+        review_lower = review_status.lower()
+
+        if "practice guideline" in review_lower:
+            return 4
+        elif "expert panel" in review_lower:
+            return 3
+        elif "multiple submitters" in review_lower and "no conflicts" in review_lower:
+            return 2
+        elif "criteria provided" in review_lower:
+            # Single submitter or conflicting interpretations
+            return 1
+        else:
+            # No assertion criteria provided or unknown
+            return 0
 
     def _extract_clinvar_molecular_consequences(
         self, variant_info: Dict, variant_data: Dict
@@ -1248,11 +1296,22 @@ class MutationHandler:
                 "impact",
                 "hgvsc",
                 "hgvsp",
-                "allele_frequency",
-                "allele_count",
-                "allele_count_hom",
-                "clinical_significance",
             ]
+
+            # Rename old column names to new prefixed names if present
+            rename_mapping = {
+                "allele_frequency": "gnomad_allele_frequency",
+                "allele_count": "gnomad_allele_count",
+                "allele_count_hom": "gnomad_allele_count_hom",
+                "allele_count_hemi": "gnomad_allele_count_hemi",
+                "sample_count": "cosmic_sample_count",
+                "clinical_significance": "clinvar_clinical_significance",
+                "review_status": "clinvar_review_status",
+                "submission_count": "clinvar_submission_count",
+            }
+            for old_name, new_name in rename_mapping.items():
+                if old_name in df.columns and new_name not in df.columns:
+                    df = df.rename(columns={old_name: new_name})
 
             missing_columns = [col for col in required_columns if col not in df.columns]
             if missing_columns:
@@ -1261,12 +1320,28 @@ class MutationHandler:
                 )
                 # Add missing columns with default values
                 for col in missing_columns:
-                    if col in ["allele_frequency", "allele_count", "allele_count_hom"]:
-                        df[col] = None
-                    elif col == "source":
+                    if col == "source":
                         df[col] = "Custom"
                     else:
                         df[col] = ""
+
+            # Add optional database-specific columns if not present
+            optional_columns = [
+                "gnomad_allele_frequency",
+                "gnomad_allele_count",
+                "gnomad_allele_count_hom",
+                "gnomad_allele_count_hemi",
+                "cosmic_sample_count",
+                "clinvar_clinical_significance",
+                "clinvar_review_status",
+                "clinvar_star_rating",
+                "clinvar_condition",
+                "clinvar_last_evaluated",
+                "clinvar_submission_count",
+            ]
+            for col in optional_columns:
+                if col not in df.columns:
+                    df[col] = None
 
             # Filter by gene if specified
             if gene_name and "gene_name" in df.columns:
@@ -1499,11 +1574,20 @@ class MutationHandler:
             "impact",
             "hgvsc",
             "hgvsp",
-            "allele_frequency",
-            "allele_count",
-            "allele_count_hom",
-            "sample_count",
-            "clinical_significance",
+            # gnomAD columns
+            "gnomad_allele_frequency",
+            "gnomad_allele_count",
+            "gnomad_allele_count_hom",
+            "gnomad_allele_count_hemi",
+            # COSMIC columns
+            "cosmic_sample_count",
+            # ClinVar columns
+            "clinvar_clinical_significance",
+            "clinvar_review_status",
+            "clinvar_star_rating",
+            "clinvar_condition",
+            "clinvar_last_evaluated",
+            "clinvar_submission_count",
         ]
         return pd.DataFrame(columns=standard_columns)
 
@@ -1523,11 +1607,20 @@ class MutationHandler:
                 ),
                 "hgvsc": variants_df["hgvsc"].apply(self._standardize_hgvsc),
                 "hgvsp": variants_df["hgvsp"].apply(self._standardize_hgvsp),
-                "allele_frequency": variants_df["allele_frequency"],
-                "allele_count": variants_df["allele_count"],
-                "allele_count_hom": variants_df["allele_count_hom"],
-                "sample_count": None,
-                "clinical_significance": None,
+                # gnomAD-specific columns
+                "gnomad_allele_frequency": variants_df["allele_frequency"],
+                "gnomad_allele_count": variants_df["allele_count"],
+                "gnomad_allele_count_hom": variants_df["allele_count_hom"],
+                "gnomad_allele_count_hemi": variants_df["allele_count_hemi"],
+                # COSMIC columns (not applicable)
+                "cosmic_sample_count": None,
+                # ClinVar columns (not applicable)
+                "clinvar_clinical_significance": None,
+                "clinvar_review_status": None,
+                "clinvar_star_rating": None,
+                "clinvar_condition": None,
+                "clinvar_last_evaluated": None,
+                "clinvar_submission_count": None,
                 "chromosome": variants_df["chromosome"]
                 if "chromosome" in variants_df.columns
                 else "",
@@ -1660,11 +1753,30 @@ class MutationHandler:
                 "impact": variants_df["standardized_impact"],
                 "hgvsc": variants_df["standardized_hgvsc"],
                 "hgvsp": variants_df["standardized_hgvsp"],
-                "allele_frequency": None,
-                "allele_count": None,
-                "allele_count_hom": None,
-                "sample_count": None,
-                "clinical_significance": variants_df["clinical_significance"],
+                # gnomAD columns (not applicable)
+                "gnomad_allele_frequency": None,
+                "gnomad_allele_count": None,
+                "gnomad_allele_count_hom": None,
+                "gnomad_allele_count_hemi": None,
+                # COSMIC columns (not applicable)
+                "cosmic_sample_count": None,
+                # ClinVar-specific columns
+                "clinvar_clinical_significance": variants_df["clinical_significance"],
+                "clinvar_review_status": variants_df["review_status"]
+                if "review_status" in variants_df.columns
+                else None,
+                "clinvar_star_rating": variants_df["star_rating"]
+                if "star_rating" in variants_df.columns
+                else None,
+                "clinvar_condition": variants_df["condition"]
+                if "condition" in variants_df.columns
+                else None,
+                "clinvar_last_evaluated": variants_df["last_evaluated"]
+                if "last_evaluated" in variants_df.columns
+                else None,
+                "clinvar_submission_count": variants_df["submission_count"]
+                if "submission_count" in variants_df.columns
+                else None,
                 "chromosome": variants_df["chromosome"],
                 "gene_name": variants_df["gene_name"],
             }
@@ -1685,13 +1797,22 @@ class MutationHandler:
                 "impact": "unclassified variant",
                 "hgvsc": variants_df["hgvs_coding"].apply(self._standardize_hgvsc),
                 "hgvsp": variants_df["hgvs_protein"].apply(self._standardize_hgvsp),
-                "allele_frequency": None,  # COSMIC doesn't have population frequency
-                "allele_count": None,  # COSMIC doesn't have this field
-                "allele_count_hom": None,  # COSMIC doesn't have this field
-                "sample_count": variants_df["sample_count"]
+                # gnomAD columns (not applicable)
+                "gnomad_allele_frequency": None,
+                "gnomad_allele_count": None,
+                "gnomad_allele_count_hom": None,
+                "gnomad_allele_count_hemi": None,
+                # COSMIC-specific columns
+                "cosmic_sample_count": variants_df["sample_count"]
                 if "sample_count" in variants_df.columns
                 else None,
-                "clinical_significance": None,  # COSMIC doesn't have clinical significance
+                # ClinVar columns (not applicable)
+                "clinvar_clinical_significance": None,
+                "clinvar_review_status": None,
+                "clinvar_star_rating": None,
+                "clinvar_condition": None,
+                "clinvar_last_evaluated": None,
+                "clinvar_submission_count": None,
                 "chromosome": variants_df["chromosome"],
                 "gene_name": variants_df["gene_name"],
             }
@@ -1736,17 +1857,55 @@ class MutationHandler:
         # Convert position to integer if possible
         df["position"] = pd.to_numeric(df["position"], errors="coerce")
 
-        # Clean frequency data
-        df["allele_frequency"] = pd.to_numeric(df["allele_frequency"], errors="coerce")
+        # Clean gnomAD numeric columns
+        if "gnomad_allele_frequency" in df.columns:
+            df["gnomad_allele_frequency"] = pd.to_numeric(
+                df["gnomad_allele_frequency"], errors="coerce"
+            )
+        if "gnomad_allele_count" in df.columns:
+            df["gnomad_allele_count"] = pd.to_numeric(
+                df["gnomad_allele_count"], errors="coerce"
+            )
+        if "gnomad_allele_count_hom" in df.columns:
+            df["gnomad_allele_count_hom"] = pd.to_numeric(
+                df["gnomad_allele_count_hom"], errors="coerce"
+            )
+        if "gnomad_allele_count_hemi" in df.columns:
+            df["gnomad_allele_count_hemi"] = pd.to_numeric(
+                df["gnomad_allele_count_hemi"], errors="coerce"
+            )
 
-        # Clean count data (gnomAD allele_count, COSMIC sample_count)
-        if "allele_count" in df.columns:
-            df["allele_count"] = pd.to_numeric(df["allele_count"], errors="coerce")
-        if "sample_count" in df.columns:
-            df["sample_count"] = pd.to_numeric(df["sample_count"], errors="coerce")
+        # Clean COSMIC numeric columns
+        if "cosmic_sample_count" in df.columns:
+            df["cosmic_sample_count"] = pd.to_numeric(
+                df["cosmic_sample_count"], errors="coerce"
+            )
+
+        # Clean ClinVar numeric columns
+        if "clinvar_submission_count" in df.columns:
+            df["clinvar_submission_count"] = pd.to_numeric(
+                df["clinvar_submission_count"], errors="coerce"
+            )
+
+        # Filter out gnomAD variants with 0 or missing allele count
+        # These represent variants with no population evidence
+        if "source" in df.columns and "gnomad_allele_count" in df.columns:
+            gnomad_mask = df["source"] == "gnomAD"
+            zero_ac_mask = (df["gnomad_allele_count"] == 0) | (
+                df["gnomad_allele_count"].isna()
+            )
+            variants_to_remove = gnomad_mask & zero_ac_mask
+            n_removed = variants_to_remove.sum()
+            if n_removed > 0:
+                logger.debug(
+                    f"Filtered out {n_removed} gnomAD variants with 0 allele count"
+                )
+                df = df[~variants_to_remove]
 
         # Fill missing values
-        df["clinical_significance"] = df["clinical_significance"].fillna("Unknown")
+        df["clinvar_clinical_significance"] = df[
+            "clinvar_clinical_significance"
+        ].fillna("Unknown")
         df["impact"] = df["impact"].fillna("Unknown")
 
         # Clean string columns
@@ -3287,6 +3446,7 @@ class MutationHandler:
                     # Count by source and by source×impact
                     # Also sum allele counts (gnomAD) and sample counts (COSMIC)
                     gnomad_allele_count_sum = 0
+                    gnomad_allele_count_hom_sum = 0
                     cosmic_sample_count_sum = 0
 
                     if "source" in validated_mutations.columns:
@@ -3300,21 +3460,36 @@ class MutationHandler:
                                 source_categories[source_key] = len(source_mutations)
 
                                 # Sum allele counts for gnomAD
-                                if (
-                                    str(source).lower() == "gnomad"
-                                    and "allele_count" in source_mutations.columns
-                                ):
-                                    gnomad_allele_count_sum = (
-                                        source_mutations["allele_count"].fillna(0).sum()
-                                    )
+                                if str(source).lower() == "gnomad":
+                                    if (
+                                        "gnomad_allele_count"
+                                        in source_mutations.columns
+                                    ):
+                                        gnomad_allele_count_sum = (
+                                            source_mutations["gnomad_allele_count"]
+                                            .fillna(0)
+                                            .sum()
+                                        )
+                                    if (
+                                        "gnomad_allele_count_hom"
+                                        in source_mutations.columns
+                                    ):
+                                        gnomad_allele_count_hom_sum = (
+                                            source_mutations["gnomad_allele_count_hom"]
+                                            .fillna(0)
+                                            .sum()
+                                        )
 
                                 # Sum sample counts for COSMIC
                                 if (
                                     str(source).lower() == "cosmic"
-                                    and "sample_count" in source_mutations.columns
+                                    and "cosmic_sample_count"
+                                    in source_mutations.columns
                                 ):
                                     cosmic_sample_count_sum = (
-                                        source_mutations["sample_count"].fillna(0).sum()
+                                        source_mutations["cosmic_sample_count"]
+                                        .fillna(0)
+                                        .sum()
                                     )
 
                                 # Count by source×impact (e.g., clinvar_missense_variant)
@@ -3363,7 +3538,7 @@ class MutationHandler:
                                         # Sum allele counts for gnomAD per impact type
                                         if (
                                             str(source).lower() == "gnomad"
-                                            and "allele_count"
+                                            and "gnomad_allele_count"
                                             in source_impact_mutations.columns
                                         ):
                                             key = f"gnomad_allele_count_{impact_normalized}"
@@ -3371,7 +3546,7 @@ class MutationHandler:
                                                 gnomad_allele_count_by_impact[key] = (
                                                     int(
                                                         source_impact_mutations[
-                                                            "allele_count"
+                                                            "gnomad_allele_count"
                                                         ]
                                                         .fillna(0)
                                                         .sum()
@@ -3381,7 +3556,7 @@ class MutationHandler:
                                         # Sum sample counts for COSMIC per impact type
                                         if (
                                             str(source).lower() == "cosmic"
-                                            and "sample_count"
+                                            and "cosmic_sample_count"
                                             in source_impact_mutations.columns
                                         ):
                                             key = f"cosmic_sample_count_{impact_normalized}"
@@ -3389,7 +3564,7 @@ class MutationHandler:
                                                 cosmic_sample_count_by_impact[key] = (
                                                     int(
                                                         source_impact_mutations[
-                                                            "sample_count"
+                                                            "cosmic_sample_count"
                                                         ]
                                                         .fillna(0)
                                                         .sum()
@@ -3452,6 +3627,9 @@ class MutationHandler:
                     if "gnomad" in [s.lower() for s in sources]:
                         db_aggregates["gnomad_allele_count"] = int(
                             gnomad_allele_count_sum
+                        )
+                        db_aggregates["gnomad_allele_count_hom"] = int(
+                            gnomad_allele_count_hom_sum
                         )
                     if "cosmic" in [s.lower() for s in sources]:
                         db_aggregates["cosmic_sample_count"] = int(
@@ -3791,7 +3969,7 @@ class MutationHandler:
                                 "impact",
                                 "impact_validated",
                                 "impact_agreement",
-                                "aa_change_validated",  # NEW!
+                                "aa_change_validated",
                                 "hgvsc",
                                 "hgvsp",
                                 # Start site effects
@@ -3800,12 +3978,20 @@ class MutationHandler:
                                 "in_canonical_start_site",
                                 "is_canonical_start_loss",
                                 "canonical_start_codon_extracted",
-                                # Population data
-                                "allele_frequency",
-                                "allele_count",
-                                "allele_count_hom",
-                                "sample_count",
-                                "clinical_significance",
+                                # gnomAD data
+                                "gnomad_allele_frequency",
+                                "gnomad_allele_count",
+                                "gnomad_allele_count_hom",
+                                "gnomad_allele_count_hemi",
+                                # COSMIC data
+                                "cosmic_sample_count",
+                                # ClinVar data
+                                "clinvar_clinical_significance",
+                                "clinvar_star_rating",
+                                "clinvar_review_status",
+                                "clinvar_condition",
+                                "clinvar_last_evaluated",
+                                "clinvar_submission_count",
                             ]
 
                             # Select only columns that exist and are in our desired order
