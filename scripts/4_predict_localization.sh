@@ -3,20 +3,25 @@
 # SwissIsoform Pipeline Step 4: Predict Localization (Parallel)
 #
 # This script generates subcellular localization predictions using DeepLoc.
-# It processes protein sequences in parallel across multiple datasets and modes.
+# It processes protein sequences in parallel with both Fast and Accurate modes.
 #
 # Usage:
 #   sbatch 4_predict_localization.sh
+#   sbatch --export=DATASET=hela 4_predict_localization.sh
+#   sbatch --export=DATASET=hela_bch 4_predict_localization.sh
+#
+# Environment Variables:
+#   DATASET - Dataset to process (default: hela)
 #
 # Prerequisites:
-#   - 3_generate_proteins.sh must have been run
+#   - 3_generate_proteins.sh must have been run for the dataset
 #   - Protein sequence files must exist
 #   - DeepLoc conda environment must be installed
 #
 
 #SBATCH --job-name=deeploc                 # Job name
 #SBATCH --partition=nvidia-A4000-20        # GPU partition
-#SBATCH --array=1-8                        # 8 tasks for parallel processing
+#SBATCH --array=1-4                        # 4 tasks for parallel processing
 #SBATCH --cpus-per-task=4                  # CPUs per task
 #SBATCH --mem=36G                          # Memory per task
 #SBATCH --gres=gpu:1                       # 1 GPU per task
@@ -44,11 +49,15 @@ else
     fi
 fi
 
+# Dataset selection (default: hela)
+DATASET="${DATASET:-hela}"
+
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   SwissIsoform Pipeline Step 4: Predict Localization         ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo "Array Task ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_MAX}"
+echo "Dataset: $DATASET"
 echo ""
 
 # ============================================================================
@@ -81,37 +90,38 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
     echo -e "${YELLOW}→${NC} Checking for input files..."
     echo ""
 
-    datasets=("reduced" "full")
-    available_files=()
     missing_files=()
 
-    for dataset in "${datasets[@]}"; do
-        pairs_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
-        mutations_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
+    pairs_file="../results/$DATASET/proteins/protein_sequences_pairs.fasta"
+    mutations_file="../results/$DATASET/proteins/protein_sequences_with_mutations.fasta"
 
-        if [ -f "$pairs_file" ]; then
-            count=$(grep -c '^>' "$pairs_file")
-            echo -e "${GREEN}✓${NC} $dataset/protein_sequences_pairs.fasta ($count sequences)"
-        else
-            echo -e "${YELLOW}⚠${NC} $dataset/protein_sequences_pairs.fasta missing"
-            missing_files+=("$dataset:pairs")
-        fi
+    if [ -f "$pairs_file" ]; then
+        count=$(grep -c '^>' "$pairs_file")
+        echo -e "${GREEN}✓${NC} $DATASET/protein_sequences_pairs.fasta ($count sequences)"
+    else
+        echo -e "${RED}✗${NC} $DATASET/protein_sequences_pairs.fasta missing"
+        missing_files+=("$DATASET:pairs")
+    fi
 
-        if [ -f "$mutations_file" ]; then
-            count=$(grep -c '^>' "$mutations_file")
-            echo -e "${GREEN}✓${NC} $dataset/protein_sequences_with_mutations.fasta ($count sequences)"
-        else
-            echo -e "${YELLOW}⚠${NC} $dataset/protein_sequences_with_mutations.fasta missing"
-            missing_files+=("$dataset:mutations")
-        fi
-    done
+    if [ -f "$mutations_file" ]; then
+        count=$(grep -c '^>' "$mutations_file")
+        echo -e "${GREEN}✓${NC} $DATASET/protein_sequences_with_mutations.fasta ($count sequences)"
+    else
+        echo -e "${RED}✗${NC} $DATASET/protein_sequences_with_mutations.fasta missing"
+        missing_files+=("$DATASET:mutations")
+    fi
+
+    if [ ${#missing_files[@]} -gt 0 ]; then
+        echo ""
+        echo -e "${RED}Missing required files!${NC}"
+        echo "Run 3_generate_proteins.sh first for dataset: $DATASET"
+        exit 1
+    fi
 
     # Create localization output directories
     echo ""
     echo -e "${YELLOW}→${NC} Creating output directories..."
-    for dataset in "${datasets[@]}"; do
-        mkdir -p ../results/$dataset/localization
-    done
+    mkdir -p ../results/$DATASET/localization
     echo -e "${GREEN}✓${NC} Directories created"
 fi
 
@@ -144,39 +154,23 @@ echo -e "${GREEN}✓${NC} Environment activated"
 # Task Assignment
 # ============================================================================
 
-# Define which file and mode each task processes (8 tasks total)
+# Define which file and mode each task processes (4 tasks total)
 case $SLURM_ARRAY_TASK_ID in
     1)
-        dataset="reduced"; file_type="pairs"; mode="Fast"
-        input_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
+        file_type="pairs"; mode="Fast"
+        input_file="../results/$DATASET/proteins/protein_sequences_pairs.fasta"
         ;;
     2)
-        dataset="reduced"; file_type="pairs"; mode="Accurate"
-        input_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
+        file_type="pairs"; mode="Accurate"
+        input_file="../results/$DATASET/proteins/protein_sequences_pairs.fasta"
         ;;
     3)
-        dataset="reduced"; file_type="mutations"; mode="Fast"
-        input_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
+        file_type="mutations"; mode="Fast"
+        input_file="../results/$DATASET/proteins/protein_sequences_with_mutations.fasta"
         ;;
     4)
-        dataset="reduced"; file_type="mutations"; mode="Accurate"
-        input_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
-        ;;
-    5)
-        dataset="full"; file_type="pairs"; mode="Fast"
-        input_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
-        ;;
-    6)
-        dataset="full"; file_type="pairs"; mode="Accurate"
-        input_file="../results/$dataset/proteins/protein_sequences_pairs.fasta"
-        ;;
-    7)
-        dataset="full"; file_type="mutations"; mode="Fast"
-        input_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
-        ;;
-    8)
-        dataset="full"; file_type="mutations"; mode="Accurate"
-        input_file="../results/$dataset/proteins/protein_sequences_with_mutations.fasta"
+        file_type="mutations"; mode="Accurate"
+        input_file="../results/$DATASET/proteins/protein_sequences_with_mutations.fasta"
         ;;
     *)
         echo -e "${RED}✗${NC} Unknown array task ID: $SLURM_ARRAY_TASK_ID"
@@ -194,7 +188,7 @@ echo -e "${BLUE}║  Processing Task ${SLURM_ARRAY_TASK_ID}                     
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-echo -e "${YELLOW}→${NC} Processing $dataset dataset ($file_type sequences, $mode mode)"
+echo -e "${YELLOW}→${NC} Processing $DATASET dataset ($file_type sequences, $mode mode)"
 echo "  Input file: $(basename $input_file)"
 echo ""
 
@@ -206,10 +200,10 @@ if [ -f "$input_file" ]; then
     fi
 
     # Create descriptive temporary subfolder for this specific run
-    temp_subdir="../results/$dataset/localization/${dataset}_${file_type}_${mode}_temp_$$"
+    temp_subdir="../results/$DATASET/localization/${DATASET}_${file_type}_${mode}_temp_$$"
     mkdir -p "$temp_subdir"
 
-    echo -e "${YELLOW}→${NC} Starting DeepLoc $mode mode for $dataset ($file_type) at $(date)"
+    echo -e "${YELLOW}→${NC} Starting DeepLoc $mode mode for $DATASET ($file_type) at $(date)"
     echo ""
 
     # Set GPU memory growth to avoid OOM errors
@@ -221,7 +215,7 @@ if [ -f "$input_file" ]; then
     # Find and move the results file
     result_file=$(find "$temp_subdir" -name "results_*.csv" | head -n 1)
     if [ -n "$result_file" ] && [ -f "$result_file" ]; then
-        output_file="../results/$dataset/localization/protein_sequences_${file_type}_${mode}_results.csv"
+        output_file="../results/$DATASET/localization/protein_sequences_${file_type}_${mode}_results.csv"
         mv "$result_file" "$output_file"
         echo ""
         echo -e "${GREEN}✓${NC} Moved $mode results to protein_sequences_${file_type}_${mode}_results.csv"
@@ -241,9 +235,9 @@ if [ -f "$input_file" ]; then
     fi
 
     echo ""
-    echo -e "${GREEN}✓${NC} Completed $dataset ($file_type, $mode) at $(date)"
+    echo -e "${GREEN}✓${NC} Completed $DATASET ($file_type, $mode) at $(date)"
 else
-    echo -e "${YELLOW}⚠${NC} Skipping $dataset ($file_type, $mode) - input file not found"
+    echo -e "${YELLOW}⚠${NC} Skipping $DATASET ($file_type, $mode) - input file not found"
     exit 1
 fi
 
@@ -251,7 +245,7 @@ fi
 # Verification (Task 8 Only)
 # ============================================================================
 
-if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
+if [ "$SLURM_ARRAY_TASK_ID" -eq 4 ]; then
     # Wait for file system sync
     sleep 10
 
@@ -261,28 +255,25 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    echo -e "${YELLOW}→${NC} Verifying DeepLoc outputs..."
+    echo -e "${YELLOW}→${NC} Verifying DeepLoc outputs for $DATASET..."
     echo ""
 
     # Check for outputs from all tasks
-    datasets=("reduced" "full")
     file_types=("pairs" "mutations")
     modes=("Fast" "Accurate")
     found_outputs=()
 
-    for dataset in "${datasets[@]}"; do
-        for file_type in "${file_types[@]}"; do
-            for mode in "${modes[@]}"; do
-                output_file="../results/$dataset/localization/protein_sequences_${file_type}_${mode}_results.csv"
+    for file_type in "${file_types[@]}"; do
+        for mode in "${modes[@]}"; do
+            output_file="../results/$DATASET/localization/protein_sequences_${file_type}_${mode}_results.csv"
 
-                if [ -f "$output_file" ]; then
-                    count=$(($(wc -l < "$output_file") - 1))
-                    echo -e "${GREEN}✓${NC} $dataset/$(basename $output_file) ($count predictions)"
-                    found_outputs+=("$output_file")
-                else
-                    echo -e "${YELLOW}⚠${NC} $dataset/$(basename $output_file) missing"
-                fi
-            done
+            if [ -f "$output_file" ]; then
+                count=$(($(wc -l < "$output_file") - 1))
+                echo -e "${GREEN}✓${NC} $DATASET/$(basename $output_file) ($count predictions)"
+                found_outputs+=("$output_file")
+            else
+                echo -e "${YELLOW}⚠${NC} $DATASET/$(basename $output_file) missing"
+            fi
         done
     done
 
@@ -299,39 +290,27 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
 
         # Debug: List what files exist in localization directories
         echo ""
-        echo "Debug: Files in localization directories:"
-        for dataset in "${datasets[@]}"; do
-            localization_dir="../results/$dataset/localization"
-            if [ -d "$localization_dir" ]; then
-                echo "  $dataset/localization/:"
-                ls -la "$localization_dir" | sed 's/^/    /'
-            fi
-        done
+        echo "Debug: Files in localization directory:"
+        localization_dir="../results/$DATASET/localization"
+        if [ -d "$localization_dir" ]; then
+            echo "  $DATASET/localization/:"
+            ls -la "$localization_dir" | sed 's/^/    /'
+        fi
 
         exit 1
     else
-        echo -e "${GREEN}✓ DeepLoc predictions completed successfully!${NC}"
+        echo -e "${GREEN}✓ DeepLoc predictions completed successfully for $DATASET!${NC}"
         echo ""
         echo "Generated predictions:"
-        echo ""
-
-        # Group outputs by dataset
-        for dataset in "${datasets[@]}"; do
-            dataset_outputs=($(printf '%s\n' "${found_outputs[@]}" | grep "$dataset/localization/"))
-
-            if [ ${#dataset_outputs[@]} -gt 0 ]; then
-                echo "  └─ $dataset/localization/"
-                for output in "${dataset_outputs[@]}"; do
-                    echo "     ├─ $(basename $output)"
-                done
-                echo ""
-            fi
+        echo "  └─ $DATASET/localization/"
+        for output in "${found_outputs[@]}"; do
+            echo "     ├─ $(basename $output)"
         done
-
+        echo ""
         echo "Summary: Generated ${#found_outputs[@]} prediction files"
         echo ""
         echo -e "${BLUE}Next step:${NC}"
-        echo "  Analyze localization predictions for your research questions"
+        echo "  Run: sbatch --export=DATASET=${DATASET} scripts/5_summarize_results.sh"
         echo ""
     fi
 fi

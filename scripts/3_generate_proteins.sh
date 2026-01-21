@@ -10,10 +10,12 @@
 #   sbatch 3_generate_proteins.sh
 #   sbatch --export=DATASET=hela 3_generate_proteins.sh
 #   sbatch --export=DATASET=hela,SOURCES="gnomad|cosmic" 3_generate_proteins.sh
+#   sbatch --export=DATASET=hela,SOURCES="custom",CUSTOM_PARQUET="/path/to/mutations.parquet" 3_generate_proteins.sh
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
-#   SOURCES - Mutation databases to use (default: clinvar, pipe-separated: clinvar|gnomad|cosmic)
+#   SOURCES - Mutation databases to use (default: clinvar, pipe-separated: clinvar|gnomad|cosmic|custom)
+#   CUSTOM_PARQUET - Path to custom parquet file with mutation data (required when using 'custom' source)
 #
 # Note:
 #   Only missense variants are processed. The mutation CSV from step 2 must contain
@@ -65,6 +67,9 @@ else
     IFS='|' read -ra SOURCES_ARGS <<< "$SOURCES"
 fi
 
+# Custom parquet file (optional, required when using 'custom' source)
+CUSTOM_PARQUET="${CUSTOM_PARQUET:-}"
+
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   SwissIsoform Pipeline Step 3: Generate Proteins            ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
@@ -72,6 +77,9 @@ echo ""
 echo "Array Task ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_MAX}"
 echo "Dataset: $DATASET"
 echo "Sources: ${SOURCES_ARGS[@]}"
+if [ -n "$CUSTOM_PARQUET" ]; then
+    echo "Custom parquet: $CUSTOM_PARQUET"
+fi
 echo "Impact types: missense variant (only)"
 echo ""
 
@@ -217,7 +225,8 @@ print(bed_file, gtf_file, gene_list)
     echo ""
     echo -e "${YELLOW}→${NC} Creating output directories..."
     mkdir -p "../results/${DATASET}/proteins"
-    mkdir -p ../results/temp/protein_chunks
+    mkdir -p "../results/temp/protein_chunks_${DATASET}"
+    mkdir -p "../results/temp/protein_markers_${DATASET}"
     echo -e "${GREEN}✓${NC} Directories created"
 else
     # Other tasks need to read the config too
@@ -293,7 +302,7 @@ FORMAT="fasta,csv"
 mkdir -p "$OUTPUT_DIR"
 
 # Create gene chunk for this task
-CHUNK_FILE="../results/temp/protein_chunks/chunk_${CHUNK_ID}.txt"
+CHUNK_FILE="../results/temp/protein_chunks_${DATASET}/chunk_${CHUNK_ID}.txt"
 split_gene_list "$GENE_LIST" "$TOTAL_CHUNKS" "$CHUNK_ID" "$CHUNK_FILE"
 
 # Skip if no genes in chunk
@@ -309,6 +318,9 @@ echo ""
 echo "Configuration:"
 echo "  ├─ Pre-validated mutations: $(basename $MUTATIONS_FILE)"
 echo "  ├─ Sources: ${SOURCES_ARGS[@]}"
+if [ -n "$CUSTOM_PARQUET" ]; then
+    echo "  ├─ Custom parquet: $(basename $CUSTOM_PARQUET)"
+fi
 echo "  ├─ Impact types: missense variant (only)"
 echo "  ├─ Length range: $MIN_LENGTH-$MAX_LENGTH amino acids"
 echo "  └─ Output format: $FORMAT"
@@ -317,16 +329,25 @@ echo ""
 # Generate both pairs and mutations datasets for this chunk
 echo -e "${YELLOW}→${NC} Generating protein sequences..."
 echo ""
-python3 generate_proteins.py "$CHUNK_FILE" "$OUTPUT_DIR" \
-  --mutations-file "$MUTATIONS_FILE" \
-  --genome "$GENOME_PATH" \
-  --annotation "$ANNOTATION_PATH" \
-  --bed "$TRUNCATIONS_PATH" \
-  --sources "${SOURCES_ARGS[@]}" \
-  --min-length "$MIN_LENGTH" \
-  --max-length "$MAX_LENGTH" \
-  --format "$FORMAT" \
-  -v
+
+# Build command with optional custom parquet path
+PYTHON_CMD=(python3 generate_proteins.py "$CHUNK_FILE" "$OUTPUT_DIR"
+  --mutations-file "$MUTATIONS_FILE"
+  --genome "$GENOME_PATH"
+  --annotation "$ANNOTATION_PATH"
+  --bed "$TRUNCATIONS_PATH"
+  --sources "${SOURCES_ARGS[@]}"
+  --min-length "$MIN_LENGTH"
+  --max-length "$MAX_LENGTH"
+  --format "$FORMAT"
+  -v)
+
+# Add custom parquet path if specified
+if [ -n "$CUSTOM_PARQUET" ]; then
+    PYTHON_CMD+=(--custom-parquet "$CUSTOM_PARQUET")
+fi
+
+"${PYTHON_CMD[@]}"
 
 exit_code=$?
 
@@ -343,7 +364,7 @@ echo -e "${GREEN}✓${NC} Completed chunk ${CHUNK_ID}"
 rm -f "$CHUNK_FILE"
 
 # Create completion marker for this task
-MARKER_DIR="../results/temp/protein_markers"
+MARKER_DIR="../results/temp/protein_markers_${DATASET}"
 mkdir -p "$MARKER_DIR"
 touch "$MARKER_DIR/chunk_${CHUNK_ID}.done"
 echo -e "${GREEN}✓${NC} Created completion marker for chunk ${CHUNK_ID}"
@@ -549,6 +570,6 @@ fi
 # Final cleanup
 if [ "$SLURM_ARRAY_TASK_ID" -eq 8 ]; then
     sleep 5
-    rm -rf ../results/temp/protein_chunks
+    rm -rf "../results/temp/protein_chunks_${DATASET}"
     rm -rf "$MARKER_DIR"
 fi
