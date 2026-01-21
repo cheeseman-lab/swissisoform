@@ -100,6 +100,7 @@ class AlternativeProteinGenerator:
         output_dir: str,
         mutation_handler: Optional[MutationHandler] = None,
         debug: bool = False,
+        custom_parquet_path: Optional[str] = None,
     ):
         """Initialize the AlternativeProteinGenerator.
 
@@ -109,6 +110,7 @@ class AlternativeProteinGenerator:
             output_dir (str): Directory to save output files.
             mutation_handler (Optional[MutationHandler]): Optional MutationHandler for mutation integration.
             debug (bool): Enable debug mode for detailed output. Defaults to False.
+            custom_parquet_path (Optional[str]): Path to custom mutations parquet file.
         """
         self.genome = genome_handler
         self.alt_isoforms = alt_isoform_handler
@@ -116,6 +118,7 @@ class AlternativeProteinGenerator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.mutation_handler = mutation_handler
         self.debug = debug
+        self.custom_parquet_path = custom_parquet_path
         self.validation_cache = self.ValidationCache()
 
     def _debug_print(self, message: str):
@@ -1349,7 +1352,10 @@ class AlternativeProteinGenerator:
 
         # Get mutations in this region from specified sources
         mutations = await self.mutation_handler.get_mutations_for_gene(
-            gene_name=gene_name, alt_features=region_features, sources=sources
+            gene_name=gene_name,
+            alt_features=region_features,
+            sources=sources,
+            custom_parquet_path=self.custom_parquet_path,
         )
 
         if mutations is None or mutations.empty:
@@ -2756,6 +2762,14 @@ class AlternativeProteinGenerator:
                 logger.debug(
                     f"Codon {codon_number}: {original_codon} | Pos {codon_offset + 1} | Expected {expected_base}, got {transcript_ref} ({ref_status})"
                 )
+
+            # Reject mutations with reference mismatches
+            if not reference_match:
+                if self.debug:
+                    logger.debug(
+                        f"❌ Reference mismatch: expected {expected_base}, got {transcript_ref} - rejecting mutation"
+                    )
+                return {"consequence": "reference_mismatch", "aa_change": ""}
 
             # Apply mutation to codon
             mutated_codon = (

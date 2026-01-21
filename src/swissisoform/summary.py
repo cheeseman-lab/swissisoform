@@ -21,6 +21,56 @@ class SummaryAnalyzer:
         """Initialize the analyzer."""
         pass
 
+    def detect_mutation_sources(self, pair_results):
+        """Detect available mutation sources from column names.
+
+        Scans column names to find available sources by looking for patterns:
+        - count_{source} (e.g., count_custom, count_clinvar)
+        - ids_{source}_* (e.g., ids_custom_missense_variant)
+        - {source}_allele_count_* (gnomad specific)
+        - {source}_sample_count_* (cosmic specific)
+
+        Args:
+            pair_results (pd.DataFrame): Isoform-level mutation results DataFrame.
+
+        Returns:
+            List[str]: List of detected source names (e.g., ['custom', 'clinvar']).
+        """
+        if pair_results is None or pair_results.empty:
+            return []
+
+        known_sources = ["custom", "clinvar", "gnomad", "cosmic"]
+        detected_sources = []
+
+        columns = pair_results.columns.tolist()
+
+        for source in known_sources:
+            # Check for count_{source} column
+            if f"count_{source}" in columns:
+                detected_sources.append(source)
+                continue
+
+            # Check for ids_{source}_* pattern
+            if any(col.startswith(f"ids_{source}_") for col in columns):
+                detected_sources.append(source)
+                continue
+
+            # Check for gnomad-specific pattern: gnomad_allele_count_*
+            if source == "gnomad" and any(
+                col.startswith("gnomad_allele_count_") for col in columns
+            ):
+                detected_sources.append(source)
+                continue
+
+            # Check for cosmic-specific pattern: cosmic_sample_count_*
+            if source == "cosmic" and any(
+                col.startswith("cosmic_sample_count_") for col in columns
+            ):
+                detected_sources.append(source)
+                continue
+
+        return detected_sources
+
     def dataset_has_data(self, dataset):
         """Check if a dataset has any data available for analysis.
 
@@ -89,7 +139,7 @@ class SummaryAnalyzer:
         pair_results = None
 
         gene_file = base_path / "gene_level_results.csv"
-        pair_file = base_path / "truncation_level_results.csv"
+        pair_file = base_path / "isoform_level_results.csv"
 
         if gene_file.exists():
             gene_results = pd.read_csv(gene_file)
@@ -126,7 +176,9 @@ class SummaryAnalyzer:
             logger.info(f"Loaded {len(pairs_df)} protein sequence pairs for {dataset}")
             # Index by sequence identifier
             for _, row in pairs_df.iterrows():
-                seq_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
+                seq_id = (
+                    f"{row['gene_name']}_{row['transcript_id']}_{row['variant_id']}"
+                )
                 protein_data[seq_id] = row.to_dict()
 
         if mutations_file.exists():
@@ -136,7 +188,9 @@ class SummaryAnalyzer:
             )
             # Index by sequence identifier
             for _, row in mutations_df.iterrows():
-                seq_id = f"{row['gene']}_{row['transcript_id']}_{row['variant_id']}"
+                seq_id = (
+                    f"{row['gene_name']}_{row['transcript_id']}_{row['variant_id']}"
+                )
                 protein_data[seq_id] = row.to_dict()
 
         return protein_data
@@ -196,7 +250,7 @@ class SummaryAnalyzer:
         Args:
             dataset (str): Name of the dataset being analyzed.
             gene_results (Optional[pd.DataFrame]): Gene-level mutation results DataFrame.
-            pair_results (Optional[pd.DataFrame]): Transcript-truncation pair results DataFrame.
+            pair_results (Optional[pd.DataFrame]): Isoform-level results DataFrame.
 
         Returns:
             List[str]: List of summary lines describing the mutation analysis.
@@ -218,37 +272,49 @@ class SummaryAnalyzer:
         summary_lines.append(f"Genes with successful analysis: {successful_genes}")
 
         if pair_results is not None and not pair_results.empty:
-            # Look for mutation columns in pair results
-            mutation_columns = [
-                col for col in pair_results.columns if col.startswith("mutations_")
+            # Detect available sources
+            detected_sources = self.detect_mutation_sources(pair_results)
+            if detected_sources:
+                summary_lines.append(
+                    f"\nMutation sources detected: {', '.join(detected_sources)}"
+                )
+
+            # Look for total count columns (count_{variant_type})
+            variant_types = [
+                "missense_variant",
+                "nonsense_variant",
+                "frameshift_variant",
+                "inframe_deletion",
+                "inframe_insertion",
+                "synonymous_variant",
             ]
 
-            if mutation_columns:
-                summary_lines.append(f"\nMutation breakdown by type:")
+            count_columns = [
+                f"count_{vt}"
+                for vt in variant_types
+                if f"count_{vt}" in pair_results.columns
+            ]
 
-                # Count genes with each mutation type
-                gene_mutation_counts = {}
+            if count_columns:
+                summary_lines.append(f"\nMutation breakdown by type (all sources):")
 
-                for col in mutation_columns:
+                for col in count_columns:
                     # Extract mutation type from column name
-                    mutation_type = (
-                        col.replace("mutations_", "").replace("_", " ").title()
-                    )
+                    mutation_type = col.replace("count_", "").replace("_", " ").title()
 
                     # Count genes that have at least one mutation of this type
                     genes_with_mutation = pair_results[pair_results[col] > 0][
                         "gene_name"
                     ].nunique()
-                    total_mutations = pair_results[col].sum()
+                    total_mutations = int(pair_results[col].sum())
 
-                    gene_mutation_counts[mutation_type] = genes_with_mutation
                     summary_lines.append(
                         f"  {mutation_type}: {genes_with_mutation} genes ({total_mutations} total mutations)"
                     )
 
-                # Special combined category: frameshift OR nonsense (changed from "Truncating")
-                frameshift_col = "mutations_frameshift_variant"
-                nonsense_col = "mutations_nonsense_variant"
+                # Special combined category: frameshift OR nonsense
+                frameshift_col = "count_frameshift_variant"
+                nonsense_col = "count_nonsense_variant"
 
                 if (
                     frameshift_col in pair_results.columns
@@ -259,8 +325,7 @@ class SummaryAnalyzer:
                         | (pair_results[nonsense_col] > 0)
                     ]["gene_name"].nunique()
 
-                    # Calculate total frameshift + nonsense mutations
-                    total_frameshift_or_nonsense_mutations = (
+                    total_frameshift_or_nonsense_mutations = int(
                         pair_results[frameshift_col].sum()
                         + pair_results[nonsense_col].sum()
                     )
@@ -270,18 +335,37 @@ class SummaryAnalyzer:
                     )
 
                 # Total mutations
-                total_mutations_all = (
+                total_mutations_all = int(
                     pair_results["total_mutations"].sum()
                     if "total_mutations" in pair_results.columns
                     else 0
                 )
                 summary_lines.append(
-                    f"\nTotal mutations across all transcript-truncation pairs: {total_mutations_all}"
+                    f"\nTotal mutations across all isoform pairs: {total_mutations_all}"
                 )
+
+                # Per-source breakdown if multiple sources
+                if len(detected_sources) > 1:
+                    summary_lines.append(f"\nPer-source breakdown:")
+                    for source in detected_sources:
+                        source_count_col = f"count_{source}"
+                        if source_count_col in pair_results.columns:
+                            source_total = int(pair_results[source_count_col].sum())
+                            genes_with_source = pair_results[
+                                pair_results[source_count_col] > 0
+                            ]["gene_name"].nunique()
+                            summary_lines.append(
+                                f"  {source.upper()}: {genes_with_source} genes ({source_total} total mutations)"
+                            )
+                elif len(detected_sources) == 1:
+                    source = detected_sources[0]
+                    summary_lines.append(f"\nSource: {source.upper()}")
             else:
-                summary_lines.append("No mutation data found in pair results")
+                summary_lines.append(
+                    "No mutation count columns found in isoform results"
+                )
         else:
-            summary_lines.append("No pair-level mutation data available")
+            summary_lines.append("No isoform-level mutation data available")
 
         return summary_lines
 
@@ -442,9 +526,9 @@ class SummaryAnalyzer:
             for gene in pairs_df["gene"].unique():
                 gene_data = pairs_df[pairs_df["gene"] == gene]
 
-                # Find canonical and truncated sequences
+                # Find canonical and non-canonical sequences (truncations + extensions)
                 canonical_seqs = gene_data[gene_data["variant"] == "canonical"]
-                truncated_seqs = gene_data[gene_data["variant"].str.startswith("trunc")]
+                truncated_seqs = gene_data[gene_data["variant"] != "canonical"]
 
                 if not canonical_seqs.empty and not truncated_seqs.empty:
                     canonical_loc = canonical_seqs.iloc[0]["prediction"]
@@ -855,8 +939,8 @@ class SummaryAnalyzer:
 
             canonical_loc = canonical_seqs.iloc[0]["prediction"]
 
-            # Count truncating isoforms with localization changes (changed from "variants")
-            truncated_seqs = gene_pairs[gene_pairs["variant"].str.startswith("trunc")]
+            # Count non-canonical isoforms with localization changes (truncations + extensions)
+            truncated_seqs = gene_pairs[gene_pairs["variant"] != "canonical"]
             truncating_changes = 0
             for _, trunc_seq in truncated_seqs.iterrows():
                 if self.are_localizations_different(
@@ -886,57 +970,88 @@ class SummaryAnalyzer:
             frameshift_variants = []
             nonsense_variants = []
             missense_variants = []
+            source_counts = {}  # Track per-source mutation counts
 
             if pair_results is not None:
                 gene_mutation_data = pair_results[pair_results["gene_name"] == gene]
                 if not gene_mutation_data.empty:
-                    # Sum up mutations for this gene across all transcript-truncation pairs
-                    if "mutations_frameshift_variant" in gene_mutation_data.columns:
-                        frameshift_mutations = gene_mutation_data[
-                            "mutations_frameshift_variant"
-                        ].sum()
-                    if "mutations_nonsense_variant" in gene_mutation_data.columns:
-                        nonsense_mutations = gene_mutation_data[
-                            "mutations_nonsense_variant"
-                        ].sum()
-                    if "mutations_missense_variant" in gene_mutation_data.columns:
-                        missense_mutations = gene_mutation_data[
-                            "mutations_missense_variant"
-                        ].sum()
+                    # Sum up mutations for this gene using count_{variant_type} columns
+                    if "count_frameshift_variant" in gene_mutation_data.columns:
+                        frameshift_mutations = int(
+                            gene_mutation_data["count_frameshift_variant"].sum()
+                        )
+                    if "count_nonsense_variant" in gene_mutation_data.columns:
+                        nonsense_mutations = int(
+                            gene_mutation_data["count_nonsense_variant"].sum()
+                        )
+                    if "count_missense_variant" in gene_mutation_data.columns:
+                        missense_mutations = int(
+                            gene_mutation_data["count_missense_variant"].sum()
+                        )
                     if "total_mutations" in gene_mutation_data.columns:
-                        total_mutations = gene_mutation_data["total_mutations"].sum()
+                        total_mutations = int(
+                            gene_mutation_data["total_mutations"].sum()
+                        )
 
-                    # Collect variant IDs for each mutation type
+                    # Detect available sources and collect variant IDs
+                    detected_sources = self.detect_mutation_sources(pair_results)
+
+                    for source in detected_sources:
+                        source_counts[source] = {
+                            "total": 0,
+                            "frameshift": 0,
+                            "nonsense": 0,
+                            "missense": 0,
+                        }
+
+                        # Get source total
+                        source_count_col = f"count_{source}"
+                        if source_count_col in gene_mutation_data.columns:
+                            source_counts[source]["total"] = int(
+                                gene_mutation_data[source_count_col].sum()
+                            )
+
+                        # Get per-variant-type counts for this source
+                        for vt, vt_key in [
+                            ("frameshift_variant", "frameshift"),
+                            ("nonsense_variant", "nonsense"),
+                            ("missense_variant", "missense"),
+                        ]:
+                            col = f"count_{source}_{vt}"
+                            if col in gene_mutation_data.columns:
+                                source_counts[source][vt_key] = int(
+                                    gene_mutation_data[col].sum()
+                                )
+
+                    # Collect variant IDs from all detected sources
                     for _, row in gene_mutation_data.iterrows():
-                        # Extract frameshift variant IDs
-                        if (
-                            "clinvar_ids_frameshift_variant" in row.index
-                            and pd.notna(row["clinvar_ids_frameshift_variant"])
-                            and row["clinvar_ids_frameshift_variant"] != ""
-                        ):
-                            frameshift_variants.extend(
-                                str(row["clinvar_ids_frameshift_variant"]).split(",")
-                            )
+                        for source in detected_sources:
+                            # Extract frameshift variant IDs
+                            col = f"ids_{source}_frameshift_variant"
+                            if (
+                                col in row.index
+                                and pd.notna(row[col])
+                                and row[col] != ""
+                            ):
+                                frameshift_variants.extend(str(row[col]).split(","))
 
-                        # Extract nonsense variant IDs
-                        if (
-                            "clinvar_ids_nonsense_variant" in row.index
-                            and pd.notna(row["clinvar_ids_nonsense_variant"])
-                            and row["clinvar_ids_nonsense_variant"] != ""
-                        ):
-                            nonsense_variants.extend(
-                                str(row["clinvar_ids_nonsense_variant"]).split(",")
-                            )
+                            # Extract nonsense variant IDs
+                            col = f"ids_{source}_nonsense_variant"
+                            if (
+                                col in row.index
+                                and pd.notna(row[col])
+                                and row[col] != ""
+                            ):
+                                nonsense_variants.extend(str(row[col]).split(","))
 
-                        # Extract missense variant IDs
-                        if (
-                            "clinvar_ids_missense_variant" in row.index
-                            and pd.notna(row["clinvar_ids_missense_variant"])
-                            and row["clinvar_ids_missense_variant"] != ""
-                        ):
-                            missense_variants.extend(
-                                str(row["clinvar_ids_missense_variant"]).split(",")
-                            )
+                            # Extract missense variant IDs
+                            col = f"ids_{source}_missense_variant"
+                            if (
+                                col in row.index
+                                and pd.notna(row[col])
+                                and row[col] != ""
+                            ):
+                                missense_variants.extend(str(row[col]).split(","))
 
                     # Clean up variant lists (remove empty strings and duplicates)
                     frameshift_variants = list(
@@ -975,7 +1090,7 @@ class SummaryAnalyzer:
                 # Mutation analysis results (from clinical data)
                 "total_frameshift_mutations": frameshift_mutations,
                 "total_nonsense_mutations": nonsense_mutations,
-                "total_frameshift_or_nonsense_mutations": frameshift_or_nonsense_mutations,  # Changed from "truncating"
+                "total_frameshift_or_nonsense_mutations": frameshift_or_nonsense_mutations,
                 "total_missense_mutations": missense_mutations,
                 "total_mutations_all_types": total_mutations,
                 # Variant IDs for each mutation type
@@ -989,7 +1104,7 @@ class SummaryAnalyzer:
                     frameshift_or_nonsense_variants
                 )
                 if frameshift_or_nonsense_variants
-                else "",  # Changed from "truncating"
+                else "",
                 "missense_variant_ids": ",".join(missense_variants)
                 if missense_variants
                 else "",
@@ -998,6 +1113,13 @@ class SummaryAnalyzer:
                 "transcript_id": gene_info.get("transcript_id", ""),
                 "canonical_sequence_length": gene_info.get("length", ""),
             }
+
+            # Add per-source mutation counts dynamically
+            for source, counts in source_counts.items():
+                gene_summary[f"{source}_total_mutations"] = counts["total"]
+                gene_summary[f"{source}_frameshift_mutations"] = counts["frameshift"]
+                gene_summary[f"{source}_nonsense_mutations"] = counts["nonsense"]
+                gene_summary[f"{source}_missense_mutations"] = counts["missense"]
 
             gene_summaries.append(gene_summary)
 

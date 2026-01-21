@@ -93,6 +93,7 @@ async def main(
     min_length: int = 10,
     max_length: int = 100000,
     output_format: str = "fasta,csv",
+    custom_parquet_path: Optional[str] = None,
 ):
     """Main function for protein sequence generation using pre-validated missense variants.
 
@@ -110,6 +111,7 @@ async def main(
         min_length (int): Minimum protein length to include
         max_length (int): Maximum protein length to include
         output_format (str): Output format specification
+        custom_parquet_path (Optional[str]): Path to custom mutations parquet file
 
     Returns:
         None
@@ -146,6 +148,7 @@ async def main(
         output_dir=output_dir,
         mutation_handler=mutation_handler,
         debug=False,
+        custom_parquet_path=custom_parquet_path,
     )
 
     # Load pre-validated missense variant IDs
@@ -260,6 +263,12 @@ if __name__ == "__main__":
         help="Output format: fasta, csv, or fasta,csv",
     )
     parser.add_argument(
+        "--custom-parquet",
+        type=str,
+        default=None,
+        help="Path to custom mutations parquet file (required when using 'custom' source)",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="count",
@@ -326,5 +335,6 @@ if __name__ == "__main__":
             min_length=args.min_length,
             max_length=args.max_length,
             output_format=args.format,
+            custom_parquet_path=args.custom_parquet,
         )
     )
