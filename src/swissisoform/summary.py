@@ -71,45 +71,47 @@ class SummaryAnalyzer:
 
         return detected_sources
 
-    def dataset_has_data(self, dataset):
+    def dataset_has_data(self, dataset, source="gnomad"):
         """Check if a dataset has any data available for analysis.
 
         Args:
             dataset (str): Name of the dataset to check.
+            source (str): Mutation source (default: gnomad).
 
         Returns:
             bool: True if the dataset has mutation or localization data available.
         """
-        # Check for mutation data
-        mutation_gene_file = Path(
-            f"../results/{dataset}/mutations/gene_level_results.csv"
+        # Check for mutation data (source-specific)
+        mutation_isoform_file = Path(
+            f"../results/{dataset}/{source}/mutations/isoform_level_results.csv"
         )
 
-        # Check for localization data
+        # Check for localization data (source-specific mutations)
         loc_files = [
             Path(
-                f"../results/{dataset}/localization/protein_sequences_pairs_Accurate_results.csv"
+                f"../results/{dataset}/{source}/localization/protein_sequences_mutations_Accurate_results.csv"
             ),
             Path(
-                f"../results/{dataset}/localization/protein_sequences_pairs_Fast_results.csv"
+                f"../results/{dataset}/{source}/localization/protein_sequences_mutations_Fast_results.csv"
             ),
         ]
 
-        has_mutation_data = mutation_gene_file.exists()
+        has_mutation_data = mutation_isoform_file.exists()
         has_localization_data = any(f.exists() for f in loc_files)
 
         return has_mutation_data or has_localization_data
 
-    def get_available_models(self, dataset):
-        """Determine which models have data available for a dataset.
+    def get_available_models(self, dataset, source="gnomad"):
+        """Determine which models have data available for a dataset and source.
 
         Args:
             dataset (str): Name of the dataset to check.
+            source (str): Mutation source (default: gnomad).
 
         Returns:
             List[str]: List of available model names (e.g., ['Accurate', 'Fast']).
         """
-        loc_results = self.load_localization_results(dataset)
+        loc_results = self.load_localization_results(dataset, source)
 
         available_models = []
 
@@ -123,17 +125,18 @@ class SummaryAnalyzer:
 
         return available_models
 
-    def load_mutation_results(self, dataset):
-        """Load mutation analysis results for a dataset.
+    def load_mutation_results(self, dataset, source="gnomad"):
+        """Load mutation analysis results for a dataset and source.
 
         Args:
             dataset (str): Name of the dataset to load results for.
+            source (str): Mutation source (default: gnomad).
 
         Returns:
             Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]: Tuple containing
                 gene-level results DataFrame and pair-level results DataFrame.
         """
-        base_path = Path(f"../results/{dataset}/mutations")
+        base_path = Path(f"../results/{dataset}/{source}/mutations")
 
         gene_results = None
         pair_results = None
@@ -144,30 +147,34 @@ class SummaryAnalyzer:
         if gene_file.exists():
             gene_results = pd.read_csv(gene_file)
             logger.info(
-                f"Loaded {len(gene_results)} gene-level mutation results for {dataset}"
+                f"Loaded {len(gene_results)} gene-level mutation results for {dataset}/{source}"
             )
 
         if pair_file.exists():
             pair_results = pd.read_csv(pair_file)
             logger.info(
-                f"Loaded {len(pair_results)} transcript-truncation pair results for {dataset}"
+                f"Loaded {len(pair_results)} transcript-truncation pair results for {dataset}/{source}"
             )
 
         return gene_results, pair_results
 
-    def load_protein_sequences(self, dataset):
+    def load_protein_sequences(self, dataset, source="gnomad"):
         """Load protein sequence data to get variant metadata.
 
         Args:
             dataset (str): Name of the dataset to load protein sequences for.
+            source (str): Mutation source (default: gnomad).
 
         Returns:
             Dict[str, Dict]: Dictionary mapping sequence IDs to protein metadata.
         """
-        base_path = Path(f"../results/{dataset}/proteins")
+        # Base pairs are in default folder
+        base_pairs_path = Path(f"../results/{dataset}/default/proteins")
+        # Mutations are in source-specific folder
+        source_path = Path(f"../results/{dataset}/{source}/proteins")
 
-        pairs_file = base_path / "protein_sequences_pairs.csv"
-        mutations_file = base_path / "protein_sequences_with_mutations.csv"
+        pairs_file = base_pairs_path / "protein_sequences_pairs.csv"
+        mutations_file = source_path / "protein_sequences_with_mutations.csv"
 
         protein_data = {}
 
@@ -184,7 +191,7 @@ class SummaryAnalyzer:
         if mutations_file.exists():
             mutations_df = pd.read_csv(mutations_file)
             logger.info(
-                f"Loaded {len(mutations_df)} protein sequence mutations for {dataset}"
+                f"Loaded {len(mutations_df)} protein sequence mutations for {dataset}/{source}"
             )
             # Index by sequence identifier
             for _, row in mutations_df.iterrows():
@@ -195,30 +202,45 @@ class SummaryAnalyzer:
 
         return protein_data
 
-    def load_localization_results(self, dataset):
-        """Load localization prediction results for a dataset.
+    def load_localization_results(self, dataset, source="gnomad"):
+        """Load localization prediction results for a dataset and source.
 
         Args:
             dataset (str): Name of the dataset to load localization results for.
+            source (str): Mutation source (default: gnomad).
 
         Returns:
             Dict[str, pd.DataFrame]: Dictionary mapping result types to DataFrames
                 (e.g., 'pairs_accurate', 'pairs_fast', 'mutations_accurate', 'mutations_fast').
         """
-        base_path = Path(f"../results/{dataset}/localization")
+        # Base pairs are in default folder
+        base_pairs_path = Path(f"../results/{dataset}/default/localization")
+        # Mutations are in source-specific folder
+        source_path = Path(f"../results/{dataset}/{source}/localization")
 
         results = {}
 
-        # Define the files to look for
+        # Define the files to look for (pairs from default, mutations from source)
         file_patterns = [
-            ("pairs_accurate", "protein_sequences_pairs_Accurate_results.csv"),
-            ("pairs_fast", "protein_sequences_pairs_Fast_results.csv"),
-            ("mutations_accurate", "protein_sequences_mutations_Accurate_results.csv"),
-            ("mutations_fast", "protein_sequences_mutations_Fast_results.csv"),
+            (
+                "pairs_accurate",
+                base_pairs_path / "protein_sequences_pairs_Accurate_results.csv",
+            ),
+            (
+                "pairs_fast",
+                base_pairs_path / "protein_sequences_pairs_Fast_results.csv",
+            ),
+            (
+                "mutations_accurate",
+                source_path / "protein_sequences_mutations_Accurate_results.csv",
+            ),
+            (
+                "mutations_fast",
+                source_path / "protein_sequences_mutations_Fast_results.csv",
+            ),
         ]
 
-        for key, filename in file_patterns:
-            file_path = base_path / filename
+        for key, file_path in file_patterns:
             if file_path.exists():
                 try:
                     df = pd.read_csv(file_path)
@@ -233,14 +255,16 @@ class SummaryAnalyzer:
 
                     results[key] = df
                     logger.info(
-                        f"Loaded {len(df)} {key} localization predictions for {dataset}"
+                        f"Loaded {len(df)} {key} localization predictions for {dataset}/{source}"
                     )
 
                 except Exception as e:
-                    logger.error(f"Error loading {filename}: {e}")
+                    logger.error(f"Error loading {file_path.name}: {e}")
                     continue
             else:
-                logger.warning(f"Missing {key} localization predictions for {dataset}")
+                logger.warning(
+                    f"Missing {key} localization predictions for {dataset}/{source}"
+                )
 
         return results
 
@@ -1133,35 +1157,38 @@ class SummaryAnalyzer:
 
         return gene_summary_df
 
-    def analyze_dataset(self, dataset):
-        """Analyze a complete dataset and save all results for both models when available.
+    def analyze_dataset(self, dataset, source="gnomad"):
+        """Analyze a complete dataset and source, saving all results for both models when available.
 
         Args:
             dataset (str): Name of the dataset to analyze.
+            source (str): Mutation source (default: gnomad).
         """
-        logger.info(f"\nAnalyzing {dataset} dataset...")
+        logger.info(f"\nAnalyzing {dataset}/{source}...")
 
-        # Create summary directory for this dataset
-        summary_dir = Path(f"../results/{dataset}/summary")
+        # Create summary directory for this dataset/source
+        summary_dir = Path(f"../results/{dataset}/{source}/summary")
         summary_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load shared data for this dataset
-        logger.info(f"\nLoading data for {dataset} dataset...")
-        gene_results, pair_results = self.load_mutation_results(dataset)
-        protein_data = self.load_protein_sequences(dataset)
-        loc_results = self.load_localization_results(dataset)
+        # Load shared data for this dataset/source
+        logger.info(f"\nLoading data for {dataset}/{source}...")
+        gene_results, pair_results = self.load_mutation_results(dataset, source)
+        protein_data = self.load_protein_sequences(dataset, source)
+        loc_results = self.load_localization_results(dataset, source)
 
         # Analyze mutations (same for both models)
         mutation_summary = self.analyze_mutations(dataset, gene_results, pair_results)
 
         # Get available models
-        available_models = self.get_available_models(dataset)
+        available_models = self.get_available_models(dataset, source)
 
         if not available_models:
-            logger.warning(f"No localization models available for {dataset} dataset")
+            logger.warning(f"No localization models available for {dataset}/{source}")
             return
 
-        logger.info(f"Available models for {dataset}: {', '.join(available_models)}")
+        logger.info(
+            f"Available models for {dataset}/{source}: {', '.join(available_models)}"
+        )
 
         # Analyze each available model separately
         for model_type in available_models:

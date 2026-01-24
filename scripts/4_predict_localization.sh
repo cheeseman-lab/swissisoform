@@ -6,12 +6,27 @@
 # It processes protein sequences in parallel with both Fast and Accurate modes.
 #
 # Usage:
-#   sbatch 4_predict_localization.sh
-#   sbatch --export=DATASET=hela 4_predict_localization.sh
-#   sbatch --export=DATASET=hela_bch 4_predict_localization.sh
+#   # Single source (backward compatible) - 4 tasks
+#   sbatch --export=DATASET=hela,SOURCE=gnomad 4_predict_localization.sh
+#
+#   # Multiple sources in parallel (RECOMMENDED) - AUTOMATICALLY includes base pairs!
+#   # For 5 sources: (2 base + 5 sources × 2) = 12 tasks
+#   sbatch --export=DATASET=hela,SOURCES="gnomad|clinvar|cosmic|custom_bch|custom_msk" 4_predict_localization.sh
+#
+#   # This will generate:
+#   #   Task 1-2:  results/hela/default/localization/ (base pairs Fast + Accurate)
+#   #   Task 3-4:  results/hela/gnomad/localization/ (mutations Fast + Accurate)
+#   #   Task 5-6:  results/hela/clinvar/localization/ (mutations Fast + Accurate)
+#   #   Task 7-8:  results/hela/cosmic/localization/ (mutations Fast + Accurate)
+#   #   Task 9-10: results/hela/custom_bch/localization/ (mutations Fast + Accurate)
+#   #   Task 11-12: results/hela/custom_msk/localization/ (mutations Fast + Accurate)
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
+#   SOURCE - Single mutation source (default: gnomad)
+#   SOURCES - Multiple sources for parallel processing (pipe-separated: "gnomad|clinvar|cosmic")
+#             ALWAYS predicts base pairs first (tasks 1-2), then source mutations
+#             Array size: 2 + (num_sources × 2) tasks (e.g., 5 sources = 12 tasks)
 #
 # Prerequisites:
 #   - 3_generate_proteins.sh must have been run for the dataset
@@ -20,8 +35,8 @@
 #
 
 #SBATCH --job-name=deeploc                 # Job name
-#SBATCH --partition=nvidia-A4000-20        # GPU partition
-#SBATCH --array=1-4                        # 4 tasks for parallel processing
+#SBATCH --partition=nvidia-A6000-20        # GPU partition
+#SBATCH --array=1-16                       # Max array size (2 base + up to 7 sources × 2)
 #SBATCH --cpus-per-task=4                  # CPUs per task
 #SBATCH --mem=36G                          # Memory per task
 #SBATCH --gres=gpu:1                       # 1 GPU per task
@@ -29,6 +44,10 @@
 #SBATCH --output=out/deeploc-%A_%a.out     # %A = job ID, %a = array task ID
 
 set -e  # Exit on error
+
+# Constants
+TASKS_FOR_BASE=2  # Fast + Accurate for base pairs
+TASKS_PER_SOURCE=2  # Fast + Accurate for mutations only
 
 # Source shared utilities (colors, helper functions)
 # Use relative path from scripts directory
@@ -52,12 +71,124 @@ fi
 # Dataset selection (default: hela)
 DATASET="${DATASET:-hela}"
 
+# ============================================================================
+# Multi-Source Parallelization Setup
+# ============================================================================
+# ALWAYS predicts base pairs first (tasks 1-2: Fast + Accurate)
+# Then predicts mutations for each source (2 tasks per source)
+#
+# Task mapping for 5 sources:
+#   Tasks 1-2: base pairs (default/localization/)
+#   Tasks 3-4: source 1 mutations only (Fast + Accurate)
+#   Tasks 5-6: source 2 mutations only (Fast + Accurate)
+#   ... etc
+
+if [ -n "$SOURCES" ]; then
+    # Multi-source mode: base (tasks 1-2) + sources (tasks 3+)
+    IFS='|' read -ra SOURCES_ARRAY <<< "$SOURCES"
+    NUM_SOURCES=${#SOURCES_ARRAY[@]}
+    TOTAL_TASKS=$(( TASKS_FOR_BASE + NUM_SOURCES * TASKS_PER_SOURCE ))
+
+    # Exit early if this task is beyond needed range
+    if [ "$SLURM_ARRAY_TASK_ID" -gt "$TOTAL_TASKS" ]; then
+        echo "Task $SLURM_ARRAY_TASK_ID not needed (only $TOTAL_TASKS tasks required: 2 base + $NUM_SOURCES sources × 2)"
+        exit 0
+    fi
+
+    TASK_ID=$SLURM_ARRAY_TASK_ID
+
+    if [ "$TASK_ID" -le "$TASKS_FOR_BASE" ]; then
+        # Tasks 1-2: base pairs only
+        MODE="base"
+        SOURCE="default"
+        PROTEINS_DIR="../results/${DATASET}/default/proteins"
+        LOCALIZATION_DIR="../results/${DATASET}/default/localization"
+
+        # Task 1 = Fast, Task 2 = Accurate
+        if [ "$TASK_ID" -eq 1 ]; then
+            DEEPLOC_MODE="Fast"
+        else
+            DEEPLOC_MODE="Accurate"
+        fi
+
+        FILE_TYPE="pairs"
+        INPUT_FILE="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
+    else
+        # Tasks 3+: source mutations only (no pairs prediction)
+        MODE="source"
+        ADJUSTED_TASK_ID=$(( TASK_ID - TASKS_FOR_BASE ))
+        SOURCE_INDEX=$(( (ADJUSTED_TASK_ID - 1) / TASKS_PER_SOURCE ))
+        TASK_WITHIN_SOURCE=$(( ((ADJUSTED_TASK_ID - 1) % TASKS_PER_SOURCE) + 1 ))
+
+        SOURCE="${SOURCES_ARRAY[$SOURCE_INDEX]}"
+        PROTEINS_DIR="../results/${DATASET}/${SOURCE}/proteins"
+        LOCALIZATION_DIR="../results/${DATASET}/${SOURCE}/localization"
+
+        # Task 1 = Fast, Task 2 = Accurate (within source)
+        if [ "$TASK_WITHIN_SOURCE" -eq 1 ]; then
+            DEEPLOC_MODE="Fast"
+        else
+            DEEPLOC_MODE="Accurate"
+        fi
+
+        FILE_TYPE="mutations"
+        INPUT_FILE="${PROTEINS_DIR}/protein_sequences_with_mutations.fasta"
+    fi
+else
+    # Single-source mode (backward compatible)
+    SOURCE="${SOURCE:-gnomad}"
+    NUM_SOURCES=1
+    MODE="source"
+
+    PROTEINS_DIR="../results/${DATASET}/${SOURCE}/proteins"
+    LOCALIZATION_DIR="../results/${DATASET}/${SOURCE}/localization"
+
+    # Old behavior: 4 tasks (pairs Fast/Accurate + mutations Fast/Accurate)
+    case $SLURM_ARRAY_TASK_ID in
+        1)
+            FILE_TYPE="pairs"; DEEPLOC_MODE="Fast"
+            INPUT_FILE="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
+            ;;
+        2)
+            FILE_TYPE="pairs"; DEEPLOC_MODE="Accurate"
+            INPUT_FILE="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
+            ;;
+        3)
+            FILE_TYPE="mutations"; DEEPLOC_MODE="Fast"
+            INPUT_FILE="${PROTEINS_DIR}/protein_sequences_with_mutations.fasta"
+            ;;
+        4)
+            FILE_TYPE="mutations"; DEEPLOC_MODE="Accurate"
+            INPUT_FILE="${PROTEINS_DIR}/protein_sequences_with_mutations.fasta"
+            ;;
+        *)
+            echo "Single-source mode only uses tasks 1-4"
+            exit 0
+            ;;
+    esac
+fi
+
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║   SwissIsoform Pipeline Step 4: Predict Localization         ║${NC}"
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo "Array Task ${SLURM_ARRAY_TASK_ID} of ${SLURM_ARRAY_TASK_MAX}"
+if [ -n "$SOURCES" ]; then
+    echo "Multi-source mode: base + ${NUM_SOURCES} sources (${TOTAL_TASKS} tasks total)"
+    echo "  Task 1-2: base pairs (default/localization/) [Fast, Accurate]"
+    task_num=3
+    for src in "${SOURCES_ARRAY[@]}"; do
+        echo "  Task ${task_num}-$(( task_num + 1 )): ${src} mutations [Fast, Accurate]"
+        task_num=$(( task_num + 2 ))
+    done
+    echo ""
+    echo "  This task: MODE=${MODE}, SOURCE=${SOURCE}, FILE=${FILE_TYPE}, DEEPLOC=${DEEPLOC_MODE}"
+else
+    echo "Single-source mode: SOURCE=${SOURCE}"
+    echo "  This task: FILE=${FILE_TYPE}, DEEPLOC=${DEEPLOC_MODE}"
+fi
 echo "Dataset: $DATASET"
+echo "Output directory: ${LOCALIZATION_DIR}/"
 echo ""
 
 # ============================================================================
@@ -92,36 +223,43 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
 
     missing_files=()
 
-    pairs_file="../results/$DATASET/proteins/protein_sequences_pairs.fasta"
-    mutations_file="../results/$DATASET/proteins/protein_sequences_with_mutations.fasta"
+    pairs_file="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
 
     if [ -f "$pairs_file" ]; then
         count=$(grep -c '^>' "$pairs_file")
-        echo -e "${GREEN}✓${NC} $DATASET/protein_sequences_pairs.fasta ($count sequences)"
+        echo -e "${GREEN}✓${NC} protein_sequences_pairs.fasta ($count sequences)"
     else
-        echo -e "${RED}✗${NC} $DATASET/protein_sequences_pairs.fasta missing"
-        missing_files+=("$DATASET:pairs")
+        echo -e "${RED}✗${NC} protein_sequences_pairs.fasta missing"
+        missing_files+=("pairs")
     fi
 
-    if [ -f "$mutations_file" ]; then
-        count=$(grep -c '^>' "$mutations_file")
-        echo -e "${GREEN}✓${NC} $DATASET/protein_sequences_with_mutations.fasta ($count sequences)"
-    else
-        echo -e "${RED}✗${NC} $DATASET/protein_sequences_with_mutations.fasta missing"
-        missing_files+=("$DATASET:mutations")
+    # Only check for mutations file when MODE != base
+    if [ "$MODE" != "base" ]; then
+        mutations_file="${PROTEINS_DIR}/protein_sequences_with_mutations.fasta"
+        if [ -f "$mutations_file" ]; then
+            count=$(grep -c '^>' "$mutations_file")
+            echo -e "${GREEN}✓${NC} protein_sequences_with_mutations.fasta ($count sequences)"
+        else
+            echo -e "${RED}✗${NC} protein_sequences_with_mutations.fasta missing"
+            missing_files+=("mutations")
+        fi
     fi
 
     if [ ${#missing_files[@]} -gt 0 ]; then
         echo ""
         echo -e "${RED}Missing required files!${NC}"
-        echo "Run 3_generate_proteins.sh first for dataset: $DATASET"
+        if [ "$MODE" = "base" ]; then
+            echo "Run: sbatch --export=DATASET=${DATASET},MODE=base scripts/3_generate_proteins.sh"
+        else
+            echo "Run: sbatch --export=DATASET=${DATASET},SOURCE=${SOURCE} scripts/3_generate_proteins.sh"
+        fi
         exit 1
     fi
 
     # Create localization output directories
     echo ""
     echo -e "${YELLOW}→${NC} Creating output directories..."
-    mkdir -p ../results/$DATASET/localization
+    mkdir -p "${LOCALIZATION_DIR}"
     echo -e "${GREEN}✓${NC} Directories created"
 fi
 
@@ -151,34 +289,6 @@ conda activate deeploc || {
 echo -e "${GREEN}✓${NC} Environment activated"
 
 # ============================================================================
-# Task Assignment
-# ============================================================================
-
-# Define which file and mode each task processes (4 tasks total)
-case $SLURM_ARRAY_TASK_ID in
-    1)
-        file_type="pairs"; mode="Fast"
-        input_file="../results/$DATASET/proteins/protein_sequences_pairs.fasta"
-        ;;
-    2)
-        file_type="pairs"; mode="Accurate"
-        input_file="../results/$DATASET/proteins/protein_sequences_pairs.fasta"
-        ;;
-    3)
-        file_type="mutations"; mode="Fast"
-        input_file="../results/$DATASET/proteins/protein_sequences_with_mutations.fasta"
-        ;;
-    4)
-        file_type="mutations"; mode="Accurate"
-        input_file="../results/$DATASET/proteins/protein_sequences_with_mutations.fasta"
-        ;;
-    *)
-        echo -e "${RED}✗${NC} Unknown array task ID: $SLURM_ARRAY_TASK_ID"
-        exit 1
-        ;;
-esac
-
-# ============================================================================
 # DeepLoc Prediction
 # ============================================================================
 
@@ -188,11 +298,11 @@ echo -e "${BLUE}║  Processing Task ${SLURM_ARRAY_TASK_ID}                     
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-echo -e "${YELLOW}→${NC} Processing $DATASET dataset ($file_type sequences, $mode mode)"
-echo "  Input file: $(basename $input_file)"
+echo -e "${YELLOW}→${NC} Processing ${FILE_TYPE} sequences in ${DEEPLOC_MODE} mode"
+echo "  Input file: $(basename $INPUT_FILE)"
 echo ""
 
-if [ -f "$input_file" ]; then
+if [ -f "$INPUT_FILE" ]; then
     # Remove outputs directory if it exists
     if [ -d "outputs/" ]; then
         echo -e "${YELLOW}→${NC} Removing existing outputs/ directory..."
@@ -200,28 +310,28 @@ if [ -f "$input_file" ]; then
     fi
 
     # Create descriptive temporary subfolder for this specific run
-    temp_subdir="../results/$DATASET/localization/${DATASET}_${file_type}_${mode}_temp_$$"
+    temp_subdir="${LOCALIZATION_DIR}/${FILE_TYPE}_${DEEPLOC_MODE}_temp_$$"
     mkdir -p "$temp_subdir"
 
-    echo -e "${YELLOW}→${NC} Starting DeepLoc $mode mode for $DATASET ($file_type) at $(date)"
+    echo -e "${YELLOW}→${NC} Starting DeepLoc ${DEEPLOC_MODE} mode for ${FILE_TYPE} at $(date)"
     echo ""
 
     # Set GPU memory growth to avoid OOM errors
     export TF_FORCE_GPU_ALLOW_GROWTH=true
     export CUDA_VISIBLE_DEVICES=0
 
-    deeploc2 -f "$input_file" -m "$mode" -o "$temp_subdir/" -d cuda
+    deeploc2 -f "$INPUT_FILE" -m "$DEEPLOC_MODE" -o "$temp_subdir/" -d cuda
 
     # Find and move the results file
     result_file=$(find "$temp_subdir" -name "results_*.csv" | head -n 1)
     if [ -n "$result_file" ] && [ -f "$result_file" ]; then
-        output_file="../results/$DATASET/localization/protein_sequences_${file_type}_${mode}_results.csv"
+        output_file="${LOCALIZATION_DIR}/protein_sequences_${FILE_TYPE}_${DEEPLOC_MODE}_results.csv"
         mv "$result_file" "$output_file"
         echo ""
-        echo -e "${GREEN}✓${NC} Moved $mode results to protein_sequences_${file_type}_${mode}_results.csv"
+        echo -e "${GREEN}✓${NC} Moved ${DEEPLOC_MODE} results to protein_sequences_${FILE_TYPE}_${DEEPLOC_MODE}_results.csv"
     else
         echo ""
-        echo -e "${RED}✗${NC} $mode results not found"
+        echo -e "${RED}✗${NC} ${DEEPLOC_MODE} results not found"
         exit 1
     fi
 
@@ -235,82 +345,62 @@ if [ -f "$input_file" ]; then
     fi
 
     echo ""
-    echo -e "${GREEN}✓${NC} Completed $DATASET ($file_type, $mode) at $(date)"
+    echo -e "${GREEN}✓${NC} Completed ${FILE_TYPE} (${DEEPLOC_MODE}) at $(date)"
 else
-    echo -e "${YELLOW}⚠${NC} Skipping $DATASET ($file_type, $mode) - input file not found"
+    echo -e "${YELLOW}⚠${NC} Skipping ${FILE_TYPE} (${DEEPLOC_MODE}) - input file not found"
     exit 1
 fi
 
 # ============================================================================
-# Verification (Task 8 Only)
+# Verification (Last Task Only)
 # ============================================================================
 
-if [ "$SLURM_ARRAY_TASK_ID" -eq 4 ]; then
+# Only verify on the very last task in multi-source mode, or task 4 in single-source mode
+IS_LAST_TASK=false
+if [ -n "$SOURCES" ] && [ "$TASK_ID" -eq "$TOTAL_TASKS" ]; then
+    IS_LAST_TASK=true
+elif [ -z "$SOURCES" ] && [ "$SLURM_ARRAY_TASK_ID" -eq 4 ]; then
+    IS_LAST_TASK=true
+fi
+
+if [ "$IS_LAST_TASK" = true ]; then
     # Wait for file system sync
     sleep 10
 
     echo ""
     echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║  Verification                                                ║${NC}"
+    echo -e "${BLUE}║  Verification Summary                                        ║${NC}"
     echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    echo -e "${YELLOW}→${NC} Verifying DeepLoc outputs for $DATASET..."
-    echo ""
-
-    # Check for outputs from all tasks
-    file_types=("pairs" "mutations")
-    modes=("Fast" "Accurate")
-    found_outputs=()
-
-    for file_type in "${file_types[@]}"; do
-        for mode in "${modes[@]}"; do
-            output_file="../results/$DATASET/localization/protein_sequences_${file_type}_${mode}_results.csv"
-
-            if [ -f "$output_file" ]; then
-                count=$(($(wc -l < "$output_file") - 1))
-                echo -e "${GREEN}✓${NC} $DATASET/$(basename $output_file) ($count predictions)"
-                found_outputs+=("$output_file")
-            else
-                echo -e "${YELLOW}⚠${NC} $DATASET/$(basename $output_file) missing"
-            fi
-        done
-    done
-
-    # Summary
-    echo ""
-    echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║  Localization Prediction Complete                           ║${NC}"
-    echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-
-    if [ ${#found_outputs[@]} -eq 0 ]; then
-        echo -e "${RED}✗ No DeepLoc outputs were generated!${NC}"
-        echo "Check the SLURM logs for DeepLoc error messages."
-
-        # Debug: List what files exist in localization directories
-        echo ""
-        echo "Debug: Files in localization directory:"
-        localization_dir="../results/$DATASET/localization"
-        if [ -d "$localization_dir" ]; then
-            echo "  $DATASET/localization/:"
-            ls -la "$localization_dir" | sed 's/^/    /'
-        fi
-
-        exit 1
-    else
-        echo -e "${GREEN}✓ DeepLoc predictions completed successfully for $DATASET!${NC}"
+    if [ -n "$SOURCES" ]; then
+        echo -e "${GREEN}✓ Multi-source localization prediction completed!${NC}"
         echo ""
         echo "Generated predictions:"
-        echo "  └─ $DATASET/localization/"
-        for output in "${found_outputs[@]}"; do
-            echo "     ├─ $(basename $output)"
+        echo "  └─ ${DATASET}/"
+        echo "     ├─ default/localization/"
+        echo "     │  ├─ protein_sequences_pairs_Fast_results.csv"
+        echo "     │  └─ protein_sequences_pairs_Accurate_results.csv"
+        for src in "${SOURCES_ARRAY[@]}"; do
+            echo "     ├─ ${src}/localization/"
+            echo "     │  ├─ protein_sequences_mutations_Fast_results.csv"
+            echo "     │  └─ protein_sequences_mutations_Accurate_results.csv"
         done
         echo ""
-        echo "Summary: Generated ${#found_outputs[@]} prediction files"
+        echo -e "${BLUE}Next step:${NC}"
+        echo "  Run: DATASET=${DATASET} SOURCES=\"${SOURCES}\" bash scripts/5_summarize_results.sh"
+    else
+        echo -e "${GREEN}✓ Single-source localization prediction completed for ${DATASET}/${SOURCE}!${NC}"
+        echo ""
+        echo "Generated predictions:"
+        echo "  └─ ${DATASET}/${SOURCE}/localization/"
+        echo "     ├─ protein_sequences_pairs_Fast_results.csv"
+        echo "     ├─ protein_sequences_pairs_Accurate_results.csv"
+        echo "     ├─ protein_sequences_mutations_Fast_results.csv"
+        echo "     └─ protein_sequences_mutations_Accurate_results.csv"
         echo ""
         echo -e "${BLUE}Next step:${NC}"
-        echo "  Run: sbatch --export=DATASET=${DATASET} scripts/5_summarize_results.sh"
-        echo ""
+        echo "  Run: DATASET=${DATASET} SOURCE=${SOURCE} bash scripts/5_summarize_results.sh"
     fi
+    echo ""
 fi

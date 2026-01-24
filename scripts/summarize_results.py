@@ -13,9 +13,9 @@ Generates the following outputs:
     differential_localization_mutations_{mode}.csv)
 
 Usage:
-    python summarize_results.py                  # Uses DATASET env var or defaults to hela
-    python summarize_results.py hela_bch         # Analyze specific dataset
-    DATASET=hela_msk python summarize_results.py # Via environment variable
+    python summarize_results.py hela gnomad      # Analyze specific dataset and source
+    python summarize_results.py hela             # Uses SOURCE env var or defaults to gnomad
+    DATASET=hela SOURCE=clinvar python summarize_results.py # Via environment variables
 """
 
 import os
@@ -29,6 +29,7 @@ import re
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 from swissisoform.summary import SummaryAnalyzer
+from swissisoform.mutations import MutationHandler
 
 # Localization compartments
 COMPARTMENTS = [
@@ -588,7 +589,9 @@ def process_ranked_summaries(dataset, results_dir, verbose=False):
             summary_dir.mkdir(parents=True, exist_ok=True)
 
             pairs_file = loc_dir / f"protein_sequences_pairs_{mode}_results.csv"
-            mutations_loc_file = loc_dir / f"protein_sequences_mutations_{mode}_results.csv"
+            mutations_loc_file = (
+                loc_dir / f"protein_sequences_mutations_{mode}_results.csv"
+            )
 
             if not pairs_file.exists():
                 if verbose:
@@ -621,11 +624,15 @@ def process_ranked_summaries(dataset, results_dir, verbose=False):
                 )
 
             # Generate detailed pairs analysis
-            pairs_detailed_out = summary_dir / f"differential_localization_pairs_{mode}.csv"
+            pairs_detailed_out = (
+                summary_dir / f"differential_localization_pairs_{mode}.csv"
+            )
             pairs_detailed_df = analyze_pairs_detailed(pairs_df)
             if len(pairs_detailed_df) > 0:
                 pairs_detailed_df.to_csv(pairs_detailed_out, index=False)
-                primary_changed = pairs_detailed_df[pairs_detailed_df["primary_changed"]]
+                primary_changed = pairs_detailed_df[
+                    pairs_detailed_df["primary_changed"]
+                ]
                 print(
                     f"    Detailed pairs analysis: {len(pairs_detailed_df)} pairs, "
                     f"{len(primary_changed)} with primary change"
@@ -640,11 +647,17 @@ def process_ranked_summaries(dataset, results_dir, verbose=False):
                 print(f"    Loc-altering mutations: {len(loc_altering_map)} features")
 
                 # Generate detailed mutations analysis
-                mutations_detailed_out = summary_dir / f"differential_localization_mutations_{mode}.csv"
-                mutations_detailed_df = analyze_mutations_detailed(mutations_loc_df, pairs_df)
+                mutations_detailed_out = (
+                    summary_dir / f"differential_localization_mutations_{mode}.csv"
+                )
+                mutations_detailed_df = analyze_mutations_detailed(
+                    mutations_loc_df, pairs_df
+                )
                 if len(mutations_detailed_df) > 0:
                     mutations_detailed_df.to_csv(mutations_detailed_out, index=False)
-                    primary_changed_mut = mutations_detailed_df[mutations_detailed_df["primary_changed"]]
+                    primary_changed_mut = mutations_detailed_df[
+                        mutations_detailed_df["primary_changed"]
+                    ]
                     print(
                         f"    Detailed mutation analysis: {len(mutations_detailed_df)} mutations, "
                         f"{len(primary_changed_mut)} with primary change"
@@ -659,8 +672,12 @@ def process_ranked_summaries(dataset, results_dir, verbose=False):
 
                 if len(del_burden_df) > 0:
                     result["del_burden_count"] = len(del_burden_df)
-                    result["total_deleterious"] = int(del_burden_df["total_deleterious"].sum())
-                    result["total_synonymous"] = int(del_burden_df["count_synonymous"].sum())
+                    result["total_deleterious"] = int(
+                        del_burden_df["total_deleterious"].sum()
+                    )
+                    result["total_synonymous"] = int(
+                        del_burden_df["count_synonymous"].sum()
+                    )
                     print(
                         f"    Deleterious burden: {len(del_burden_df)} features, "
                         f"{result['total_deleterious']} deleterious variants"
@@ -691,41 +708,180 @@ def process_ranked_summaries(dataset, results_dir, verbose=False):
 
 
 # ============================================================================
+# MANE Annotation
+# ============================================================================
+
+
+def annotate_mane_status(dataset: str, source: str, gtf_file: str):
+    """Annotate isoform results with MANE Select information.
+
+    Args:
+        dataset: Dataset name (e.g., 'hela')
+        source: Mutation source (e.g., 'gnomad', 'clinvar')
+        gtf_file: Path to GTF file with MANE annotations
+    """
+    isoform_file = Path(
+        f"../results/{dataset}/{source}/mutations/isoform_level_results.csv"
+    )
+
+    if not isoform_file.exists():
+        print(f"Warning: Isoform results file not found: {isoform_file}")
+        return
+
+    print(f"\nAnnotating isoform results with MANE Select information...")
+
+    df = pd.read_csv(isoform_file)
+    print(f"Loaded {len(df)} isoforms")
+
+    # Annotate with MANE
+    handler = MutationHandler()
+    annotated_df = handler.annotate_mane_status(df, gtf_file)
+
+    # Save back to same file (now with MANE columns)
+    annotated_df.to_csv(isoform_file, index=False)
+
+    # Also create Excel version
+    excel_file = isoform_file.with_suffix(".xlsx")
+    annotated_df.to_excel(excel_file, index=False, engine="openpyxl")
+
+    mane_count = (annotated_df["MANE"] == "Yes").sum()
+    print(
+        f"✓ MANE annotation complete: {mane_count} MANE Select isoforms out of {len(annotated_df)} total"
+    )
+    print(f"✓ Created Excel file: {excel_file.name}")
+
+
+# ============================================================================
+# gnomAD Filtering
+# ============================================================================
+
+
+def filter_by_gnomad_if_available(dataset: str, source: str, threshold: float = 5e-5):
+    """Optionally filter mutations by gnomAD allele frequency.
+
+    For non-gnomAD sources (clinvar, cosmic, custom), filters out variants
+    that overlap with common gnomAD variants above the threshold.
+
+    Args:
+        dataset: Dataset name (e.g., 'hela')
+        source: Mutation source (e.g., 'clinvar', 'cosmic', 'custom_bch')
+        threshold: gnomAD allele frequency threshold (default: 5e-5 = 0.00005)
+    """
+    # Only filter non-gnomAD sources
+    if source.lower() == "gnomad":
+        print("Skipping gnomAD filtering (this is the gnomAD source)")
+        return
+
+    # Check if gnomAD source exists for this dataset
+    gnomad_dir = Path(f"../results/{dataset}/gnomad")
+    if not gnomad_dir.exists():
+        print(f"No gnomAD data available for {dataset}, skipping filtering")
+        return
+
+    print(f"\nFiltering {source} mutations against gnomAD (threshold: {threshold})...")
+    print("This removes common population variants from clinical sources.")
+
+    import subprocess
+
+    try:
+        # Call the filter script
+        result = subprocess.run(
+            [
+                "python3",
+                "filter_gnomad_af.py",
+                f"../results/{dataset}/{source}",
+                "--gnomad-source",
+                f"../results/{dataset}/gnomad",
+                "--threshold",
+                str(threshold),
+                "--mane-file",
+                f"../results/{dataset}/{source}/mutations/isoform_level_results.csv",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        print(result.stdout)
+        print(f"✓ gnomAD filtering completed for {source}")
+
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: gnomAD filtering failed for {source}")
+        print(f"Error: {e.stderr}")
+        print("Continuing with unfiltered data...")
+    except FileNotFoundError:
+        print("Warning: filter_gnomad_af.py not found, skipping filtering")
+
+
+# ============================================================================
 # Main Function
 # ============================================================================
 
 
 def main():
-    """Main analysis function that processes the specified dataset."""
+    """Main analysis function that processes the specified dataset and source."""
     # Get dataset from command line arg, environment variable, or default
     if len(sys.argv) > 1:
         dataset = sys.argv[1]
     else:
         dataset = os.environ.get("DATASET", "hela")
 
+    # Get source from command line arg, environment variable, or default
+    if len(sys.argv) > 2:
+        source = sys.argv[2]
+    else:
+        source = os.environ.get("SOURCE", "gnomad")
+
     print("SwissIsoform Pipeline Results Summary")
     print("=" * 70)
     print(f"Dataset: {dataset}")
+    print(f"Source:  {source}")
 
-    results_dir = Path("../results") / dataset
+    results_dir = Path("../results") / dataset / source
 
     # Initialize the analyzer
     analyzer = SummaryAnalyzer()
 
-    print(f"\n{'=' * 20} ANALYZING {dataset.upper()} DATASET {'=' * 20}")
+    print(f"\n{'=' * 20} ANALYZING {dataset.upper()} / {source.upper()} {'=' * 20}")
 
-    # Check if this dataset has any data
-    if not analyzer.dataset_has_data(dataset):
-        print(f"Error: {dataset} dataset has no data available")
+    # Check if this dataset/source has any data
+    if not analyzer.dataset_has_data(dataset, source):
+        print(f"Error: {dataset}/{source} has no data available")
         sys.exit(1)
+
+    # Get GTF file for MANE annotation
+    import subprocess
+
+    try:
+        config_file = "../data/ribosome_profiling/dataset_config.yaml"
+        result = subprocess.run(
+            ["python3", "get_dataset_config.py", config_file, dataset],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        _, gtf_file, _ = result.stdout.strip().split()
+    except Exception as e:
+        print(f"Warning: Could not get GTF file from config: {e}")
+        gtf_file = None
+
+    # Pre-processing: Annotate with MANE Select
+    if gtf_file:
+        annotate_mane_status(dataset, source, gtf_file)
+
+    # Pre-processing: Filter by gnomAD (for clinical sources)
+    filter_by_gnomad_if_available(dataset, source)
 
     # Run standard summary analysis (text summaries, basic CSVs)
     try:
-        analyzer.analyze_dataset(dataset)
-        print(f"\nStandard summary analysis completed successfully for {dataset}!")
+        analyzer.analyze_dataset(dataset, source)
+        print(
+            f"\nStandard summary analysis completed successfully for {dataset}/{source}!"
+        )
     except Exception as e:
         print(f"Error in standard summary analysis: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
@@ -736,11 +892,12 @@ def main():
     except Exception as e:
         print(f"Error generating ranked summaries: {e}")
         import traceback
+
         traceback.print_exc()
         # Don't exit - standard summaries were successful
 
     print(f"\n{'=' * 70}")
-    print(f"All results saved to: ../results/{dataset}/summary/")
+    print(f"All results saved to: ../results/{dataset}/{source}/summary/")
 
 
 if __name__ == "__main__":

@@ -85,7 +85,7 @@ class TqdmLoggingHandler(logging.Handler):
 async def main(
     gene_list_path: str,
     output_dir: str,
-    mutations_file: str,
+    mutations_file: Optional[str],
     genome_path: str,
     annotation_path: str,
     bed_path: str,
@@ -94,16 +94,18 @@ async def main(
     max_length: int = 100000,
     output_format: str = "fasta,csv",
     custom_parquet_path: Optional[str] = None,
+    base_only: bool = False,
 ):
     """Main function for protein sequence generation using pre-validated missense variants.
 
     This function processes pre-validated missense variants only, as identified during
-    mutation detection (step 2).
+    mutation detection (step 2). Can also run in base-only mode to generate just canonical
+    and alternative proteins without mutations.
 
     Args:
         gene_list_path (str): Path to file containing gene names
         output_dir (str): Directory to save output files
-        mutations_file (str): Path to isoform_level_results.csv from step 2 (must have bed_name column)
+        mutations_file (Optional[str]): Path to isoform_level_results.csv from step 2 (not required in base-only mode)
         genome_path (str): Path to genome FASTA file
         annotation_path (str): Path to genome annotation GTF file
         bed_path (str): Path to alternative isoform BED file
@@ -112,6 +114,7 @@ async def main(
         max_length (int): Maximum protein length to include
         output_format (str): Output format specification
         custom_parquet_path (Optional[str]): Path to custom mutations parquet file
+        base_only (bool): If True, only generate canonical + alternative pairs (no mutations)
 
     Returns:
         None
@@ -151,24 +154,36 @@ async def main(
         custom_parquet_path=custom_parquet_path,
     )
 
-    # Load pre-validated missense variant IDs
-    logger.info(f"Loading pre-validated variant IDs from {mutations_file}...")
-    pre_validated_variants = load_pre_validated_variants(
-        mutations_file, sources=sources
-    )
-
     # Read gene list
     logger.info(f"Reading gene list from {gene_list_path}")
     gene_names = parse_gene_list(gene_list_path)
 
     total_genes = len(gene_names)
-    logger.info(f"Starting fast protein sequence generation for {total_genes} genes")
-    logger.info(f"Configuration:")
-    logger.info(f"  Pre-validated variants file: {mutations_file}")
-    logger.info(f"  Sources: {', '.join(sources)}")
-    logger.info(f"  Impact types: missense variant (only)")
-    logger.info(f"  Length range: {min_length}-{max_length} amino acids")
-    logger.info(f"  Output format: {output_format}")
+
+    # Load pre-validated missense variant IDs (skip in base-only mode)
+    if base_only:
+        logger.info(
+            f"Starting base-only protein sequence generation for {total_genes} genes"
+        )
+        logger.info(f"Configuration:")
+        logger.info(f"  Mode: Base-only (canonical + alternative pairs)")
+        logger.info(f"  Length range: {min_length}-{max_length} amino acids")
+        logger.info(f"  Output format: {output_format}")
+        pre_validated_variants = None
+    else:
+        logger.info(f"Loading pre-validated variant IDs from {mutations_file}...")
+        pre_validated_variants = load_pre_validated_variants(
+            mutations_file, sources=sources
+        )
+        logger.info(
+            f"Starting fast protein sequence generation for {total_genes} genes"
+        )
+        logger.info(f"Configuration:")
+        logger.info(f"  Pre-validated variants file: {mutations_file}")
+        logger.info(f"  Sources: {', '.join(sources)}")
+        logger.info(f"  Impact types: missense variant (only)")
+        logger.info(f"  Length range: {min_length}-{max_length} amino acids")
+        logger.info(f"  Output format: {output_format}")
 
     # Generate datasets
     logger.info("Generating datasets...")
@@ -182,23 +197,27 @@ async def main(
         max_length=max_length,
     )
 
-    # Generate mutations dataset using pre-validated missense variants
-    logger.info(
-        "2. Generating mutations dataset with pre-validated missense variants..."
-    )
-    mutations_dataset = (
-        await protein_generator.create_protein_sequence_dataset_with_mutations(
-            gene_list=gene_names,
-            include_mutations=True,
-            sources=sources,
-            impact_types=["missense variant"],
-            output_format=output_format,
-            min_length=min_length,
-            max_length=max_length,
-            pre_validated_variants=pre_validated_variants,
-            skip_validation=True,  # Always use pre-validated mode
+    # Generate mutations dataset using pre-validated missense variants (skip in base-only mode)
+    if base_only:
+        mutations_dataset = None
+        logger.info("Skipping mutations dataset (base-only mode)")
+    else:
+        logger.info(
+            "2. Generating mutations dataset with pre-validated missense variants..."
         )
-    )
+        mutations_dataset = (
+            await protein_generator.create_protein_sequence_dataset_with_mutations(
+                gene_list=gene_names,
+                include_mutations=True,
+                sources=sources,
+                impact_types=["missense variant"],
+                output_format=output_format,
+                min_length=min_length,
+                max_length=max_length,
+                pre_validated_variants=pre_validated_variants,
+                skip_validation=True,  # Always use pre-validated mode
+            )
+        )
 
     # Final summary
     end_time = datetime.now()
@@ -207,7 +226,10 @@ async def main(
     logger.info(f"Fast protein sequence generation completed!")
     logger.info(f"  Duration: {duration}")
     logger.info(f"  Pairs dataset: {len(pairs_dataset)} sequences")
-    logger.info(f"  Mutations dataset: {len(mutations_dataset)} sequences")
+    if mutations_dataset is not None:
+        logger.info(f"  Mutations dataset: {len(mutations_dataset)} sequences")
+    else:
+        logger.info(f"  Mutations dataset: skipped (base-only mode)")
     logger.info(f"  Performance: Used pre-validated variants (skipped validation)")
 
     logger.info(f"Generation completed at {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -221,8 +243,8 @@ if __name__ == "__main__":
     parser.add_argument("output_dir", help="Directory to save output files")
     parser.add_argument(
         "--mutations-file",
-        required=True,
-        help="Path to isoform_level_results.csv from step 2",
+        required=False,
+        help="Path to isoform_level_results.csv from step 2 (not required in base-only mode)",
     )
     parser.add_argument(
         "--genome",
@@ -275,8 +297,17 @@ if __name__ == "__main__":
         default=0,
         help="Increase verbosity (use -v, -vv, or -vvv for more detail)",
     )
+    parser.add_argument(
+        "--base-only",
+        action="store_true",
+        help="Generate only base (canonical + alternative) proteins without mutations",
+    )
 
     args = parser.parse_args()
+
+    # Validate arguments
+    if not args.base_only and not args.mutations_file:
+        parser.error("--mutations-file is required unless --base-only is specified")
 
     # Configure logging based on verbosity
     if args.verbose == 0:
@@ -336,5 +367,6 @@ if __name__ == "__main__":
             max_length=args.max_length,
             output_format=args.format,
             custom_parquet_path=args.custom_parquet,
+            base_only=args.base_only,
         )
     )

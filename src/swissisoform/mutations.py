@@ -4062,3 +4062,122 @@ class MutationHandler:
             logger.error(f"Error processing gene {gene_name}: {str(e)}")
             logger.debug(f"Error: {str(e)}")
             return {"gene_name": gene_name, "status": "error", "error": str(e)}
+
+    def parse_gtf_for_mane(self, gtf_file: str) -> Dict[str, str]:
+        """Parse GTF file to extract gene → MANE Select transcript mapping.
+
+        Args:
+            gtf_file: Path to GTF file with MANE annotations
+
+        Returns:
+            Dictionary mapping gene_name to MANE Select transcript_id (without version)
+        """
+        logger.info("Parsing GTF file for MANE Select annotations...")
+        mane_transcripts = {}  # gene_name → transcript_id (without version)
+
+        with open(gtf_file) as f:
+            for line in f:
+                if line.startswith("#"):
+                    continue
+
+                # Only look at transcript lines with MANE_Select tag
+                if "\ttranscript\t" in line and "MANE_Select" in line:
+                    # Extract gene_name and transcript_id from attributes
+                    attrs = line.split("\t")[8]
+
+                    gene_name = None
+                    transcript_id = None
+
+                    for attr in attrs.split(";"):
+                        attr = attr.strip()
+                        if attr.startswith('gene_name "'):
+                            gene_name = attr.split('"')[1]
+                        elif attr.startswith('transcript_id "'):
+                            transcript_id = attr.split('"')[1]
+                            # Strip version number (e.g., ENST00000368474.9 → ENST00000368474)
+                            transcript_id = transcript_id.rsplit(".", 1)[0]
+
+                    if gene_name and transcript_id:
+                        mane_transcripts[gene_name] = transcript_id
+
+        logger.info(f"Found {len(mane_transcripts)} genes with MANE Select transcripts")
+        return mane_transcripts
+
+    def annotate_mane_status(self, df: pd.DataFrame, gtf_file: str) -> pd.DataFrame:
+        """Add MANE and transcript_notes columns to isoform results dataframe.
+
+        Args:
+            df: Isoform results dataframe with gene_name and transcript_id columns
+            gtf_file: Path to GTF file with MANE annotations
+
+        Returns:
+            Dataframe with added MANE and transcript_notes columns
+        """
+        # Parse MANE transcripts from GTF
+        mane_transcripts = self.parse_gtf_for_mane(gtf_file)
+
+        # Strip version from transcript_id
+        df["transcript_base"] = df["transcript_id"].str.rsplit(".", n=1).str[0]
+
+        # Add MANE Select flag
+        df["MANE"] = df.apply(
+            lambda row: "Yes"
+            if mane_transcripts.get(row["gene_name"]) == row["transcript_base"]
+            else "No",
+            axis=1,
+        )
+
+        # Generate transcript_notes for each (gene_name, feature_type) group
+        def generate_notes(group):
+            total_count = len(group)
+            mane_count = (group["MANE"] == "Yes").sum()
+
+            notes = []
+            for idx, row in group.iterrows():
+                if total_count == 1:
+                    if row["MANE"] == "No":
+                        notes.append("Only one, no MANE Select")
+                    else:
+                        notes.append("")  # Only one and it's MANE - no note needed
+                elif mane_count == 0:
+                    notes.append("No MANE Select")
+                elif mane_count > 1:
+                    # Unusual: multiple MANE transcripts for same gene+feature_type
+                    notes.append("Multiple MANE Select")
+                else:
+                    # mane_count == 1 and total_count > 1
+                    if row["MANE"] == "Yes":
+                        notes.append("")  # This is the MANE one - no note needed
+                    else:
+                        notes.append("Non-MANE (MANE exists)")
+
+            return notes
+
+        # Apply notes generation per (gene_name, feature_type)
+        df["transcript_notes"] = ""
+        for (gene, feature), group in df.groupby(["gene_name", "feature_type"]):
+            notes = generate_notes(group)
+            df.loc[group.index, "transcript_notes"] = notes
+
+        # Drop helper column
+        df = df.drop(columns=["transcript_base"])
+
+        # Reorder columns: insert MANE and transcript_notes after transcript_id
+        cols = df.columns.tolist()
+        transcript_id_idx = cols.index("transcript_id")
+
+        # Remove MANE and transcript_notes from wherever they are
+        cols = [c for c in cols if c not in ["MANE", "transcript_notes"]]
+
+        # Insert after transcript_id
+        cols.insert(transcript_id_idx + 1, "MANE")
+        cols.insert(transcript_id_idx + 2, "transcript_notes")
+
+        df = df[cols]
+
+        mane_count = (df["MANE"] == "Yes").sum()
+        logger.info(
+            f"Annotated {mane_count} MANE Select isoforms out of {len(df)} total"
+        )
+
+        return df
