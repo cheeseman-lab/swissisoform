@@ -47,7 +47,7 @@
 #SBATCH --array=1-64                       # Max array size (supports up to 7 sources + 1 base × 8 chunks)
 #SBATCH --cpus-per-task=4                  # CPUs per task
 #SBATCH --mem=45G                          # Memory per task (48 tasks × 45G = 2160G total)
-#SBATCH --time=24:00:00                    # Time limit (hrs:min:sec)
+#SBATCH --time=48:00:00                    # Time limit (hrs:min:sec)
 #SBATCH --output=out/proteins-%A_%a.out    # %A = job ID, %a = array task ID
 
 set -e  # Exit on error
@@ -491,6 +491,7 @@ else
       --min-length "$MIN_LENGTH"
       --max-length "$MAX_LENGTH"
       --format "$FORMAT"
+      --skip-pairs
       -v)
 
     # Add custom parquet path if specified

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge chunked mutation analysis results.
+r"""Merge chunked mutation analysis results.
 
 This script handles the merge step after parallel chunk processing:
 1. Merges gene-level results from all chunks

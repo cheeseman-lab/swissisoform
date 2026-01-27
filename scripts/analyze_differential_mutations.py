@@ -16,6 +16,7 @@ def load_mane_data(dataset: str, results_dir: str = "../results") -> pd.DataFram
 
 
 def main():
+    """Main entry point for differential mutation analysis."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--datasets",

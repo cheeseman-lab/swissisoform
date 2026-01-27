@@ -95,6 +95,7 @@ async def main(
     output_format: str = "fasta,csv",
     custom_parquet_path: Optional[str] = None,
     base_only: bool = False,
+    skip_pairs: bool = False,
 ):
     """Main function for protein sequence generation using pre-validated missense variants.
 
@@ -115,6 +116,7 @@ async def main(
         output_format (str): Output format specification
         custom_parquet_path (Optional[str]): Path to custom mutations parquet file
         base_only (bool): If True, only generate canonical + alternative pairs (no mutations)
+        skip_pairs (bool): If True, skip generating pairs dataset (only generate mutations)
 
     Returns:
         None
@@ -188,14 +190,18 @@ async def main(
     # Generate datasets
     logger.info("Generating datasets...")
 
-    # Generate pairs dataset (canonical + alternative)
-    logger.info("1. Generating canonical + alternative pairs dataset...")
-    pairs_dataset = protein_generator.create_protein_sequence_dataset_pairs(
-        gene_list=gene_names,
-        output_format=output_format,
-        min_length=min_length,
-        max_length=max_length,
-    )
+    # Generate pairs dataset (canonical + alternative) unless skipped
+    if skip_pairs:
+        pairs_dataset = None
+        logger.info("Skipping pairs dataset (--skip-pairs enabled)")
+    else:
+        logger.info("1. Generating canonical + alternative pairs dataset...")
+        pairs_dataset = protein_generator.create_protein_sequence_dataset_pairs(
+            gene_list=gene_names,
+            output_format=output_format,
+            min_length=min_length,
+            max_length=max_length,
+        )
 
     # Generate mutations dataset using pre-validated missense variants (skip in base-only mode)
     if base_only:
@@ -225,7 +231,8 @@ async def main(
 
     logger.info(f"Fast protein sequence generation completed!")
     logger.info(f"  Duration: {duration}")
-    logger.info(f"  Pairs dataset: {len(pairs_dataset)} sequences")
+    if pairs_dataset is not None:
+        logger.info(f"  Pairs dataset: {len(pairs_dataset)} sequences")
     if mutations_dataset is not None:
         logger.info(f"  Mutations dataset: {len(mutations_dataset)} sequences")
     else:
@@ -302,12 +309,22 @@ if __name__ == "__main__":
         action="store_true",
         help="Generate only base (canonical + alternative) proteins without mutations",
     )
+    parser.add_argument(
+        "--skip-pairs",
+        action="store_true",
+        help="Skip generating pairs dataset (canonical + alternative), only generate mutations",
+    )
 
     args = parser.parse_args()
 
     # Validate arguments
     if not args.base_only and not args.mutations_file:
         parser.error("--mutations-file is required unless --base-only is specified")
+
+    if args.base_only and args.skip_pairs:
+        parser.error(
+            "--skip-pairs cannot be used with --base-only (base-only generates pairs only)"
+        )
 
     # Configure logging based on verbosity
     if args.verbose == 0:
@@ -368,5 +385,6 @@ if __name__ == "__main__":
             output_format=args.format,
             custom_parquet_path=args.custom_parquet,
             base_only=args.base_only,
+            skip_pairs=args.skip_pairs,
         )
     )

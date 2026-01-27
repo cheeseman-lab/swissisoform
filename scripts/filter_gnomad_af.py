@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Filter ClinVar/COSMIC/clinical mutations by removing those that overlap with common gnomAD variants.
+r"""Filter ClinVar/COSMIC/clinical mutations by removing those that overlap with common gnomAD variants.
 
 This script filters mutations by removing those that match gnomAD variants at or above a specified
 allele frequency threshold. It operates on an existing isoform_level_results file (typically with
@@ -999,6 +999,7 @@ def print_summary(
 
 
 def main():
+    """Main entry point for gnomAD allele frequency filtering."""
     parser = argparse.ArgumentParser(
         description="Filter mutations by removing those matching common gnomAD variants",
         formatter_class=argparse.RawDescriptionHelpFormatter,
