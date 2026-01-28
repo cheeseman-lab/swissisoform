@@ -872,29 +872,16 @@ def main():
     # Pre-processing: Filter by gnomAD (for clinical sources)
     filter_by_gnomad_if_available(dataset, source)
 
-    # Run standard summary analysis (text summaries, basic CSVs)
+    # Run summary analysis (generates multi-view ranked CSVs)
     try:
         analyzer.analyze_dataset(dataset, source)
-        print(
-            f"\nStandard summary analysis completed successfully for {dataset}/{source}!"
-        )
+        print(f"\nSummary analysis completed successfully for {dataset}/{source}!")
     except Exception as e:
-        print(f"Error in standard summary analysis: {e}")
+        print(f"Error in summary analysis: {e}")
         import traceback
 
         traceback.print_exc()
         sys.exit(1)
-
-    # Generate ranked summaries (CSV files for further analysis)
-    try:
-        process_ranked_summaries(dataset, results_dir, verbose=False)
-        print(f"\nRanked summary generation completed successfully!")
-    except Exception as e:
-        print(f"Error generating ranked summaries: {e}")
-        import traceback
-
-        traceback.print_exc()
-        # Don't exit - standard summaries were successful
 
     print(f"\n{'=' * 70}")
     print(f"All results saved to: ../results/{dataset}/{source}/summary/")

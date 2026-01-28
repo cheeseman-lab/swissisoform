@@ -90,54 +90,84 @@ for SOURCE in "${SOURCES_ARRAY[@]}"; do
     # Check if this source has required files
     SOURCE_VALID=true
 
-    # Mutation analysis results
-    mutation_isoform_file="../results/$DATASET/$SOURCE/mutations/isoform_level_results.csv"
+    # Special handling for "default" source (structural analysis, no mutations)
+    if [ "$SOURCE" = "default" ]; then
+        # Default source only needs pairs localization files
+        loc_pairs_accurate="../results/$DATASET/default/localization/protein_sequences_pairs_Accurate_results.csv"
+        loc_pairs_fast="../results/$DATASET/default/localization/protein_sequences_pairs_Fast_results.csv"
 
-    # Protein sequences
-    proteins_mut_file="../results/$DATASET/$SOURCE/proteins/protein_sequences_with_mutations.csv"
+        LOC_EXISTS=false
+        if [ -f "$loc_pairs_accurate" ]; then
+            SIZE=$(du -h "$loc_pairs_accurate" | cut -f1)
+            echo -e "  ${GREEN}✓${NC} protein_sequences_pairs_Accurate_results.csv (${SIZE})"
+            LOC_EXISTS=true
+        else
+            echo -e "  ${YELLOW}⚠${NC} Accurate pairs localization missing"
+        fi
 
-    # Localization predictions
-    loc_mut_accurate="../results/$DATASET/$SOURCE/localization/protein_sequences_mutations_Accurate_results.csv"
-    loc_mut_fast="../results/$DATASET/$SOURCE/localization/protein_sequences_mutations_Fast_results.csv"
+        if [ -f "$loc_pairs_fast" ]; then
+            SIZE=$(du -h "$loc_pairs_fast" | cut -f1)
+            echo -e "  ${GREEN}✓${NC} protein_sequences_pairs_Fast_results.csv (${SIZE})"
+            LOC_EXISTS=true
+        else
+            echo -e "  ${YELLOW}⚠${NC} Fast pairs localization missing"
+        fi
 
-    # Check mutation results
-    if [ -f "$mutation_isoform_file" ]; then
-        SIZE=$(du -h "$mutation_isoform_file" | cut -f1)
-        echo -e "  ${GREEN}✓${NC} isoform_level_results.csv (${SIZE})"
+        if [ "$LOC_EXISTS" = false ]; then
+            echo -e "  ${RED}✗${NC} No pairs localization results found"
+            SOURCE_VALID=false
+        fi
     else
-        echo -e "  ${RED}✗${NC} isoform_level_results.csv missing"
-        SOURCE_VALID=false
-    fi
+        # Mutation sources need mutation files + localization
+        # Mutation analysis results
+        mutation_isoform_file="../results/$DATASET/$SOURCE/mutations/isoform_level_results.csv"
 
-    # Check protein results
-    if [ -f "$proteins_mut_file" ]; then
-        SIZE=$(du -h "$proteins_mut_file" | cut -f1)
-        echo -e "  ${GREEN}✓${NC} protein_sequences_with_mutations.csv (${SIZE})"
-    else
-        echo -e "  ${YELLOW}⚠${NC} protein_sequences_with_mutations.csv missing (optional)"
-    fi
+        # Protein sequences
+        proteins_mut_file="../results/$DATASET/$SOURCE/proteins/protein_sequences_with_mutations.csv"
 
-    # Check localization results (at least one mode required)
-    LOC_EXISTS=false
-    if [ -f "$loc_mut_accurate" ]; then
-        SIZE=$(du -h "$loc_mut_accurate" | cut -f1)
-        echo -e "  ${GREEN}✓${NC} protein_sequences_mutations_Accurate_results.csv (${SIZE})"
-        LOC_EXISTS=true
-    else
-        echo -e "  ${YELLOW}⚠${NC} Accurate localization results missing"
-    fi
+        # Localization predictions
+        loc_mut_accurate="../results/$DATASET/$SOURCE/localization/protein_sequences_mutations_Accurate_results.csv"
+        loc_mut_fast="../results/$DATASET/$SOURCE/localization/protein_sequences_mutations_Fast_results.csv"
 
-    if [ -f "$loc_mut_fast" ]; then
-        SIZE=$(du -h "$loc_mut_fast" | cut -f1)
-        echo -e "  ${GREEN}✓${NC} protein_sequences_mutations_Fast_results.csv (${SIZE})"
-        LOC_EXISTS=true
-    else
-        echo -e "  ${YELLOW}⚠${NC} Fast localization results missing"
-    fi
+        # Check mutation results
+        if [ -f "$mutation_isoform_file" ]; then
+            SIZE=$(du -h "$mutation_isoform_file" | cut -f1)
+            echo -e "  ${GREEN}✓${NC} isoform_level_results.csv (${SIZE})"
+        else
+            echo -e "  ${RED}✗${NC} isoform_level_results.csv missing"
+            SOURCE_VALID=false
+        fi
 
-    if [ "$LOC_EXISTS" = false ]; then
-        echo -e "  ${RED}✗${NC} No localization results found"
-        SOURCE_VALID=false
+        # Check protein results
+        if [ -f "$proteins_mut_file" ]; then
+            SIZE=$(du -h "$proteins_mut_file" | cut -f1)
+            echo -e "  ${GREEN}✓${NC} protein_sequences_with_mutations.csv (${SIZE})"
+        else
+            echo -e "  ${YELLOW}⚠${NC} protein_sequences_with_mutations.csv missing (optional)"
+        fi
+
+        # Check localization results (at least one mode required)
+        LOC_EXISTS=false
+        if [ -f "$loc_mut_accurate" ]; then
+            SIZE=$(du -h "$loc_mut_accurate" | cut -f1)
+            echo -e "  ${GREEN}✓${NC} protein_sequences_mutations_Accurate_results.csv (${SIZE})"
+            LOC_EXISTS=true
+        else
+            echo -e "  ${YELLOW}⚠${NC} Accurate localization results missing"
+        fi
+
+        if [ -f "$loc_mut_fast" ]; then
+            SIZE=$(du -h "$loc_mut_fast" | cut -f1)
+            echo -e "  ${GREEN}✓${NC} protein_sequences_mutations_Fast_results.csv (${SIZE})"
+            LOC_EXISTS=true
+        else
+            echo -e "  ${YELLOW}⚠${NC} Fast localization results missing"
+        fi
+
+        if [ "$LOC_EXISTS" = false ]; then
+            echo -e "  ${RED}✗${NC} No localization results found"
+            SOURCE_VALID=false
+        fi
     fi
 
     if [ "$SOURCE_VALID" = false ]; then
@@ -253,142 +283,37 @@ echo ""
 echo -e "${GREEN}✓ Pipeline summary analysis completed in $DURATION_STR${NC}"
 echo ""
 
-# Display generated summary files for each source
-echo "Generated summary files:"
-echo ""
-
-for SOURCE in "${SOURCES_ARRAY[@]}"; do
-    summary_dir="../results/$DATASET/$SOURCE/summary"
-    if [ -d "$summary_dir" ]; then
-        echo -e "${CYAN}$DATASET / $SOURCE:${NC}"
-
-        # Check for mutation summary
-        if [ -f "$summary_dir/mutation_summary.txt" ]; then
-            echo -e "  ${GREEN}✓${NC} mutation_summary.txt (shared across models)"
-        fi
-
-        # Check for model-specific subdirectories
-        for model in "accurate" "fast"; do
-            model_dir="$summary_dir/$model"
-            if [ -d "$model_dir" ]; then
-                echo -e "  ${GREEN}✓${NC} $model/ (${model^} model results)"
-
-                # List files in model directory
-                if [ -f "$model_dir/localization_summary.txt" ]; then
-                    echo -e "    ├─ localization_summary.txt"
-                fi
-                if [ -f "$model_dir/genes_with_localization_changes.csv" ]; then
-                    echo -e "    ├─ genes_with_localization_changes.csv"
-                fi
-                if [ -f "$model_dir/detailed_localization_analysis.csv" ]; then
-                    echo -e "    ├─ detailed_localization_analysis.csv"
-                fi
-                if [ -f "$model_dir/gene_level_summary.csv" ]; then
-                    echo -e "    ├─ gene_level_summary.csv"
-                fi
-                # Ranked summary TSVs for skill agent analysis
-                if [ -f "$model_dir/summary_localization_changes.csv" ]; then
-                    echo -e "    ├─ summary_localization_changes.csv (ranked)"
-                fi
-                if [ -f "$model_dir/summary_deleterious_burden.csv" ]; then
-                    echo -e "    └─ summary_deleterious_burden.csv (ranked)"
-                fi
-            fi
-        done
-        echo ""
-    fi
-done
-
-# Display key findings
-echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  Key Findings                                                ║${NC}"
-echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
-echo ""
-
+# Display summary for each source
 for SOURCE in "${SOURCES_ARRAY[@]}"; do
     summary_dir="../results/$DATASET/$SOURCE/summary"
     if [ -d "$summary_dir" ]; then
         echo -e "${CYAN}═══ $DATASET / $SOURCE ═══${NC}"
         echo ""
 
-        # Show mutation analysis findings
-        if [ -f "$summary_dir/mutation_summary.txt" ]; then
-            echo -e "${YELLOW}Mutation Analysis:${NC}"
-            cat "$summary_dir/mutation_summary.txt"
+        # Show the unified summary text
+        if [ -f "$summary_dir/summary.txt" ]; then
+            cat "$summary_dir/summary.txt"
             echo ""
         fi
 
-        # Show findings for each model (only accurate by default)
-        for model in "accurate"; do
+        # List generated files
+        echo -e "${YELLOW}Generated files:${NC}"
+        for model in "accurate" "fast"; do
             model_dir="$summary_dir/$model"
-            if [ -d "$model_dir" ]; then
-                echo -e "${YELLOW}Localization Analysis - ${model^} Model:${NC}"
-
-                if [ -f "$model_dir/localization_summary.txt" ]; then
-                    cat "$model_dir/localization_summary.txt"
-                fi
-
-                # Show preview of genes with localization changes
-                if [ -f "$model_dir/genes_with_localization_changes.csv" ]; then
-                    echo ""
-                    echo -e "${CYAN}Genes with Localization Changes (Preview):${NC}"
-                    head -n 6 "$model_dir/genes_with_localization_changes.csv"
-
-                    total_genes=$(tail -n +2 "$model_dir/genes_with_localization_changes.csv" | wc -l)
-                    if [ $total_genes -gt 5 ]; then
-                        echo "... (showing first 5 genes, $total_genes total with localization changes)"
-                    fi
-                fi
-                echo ""
+            if [ -d "$model_dir" ] && [ -f "$model_dir/feature_analysis.csv" ]; then
+                rows=$(tail -n +2 "$model_dir/feature_analysis.csv" | wc -l)
+                echo -e "  ${GREEN}✓${NC} $model/feature_analysis.csv ($rows features)"
             fi
         done
+        if [ -d "$summary_dir/model_comparison" ]; then
+            echo -e "  ${GREEN}✓${NC} model_comparison/"
+        fi
+        echo ""
 
         echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
         echo ""
     fi
 done
-
-# Show ranked summaries preview
-echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║  Ranked Summaries (for Skill Agent Analysis)                 ║${NC}"
-echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
-echo ""
-
-for SOURCE in "${SOURCES_ARRAY[@]}"; do
-    summary_dir="../results/$DATASET/$SOURCE/summary"
-    if [ -d "$summary_dir" ]; then
-        echo -e "${CYAN}$DATASET / $SOURCE:${NC}"
-
-        for model in "accurate"; do
-            model_dir="$summary_dir/$model"
-            if [ -d "$model_dir" ]; then
-                # Show top localization changes
-                if [ -f "$model_dir/summary_localization_changes.csv" ]; then
-                    echo -e "${YELLOW}Top Localization Changes - ${model^} Model:${NC}"
-                    head -n 6 "$model_dir/summary_localization_changes.csv" | column -t -s ','
-                    total_changes=$(tail -n +2 "$model_dir/summary_localization_changes.csv" | wc -l)
-                    echo "... ($total_changes total features)"
-                    echo ""
-                fi
-
-                # Show top deleterious burden
-                if [ -f "$model_dir/summary_deleterious_burden.csv" ]; then
-                    echo -e "${YELLOW}Top Deleterious Burden - ${model^} Model:${NC}"
-                    head -n 6 "$model_dir/summary_deleterious_burden.csv" | cut -d',' -f1,5,12,13,14 | column -t -s ','
-                    total_burden=$(tail -n +2 "$model_dir/summary_deleterious_burden.csv" | wc -l)
-                    echo "... ($total_burden total features with mutations)"
-                    echo ""
-                fi
-            fi
-        done
-
-        echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
-        echo ""
-    fi
-done
-
-echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
-echo ""
 
 # ============================================================================
 # Final Summary
@@ -401,12 +326,15 @@ echo "Detailed results available in:"
 for SOURCE in "${SOURCES_ARRAY[@]}"; do
     if [ -d "../results/$DATASET/$SOURCE/summary" ]; then
         echo "  └─ ../results/$DATASET/$SOURCE/summary/"
-        echo "     ├─ mutation_summary.txt"
+        echo "     ├─ summary.txt"
         for model in "accurate" "fast"; do
             if [ -d "../results/$DATASET/$SOURCE/summary/$model" ]; then
-                echo "     └─ $model/"
+                echo "     ├─ $model/feature_analysis.csv"
             fi
         done
+        if [ -d "../results/$DATASET/$SOURCE/summary/model_comparison" ]; then
+            echo "     └─ model_comparison/"
+        fi
         echo ""
     fi
 done
