@@ -893,8 +893,23 @@ def load_pre_validated_variants(
 
     logger.info(f"Loading missense variants from sources: {', '.join(sources)}")
 
+    # Normalize source names for column lookup
+    # Step 2 normalizes custom_* source names (e.g., custom_bch, custom_msk) to "custom"
+    # for column naming, so we must do the same here
+    normalized_sources = []
+    for source in sources:
+        normalized = source.split("_")[0] if source.startswith("custom_") else source
+        if normalized not in [n for n in normalized_sources]:
+            normalized_sources.append(normalized)
+            if normalized != source:
+                logger.info(
+                    f"  Normalized source '{source}' -> '{normalized}' for column lookup"
+                )
+
     # Build list of missense variant ID columns for specified sources
-    variant_id_columns = [f"ids_{source}_missense_variant" for source in sources]
+    variant_id_columns = [
+        f"ids_{source}_missense_variant" for source in normalized_sources
+    ]
 
     # Extract variant IDs by bed_name
     pre_validated_variants = {}

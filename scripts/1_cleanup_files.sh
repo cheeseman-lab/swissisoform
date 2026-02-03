@@ -8,6 +8,9 @@
 # Usage:
 #   bash 1_cleanup_files.sh
 #
+# Full pipeline run (hela):
+#   bash 1_cleanup_files.sh
+#
 # Prerequisites:
 #   - dataset_config.yaml must exist (created by 0_download_genome.sh)
 #   - GTF files referenced in config must be present

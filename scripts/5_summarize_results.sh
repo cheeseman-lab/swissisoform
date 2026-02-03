@@ -7,13 +7,16 @@
 # specified dataset and mutation source(s).
 #
 # Usage:
-#   DATASET=hela SOURCE=gnomad bash 5_summarize_results.sh
-#   DATASET=hela SOURCES="gnomad|clinvar|cosmic" bash 5_summarize_results.sh
+#   DATASET=hela SOURCE=clinvar bash 5_summarize_results.sh
+#   DATASET=hela SOURCES="clinvar|cosmic|custom_bch|custom_msk" bash 5_summarize_results.sh
+#
+# Full pipeline run (hela, all sources EXCEPT gnomad — gnomad only needs step 2):
+#   DATASET=hela SOURCES="default|clinvar|cosmic|custom_bch|custom_msk" bash 5_summarize_results.sh
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
-#   SOURCE  - Single mutation source (e.g., gnomad, clinvar, cosmic, custom_*)
-#   SOURCES - Multiple sources pipe-separated (e.g., "gnomad|clinvar|cosmic")
+#   SOURCE  - Single mutation source (e.g., clinvar, cosmic, custom_bch, custom_msk)
+#   SOURCES - Multiple sources pipe-separated (e.g., "clinvar|cosmic|custom_bch")
 #
 # Prerequisites:
 #   - 2_analyze_mutations.sh must have been run for the dataset+source
@@ -47,12 +50,12 @@ DATASET="${DATASET:-hela}"
 
 # Source selection
 # - If SOURCES is set (pipe-separated), process multiple sources
-# - Otherwise use SOURCE (default: gnomad)
+# - Otherwise use SOURCE (default: clinvar)
 if [ -n "$SOURCES" ]; then
     IFS='|' read -ra SOURCES_ARRAY <<< "$SOURCES"
     echo "Multi-source mode: ${SOURCES_ARRAY[@]}"
 else
-    SOURCE="${SOURCE:-gnomad}"
+    SOURCE="${SOURCE:-clinvar}"
     SOURCES_ARRAY=("$SOURCE")
     echo "Single source mode: $SOURCE"
 fi
@@ -250,7 +253,16 @@ for SOURCE in "${SOURCES_ARRAY[@]}"; do
     echo ""
 
     # Call summarize_results.py with both dataset and source
+    echo -e "${YELLOW}→${NC} Running command:"
+    echo "  python3 summarize_results.py $DATASET $SOURCE"
+    echo ""
+
     python3 summarize_results.py "$DATASET" "$SOURCE"
+
+    exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo -e "${RED}✗${NC} Summary generation failed for $DATASET / $SOURCE (exit code: $exit_code)"
+    fi
 
     echo ""
 done
@@ -302,12 +314,17 @@ for SOURCE in "${SOURCES_ARRAY[@]}"; do
             model_dir="$summary_dir/$model"
             if [ -d "$model_dir" ] && [ -f "$model_dir/feature_analysis.csv" ]; then
                 rows=$(tail -n +2 "$model_dir/feature_analysis.csv" | wc -l)
-                echo -e "  ${GREEN}✓${NC} $model/feature_analysis.csv ($rows features)"
+                cols=$(head -1 "$model_dir/feature_analysis.csv" | tr ',' '\n' | wc -l)
+                echo -e "  ${GREEN}✓${NC} $model/feature_analysis.csv ($rows features, $cols columns)"
+                # Show tier tables if present
+                for tier in "tier1_alt_start_loss" "tier2_lof_burden" "tier3_missense_reverts"; do
+                    if [ -f "$model_dir/${tier}.csv" ]; then
+                        tier_rows=$(tail -n +2 "$model_dir/${tier}.csv" | wc -l)
+                        echo -e "  ${GREEN}✓${NC} $model/${tier}.csv ($tier_rows features)"
+                    fi
+                done
             fi
         done
-        if [ -d "$summary_dir/model_comparison" ]; then
-            echo -e "  ${GREEN}✓${NC} model_comparison/"
-        fi
         echo ""
 
         echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
@@ -330,11 +347,13 @@ for SOURCE in "${SOURCES_ARRAY[@]}"; do
         for model in "accurate" "fast"; do
             if [ -d "../results/$DATASET/$SOURCE/summary/$model" ]; then
                 echo "     ├─ $model/feature_analysis.csv"
+                for tier in "tier1_alt_start_loss" "tier2_lof_burden" "tier3_missense_reverts"; do
+                    if [ -f "../results/$DATASET/$SOURCE/summary/$model/${tier}.csv" ]; then
+                        echo "     │  └─ ${tier}.csv"
+                    fi
+                done
             fi
         done
-        if [ -d "../results/$DATASET/$SOURCE/summary/model_comparison" ]; then
-            echo "     └─ model_comparison/"
-        fi
         echo ""
     fi
 done

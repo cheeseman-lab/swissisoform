@@ -849,25 +849,23 @@ def main():
         print(f"Error: {dataset}/{source} has no data available")
         sys.exit(1)
 
-    # Get GTF file for MANE annotation
-    import subprocess
+    # Get MANE GTF file (v47+ has MANE_Select tags; older GTFs do not)
+    import yaml
 
+    config_file = "../data/ribosome_profiling/dataset_config.yaml"
     try:
-        config_file = "../data/ribosome_profiling/dataset_config.yaml"
-        result = subprocess.run(
-            ["python3", "get_dataset_config.py", config_file, dataset],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        _, gtf_file, _ = result.stdout.strip().split()
+        with open(config_file) as f:
+            config = yaml.safe_load(f)
+        mane_gtf = config.get("genome", {}).get("mane_gtf_path")
     except Exception as e:
-        print(f"Warning: Could not get GTF file from config: {e}")
-        gtf_file = None
+        print(f"Warning: Could not read config for MANE GTF: {e}")
+        mane_gtf = None
 
     # Pre-processing: Annotate with MANE Select
-    if gtf_file:
-        annotate_mane_status(dataset, source, gtf_file)
+    if mane_gtf:
+        annotate_mane_status(dataset, source, mane_gtf)
+    else:
+        print("Warning: No mane_gtf_path in config, skipping MANE annotation")
 
     # Pre-processing: Filter by gnomAD (for clinical sources)
     filter_by_gnomad_if_available(dataset, source)

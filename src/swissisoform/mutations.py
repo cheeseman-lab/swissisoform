@@ -2105,7 +2105,11 @@ class MutationHandler:
                 logger.error(f"Error fetching {source} data: {str(e)}")
 
         # Add custom data if specified
-        if "custom" in sources and custom_parquet_path:
+        # Support custom_* source names (e.g., custom_bch, custom_msk)
+        has_custom_source = any(
+            s == "custom" or s.startswith("custom_") for s in sources
+        )
+        if has_custom_source and custom_parquet_path:
             try:
                 custom_df = await self.get_custom_variants(
                     custom_parquet_path, gene_name

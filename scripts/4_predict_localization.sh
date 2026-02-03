@@ -7,24 +7,27 @@
 #
 # Usage:
 #   # Single source (backward compatible) - 4 tasks
-#   sbatch --export=DATASET=hela,SOURCE=gnomad 4_predict_localization.sh
+#   sbatch --export=DATASET=hela,SOURCE=clinvar --array=1-4 4_predict_localization.sh
 #
 #   # Multiple sources in parallel (RECOMMENDED) - AUTOMATICALLY includes base pairs!
-#   # For 5 sources: (2 base + 5 sources × 2) = 12 tasks
-#   sbatch --export=DATASET=hela,SOURCES="gnomad|clinvar|cosmic|custom_bch|custom_msk" 4_predict_localization.sh
+#   # NOTE: gnomad only needs step 2 (mutation calling), not localization prediction
+#   # For 4 sources: (2 base + 4 sources × 2) = 10 tasks
+#   sbatch --export=DATASET=hela,SOURCES="clinvar|cosmic|custom_bch|custom_msk" --array=1-10 4_predict_localization.sh
 #
 #   # This will generate:
 #   #   Task 1-2:  results/hela/default/localization/ (base pairs Fast + Accurate)
-#   #   Task 3-4:  results/hela/gnomad/localization/ (mutations Fast + Accurate)
-#   #   Task 5-6:  results/hela/clinvar/localization/ (mutations Fast + Accurate)
-#   #   Task 7-8:  results/hela/cosmic/localization/ (mutations Fast + Accurate)
-#   #   Task 9-10: results/hela/custom_bch/localization/ (mutations Fast + Accurate)
-#   #   Task 11-12: results/hela/custom_msk/localization/ (mutations Fast + Accurate)
+#   #   Task 3-4:  results/hela/clinvar/localization/ (mutations Fast + Accurate)
+#   #   Task 5-6:  results/hela/cosmic/localization/ (mutations Fast + Accurate)
+#   #   Task 7-8:  results/hela/custom_bch/localization/ (mutations Fast + Accurate)
+#   #   Task 9-10: results/hela/custom_msk/localization/ (mutations Fast + Accurate)
+#
+# Full pipeline run (hela, all sources EXCEPT gnomad — gnomad only needs step 2):
+#   sbatch --export=DATASET=hela,SOURCES="clinvar|cosmic|custom_bch|custom_msk" --array=1-10 4_predict_localization.sh
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
-#   SOURCE - Single mutation source (default: gnomad)
-#   SOURCES - Multiple sources for parallel processing (pipe-separated: "gnomad|clinvar|cosmic")
+#   SOURCE - Single mutation source (default: clinvar)
+#   SOURCES - Multiple sources for parallel processing (pipe-separated: "clinvar|cosmic|custom_bch")
 #             ALWAYS predicts base pairs first (tasks 1-2), then source mutations
 #             Array size: 2 + (num_sources × 2) tasks (e.g., 5 sources = 12 tasks)
 #
@@ -136,7 +139,7 @@ if [ -n "$SOURCES" ]; then
     fi
 else
     # Single-source mode (backward compatible)
-    SOURCE="${SOURCE:-gnomad}"
+    SOURCE="${SOURCE:-clinvar}"
     NUM_SOURCES=1
     MODE="source"
 
@@ -314,11 +317,17 @@ if [ -f "$INPUT_FILE" ]; then
     mkdir -p "$temp_subdir"
 
     echo -e "${YELLOW}→${NC} Starting DeepLoc ${DEEPLOC_MODE} mode for ${FILE_TYPE} at $(date)"
+    seq_count=$(grep -c '^>' "$INPUT_FILE" 2>/dev/null || echo 0)
+    echo "  Input: $(basename $INPUT_FILE) ($seq_count sequences)"
     echo ""
 
     # Set GPU memory growth to avoid OOM errors
     export TF_FORCE_GPU_ALLOW_GROWTH=true
     export CUDA_VISIBLE_DEVICES=0
+
+    echo -e "${YELLOW}→${NC} Running command:"
+    echo "  deeploc2 -f $INPUT_FILE -m $DEEPLOC_MODE -o $temp_subdir/ -d cuda"
+    echo ""
 
     deeploc2 -f "$INPUT_FILE" -m "$DEEPLOC_MODE" -o "$temp_subdir/" -d cuda
 

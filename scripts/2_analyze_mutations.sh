@@ -19,6 +19,9 @@
 #   # Multiple sources including custom parquets (RECOMMENDED for multiple custom sources)
 #   sbatch --export=DATASET=hela,SOURCES="gnomad|custom_bch|custom_msk",CUSTOM_PARQUETS="custom_bch:/path/to/bch.parquet|custom_msk:/path/to/msk.parquet" 2_analyze_mutations.sh
 #
+# Full pipeline run (hela, all sources including gnomad):
+#   sbatch --export=DATASET=hela,SOURCES="gnomad|clinvar|cosmic|custom_bch|custom_msk",CUSTOM_PARQUETS="custom_bch:/lab/barcheese01/mdiberna/swissisoform/data/mutation_data/bch_variants_combined.parquet|custom_msk:/lab/barcheese01/mdiberna/swissisoform/data/mutation_data/msk_variants_combined.parquet" --array=1-40 2_analyze_mutations.sh
+#
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
 #   SOURCE - Single mutation source for output directory (default: gnomad)
@@ -369,30 +372,56 @@ echo -e "${YELLOW}→${NC} Processing ${DATASET} dataset chunk ${CHUNK_ID}"
 echo "  Gene list: $GENE_COUNT genes"
 echo ""
 
-# Run analysis on the gene chunk
+# Build and run analysis command
 if [ -n "$CUSTOM_PARQUET" ]; then
-    python3 analyze_mutations.py "$CHUNK_FILE" "$OUTPUT_DIR" \
-      --genome "$GENOME_PATH" \
-      --annotation "$ANNOTATION_PATH" \
-      --bed "$TRUNCATIONS_PATH" \
-      --sources "${SOURCES_ARGS[@]}" \
-      --custom-parquet "$CUSTOM_PARQUET" \
-      --impact-types "${IMPACT_TYPES_ARGS[@]}" \
-      --visualize \
-      -v
+    PYTHON_CMD=(python3 analyze_mutations.py "$CHUNK_FILE" "$OUTPUT_DIR"
+      --genome "$GENOME_PATH"
+      --annotation "$ANNOTATION_PATH"
+      --bed "$TRUNCATIONS_PATH"
+      --sources "${SOURCES_ARGS[@]}"
+      --custom-parquet "$CUSTOM_PARQUET"
+      --impact-types "${IMPACT_TYPES_ARGS[@]}"
+      --visualize
+      -v)
 else
-    python3 analyze_mutations.py "$CHUNK_FILE" "$OUTPUT_DIR" \
-      --genome "$GENOME_PATH" \
-      --annotation "$ANNOTATION_PATH" \
-      --bed "$TRUNCATIONS_PATH" \
-      --sources "${SOURCES_ARGS[@]}" \
-      --impact-types "${IMPACT_TYPES_ARGS[@]}" \
-      --visualize \
-      -v
+    PYTHON_CMD=(python3 analyze_mutations.py "$CHUNK_FILE" "$OUTPUT_DIR"
+      --genome "$GENOME_PATH"
+      --annotation "$ANNOTATION_PATH"
+      --bed "$TRUNCATIONS_PATH"
+      --sources "${SOURCES_ARGS[@]}"
+      --impact-types "${IMPACT_TYPES_ARGS[@]}"
+      --visualize
+      -v)
+fi
+
+# Print full command for debugging
+echo -e "${YELLOW}→${NC} Running command:"
+echo "  ${PYTHON_CMD[*]}"
+echo ""
+
+"${PYTHON_CMD[@]}"
+
+exit_code=$?
+if [ $exit_code -ne 0 ]; then
+    echo ""
+    echo -e "${RED}✗${NC} Mutation analysis failed for chunk ${CHUNK_ID} (exit code: $exit_code)"
+    echo -e "${RED}  SOURCE=${SOURCE} CHUNK=${CHUNK_ID}${NC}"
+    exit 1
 fi
 
 echo ""
 echo -e "${GREEN}✓${NC} Completed ${DATASET} dataset chunk ${CHUNK_ID}"
+
+# Report output file sizes for debugging
+echo -e "${YELLOW}→${NC} Output files in ${OUTPUT_DIR}:"
+for outfile in "$OUTPUT_DIR"/*.csv; do
+    if [ -f "$outfile" ]; then
+        fsize=$(du -h "$outfile" | cut -f1)
+        fname=$(basename "$outfile")
+        row_count=$(($(wc -l < "$outfile") - 1))
+        echo "  ├─ $fname ($fsize, $row_count rows)"
+    fi
+done
 
 # Clean up chunk file
 rm -f "$CHUNK_FILE"
@@ -414,7 +443,7 @@ if [ "$IS_MERGE_TASK" = true ]; then
 
     # Wait for all completion markers for this source (chunks 1-8)
     MAX_WAIT=259200  # 72 hours maximum wait (matches job time limit)
-    WAIT_INTERVAL=1800  # Check every 30 minutes
+    WAIT_INTERVAL=600  # Check every 10 minutes
     elapsed=0
 
     while [ $elapsed -lt $MAX_WAIT ]; do

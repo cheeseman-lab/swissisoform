@@ -1811,9 +1811,18 @@ class AlternativeProteinGenerator:
                                 "mutation_impact_validated": None,
                                 "in_alt_start_site": None,
                                 "mutation_source": None,
-                                "clinvar_variant_id": None,
+                                "source_variant_id": None,
                             }
                         )
+
+                        # Strip gene_transcript prefix from feature_id to avoid
+                        # duplication in Protein_ID ({gene}_{transcript}_{variant_id})
+                        gene_transcript_prefix = f"{gene_name_val}_{transcript_id}_"
+                        feature_suffix = feature_id
+                        if feature_suffix.startswith(gene_transcript_prefix):
+                            feature_suffix = feature_suffix[
+                                len(gene_transcript_prefix) :
+                            ]
 
                         # ===== COMPARISON SET 2: ALTERNATIVE (truncated or extended) =====
                         all_sequences.append(
@@ -1823,7 +1832,7 @@ class AlternativeProteinGenerator:
                                 "feature_id": feature_id,
                                 "bed_name": bed_name,
                                 "feature_type": feature_type,
-                                "variant_id": feature_id,
+                                "variant_id": feature_suffix,
                                 "sequence": alternative_protein,
                                 "length": len(alternative_protein),
                                 "variant_type": region_type,  # "truncation" or "extension"
@@ -1839,11 +1848,13 @@ class AlternativeProteinGenerator:
                                 "mutation_impact_validated": None,
                                 "in_alt_start_site": None,
                                 "mutation_source": None,
-                                "clinvar_variant_id": None,
+                                "source_variant_id": None,
                             }
                         )
 
                         # ===== COMPARISON SET 3: MUTATIONS TO APPROPRIATE BASE =====
+                        mutation_seqs_added = 0
+                        mutation_seqs_skipped = 0
                         for mut_idx, mut_variant in enumerate(
                             pair["alternative_mutations"]
                         ):
@@ -1852,21 +1863,24 @@ class AlternativeProteinGenerator:
 
                             # Check length constraints
                             if not (min_length <= len(mutated_protein) <= max_length):
+                                mutation_seqs_skipped += 1
                                 continue
 
                             # Determine correct mutation variant type and base comparison
+                            # Use feature_suffix for specificity (disambiguates multiple extensions/truncations)
+                            # without duplicating gene_transcript in the Protein_ID
                             if region_type == "truncation":
                                 # TRUNCATION SET: canonical, truncated, canonical+mutations
-                                variant_type = "canonical_mutated"
+                                variant_type = f"{feature_suffix}_canonical_mutated"
                                 base_protein = canonical_protein
                                 variant_description = "canonical protein with mutations in truncated region"
                             elif region_type == "extension":
                                 # EXTENSION SET: canonical, extended, extended+mutations
-                                variant_type = "extension_mutated"
+                                variant_type = f"{feature_suffix}_mutated"
                                 base_protein = alternative_protein
                                 variant_description = "extended protein with mutations in extension region"
                             else:
-                                variant_type = f"{region_type}_mutated"
+                                variant_type = f"{feature_suffix}_{region_type}_mutated"
                                 base_protein = canonical_protein
                                 variant_description = (
                                     f"{region_type} protein with mutations"
@@ -1881,13 +1895,26 @@ class AlternativeProteinGenerator:
                                 base_protein, mutated_protein
                             )
 
-                            # Create variant ID
-                            base_variant_id = f"{variant_type}_{mut_info['position']}_{mut_info['reference']}>{mut_info['alternate']}"
-                            if aa_difference:
-                                variant_id = f"{base_variant_id}_{aa_difference}"
+                            # Create variant ID using source variant ID when available
+                            source_variant_id = mut_info.get("variant_id", "")
+                            if source_variant_id:
+                                variant_id = f"{variant_type}_{source_variant_id}"
                             else:
-                                variant_id = base_variant_id
+                                # Fallback: positional details for sources without variant IDs
+                                variant_id = f"{variant_type}_{mut_info['position']}_{mut_info['reference']}>{mut_info['alternate']}"
+                                if aa_difference:
+                                    variant_id += f"_{aa_difference}"
 
+                            protein_id = f"{gene_name_val}_{transcript_id}_{variant_id}"
+                            logger.debug(
+                                f"  Mutation {mut_idx + 1}: {protein_id} "
+                                f"(pos={mut_info['position']}, "
+                                f"change={mut_info['reference']}>{mut_info['alternate']}, "
+                                f"aa={aa_difference or 'none'}, "
+                                f"source_id={source_variant_id or 'N/A'})"
+                            )
+
+                            mutation_seqs_added += 1
                             all_sequences.append(
                                 {
                                     "gene_name": gene_name_val,
@@ -1898,7 +1925,7 @@ class AlternativeProteinGenerator:
                                     "variant_id": variant_id,
                                     "sequence": mutated_protein,
                                     "length": len(mutated_protein),
-                                    "variant_type": variant_type,  # "canonical_mutated" or "extension_mutated"
+                                    "variant_type": variant_type,  # e.g., "extension_CTG_123_456_mutated"
                                     "region_type": region_type,
                                     "comparison_set": f"{region_type}_analysis",
                                     "variant_description": variant_description,
@@ -1920,10 +1947,15 @@ class AlternativeProteinGenerator:
                                     ),
                                     "applied_to": mut_info.get("applied_to", ""),
                                     "mutation_source": mut_info.get("source", ""),
-                                    "clinvar_variant_id": mut_info.get(
-                                        "variant_id", ""
-                                    ),
+                                    "source_variant_id": mut_info.get("variant_id", ""),
                                 }
+                            )
+
+                        if mutation_seqs_added > 0 or mutation_seqs_skipped > 0:
+                            logger.info(
+                                f"  {gene_name_val} {feature_id}: "
+                                f"{mutation_seqs_added} mutation sequences generated"
+                                f"{f', {mutation_seqs_skipped} skipped (length)' if mutation_seqs_skipped else ''}"
                             )
 
                 else:

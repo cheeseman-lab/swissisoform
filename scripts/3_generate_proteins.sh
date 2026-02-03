@@ -8,24 +8,27 @@
 #
 # Usage:
 #   # Single source (backward compatible) - 8 tasks
-#   sbatch --export=DATASET=hela,SOURCE=gnomad 3_generate_proteins.sh
+#   sbatch --export=DATASET=hela,SOURCE=clinvar --array=1-8 3_generate_proteins.sh
 #
 #   # Multiple sources in parallel (RECOMMENDED) - AUTOMATICALLY includes base proteins!
-#   # For 5 sources: (1 base + 5 sources) × 8 = 48 tasks
-#   sbatch --export=DATASET=hela,SOURCES="gnomad|clinvar|cosmic|custom_bch|custom_msk",CUSTOM_PARQUETS="custom_bch:/path/bch.parquet|custom_msk:/path/msk.parquet" 3_generate_proteins.sh
+#   # NOTE: gnomad only needs step 2 (mutation calling), not protein generation
+#   # For 4 sources: (1 base + 4 sources) × 8 = 40 tasks
+#   sbatch --export=DATASET=hela,SOURCES="clinvar|cosmic|custom_bch|custom_msk",CUSTOM_PARQUETS="custom_bch:/path/bch.parquet|custom_msk:/path/msk.parquet" --array=1-40 3_generate_proteins.sh
 #
 #   # This will generate:
 #   #   Tasks 1-8:   results/hela/default/proteins/ (base - canonical + alternative)
-#   #   Tasks 9-16:  results/hela/gnomad/proteins/ (with gnomAD mutations)
-#   #   Tasks 17-24: results/hela/clinvar/proteins/ (with ClinVar mutations)
-#   #   Tasks 25-32: results/hela/cosmic/proteins/ (with COSMIC mutations)
-#   #   Tasks 33-40: results/hela/custom_bch/proteins/ (with BCH mutations)
-#   #   Tasks 41-48: results/hela/custom_msk/proteins/ (with MSK mutations)
+#   #   Tasks 9-16:  results/hela/clinvar/proteins/ (with ClinVar mutations)
+#   #   Tasks 17-24: results/hela/cosmic/proteins/ (with COSMIC mutations)
+#   #   Tasks 25-32: results/hela/custom_bch/proteins/ (with BCH mutations)
+#   #   Tasks 33-40: results/hela/custom_msk/proteins/ (with MSK mutations)
+#
+# Full pipeline run (hela, all sources EXCEPT gnomad — gnomad only needs step 2):
+#   sbatch --export=DATASET=hela,SOURCES="clinvar|cosmic|custom_bch|custom_msk",CUSTOM_PARQUETS="custom_bch:/lab/barcheese01/mdiberna/swissisoform/data/mutation_data/bch_variants_combined.parquet|custom_msk:/lab/barcheese01/mdiberna/swissisoform/data/mutation_data/msk_variants_combined.parquet" --array=1-40 3_generate_proteins.sh
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
-#   SOURCE - Single mutation source for output directory (default: gnomad)
-#   SOURCES - Multiple sources for parallel processing (pipe-separated: "gnomad|clinvar|cosmic")
+#   SOURCE - Single mutation source for output directory (default: clinvar)
+#   SOURCES - Multiple sources for parallel processing (pipe-separated: "clinvar|cosmic|custom_bch")
 #             ALWAYS generates base proteins first (tasks 1-8), then sources
 #             Array size: (1 + num_sources) × 8 chunks (e.g., 5 sources = 48 tasks)
 #   CUSTOM_PARQUET - Path to custom parquet file for single-source mode (optional)
@@ -138,7 +141,7 @@ if [ -n "$SOURCES" ]; then
     fi
 else
     # Single-source mode: use SOURCE variable (backward compatibility)
-    SOURCE="${SOURCE:-gnomad}"
+    SOURCE="${SOURCE:-clinvar}"
     NUM_SOURCES=1
     TOTAL_TASKS=$CHUNKS_PER_SOURCE
     CHUNK_ID=$SLURM_ARRAY_TASK_ID
@@ -152,12 +155,15 @@ else
     OUTPUT_DIR_BASE="../results/${DATASET}/${SOURCE}"
 fi
 
-# Sources selection (default: clinvar)
-# Convert pipe-separated string to space-separated for command line
+# Sources selection for this specific task
+# In multi-source mode: only pass the current source (not all sources)
+# This matches step 2's behavior and avoids loading unnecessary variant columns
 if [ -z "$SOURCES" ]; then
-    SOURCES_ARGS=("clinvar")
+    # Single-source mode: use SOURCE directly
+    SOURCES_ARGS=("$SOURCE")
 else
-    IFS='|' read -ra SOURCES_ARGS <<< "$SOURCES"
+    # Multi-source mode: only use the current source for this task
+    SOURCES_ARGS=("$SOURCE")
 fi
 
 # Custom parquet files (optional)
@@ -500,18 +506,52 @@ else
     fi
 fi
 
+# Print full command for debugging
+echo -e "${YELLOW}→${NC} Running command:"
+echo "  ${PYTHON_CMD[*]}"
+echo ""
+
 "${PYTHON_CMD[@]}"
 
 exit_code=$?
 
 if [ $exit_code -ne 0 ]; then
     echo ""
-    echo -e "${RED}✗${NC} Protein generation failed for chunk ${CHUNK_ID}"
+    echo -e "${RED}✗${NC} Protein generation failed for chunk ${CHUNK_ID} (exit code: $exit_code)"
+    echo -e "${RED}  MODE=${MODE} SOURCE=${SOURCE} CHUNK=${CHUNK_ID}${NC}"
     exit 1
 fi
 
 echo ""
 echo -e "${GREEN}✓${NC} Completed chunk ${CHUNK_ID}"
+
+# Report output file sizes for debugging
+echo -e "${YELLOW}→${NC} Output files in ${OUTPUT_DIR}:"
+for outfile in "$OUTPUT_DIR"/*.{fasta,csv}; do
+    if [ -f "$outfile" ]; then
+        fsize=$(du -h "$outfile" | cut -f1)
+        fname=$(basename "$outfile")
+        if [[ "$outfile" == *.fasta ]]; then
+            seq_count=$(grep -c '^>' "$outfile" 2>/dev/null || echo 0)
+            echo "  ├─ $fname ($fsize, $seq_count sequences)"
+        elif [[ "$outfile" == *.csv ]]; then
+            row_count=$(($(wc -l < "$outfile") - 1))
+            echo "  ├─ $fname ($fsize, $row_count rows)"
+        fi
+    fi
+done
+if [ "$MODE" != "base" ]; then
+    mut_csv="$OUTPUT_DIR/protein_sequences_with_mutations.csv"
+    if [ -f "$mut_csv" ]; then
+        mut_rows=$(($(wc -l < "$mut_csv") - 1))
+        if [ "$mut_rows" -eq 0 ]; then
+            echo -e "  ${RED}⚠ WARNING: Mutations CSV has 0 data rows — no mutation sequences generated!${NC}"
+            echo -e "  ${RED}  Check that source '${SOURCE}' column exists in isoform_level_results.csv${NC}"
+        fi
+    else
+        echo -e "  ${YELLOW}⚠${NC} No mutations CSV found in chunk output"
+    fi
+fi
 
 # Clean up chunk file
 rm -f "$CHUNK_FILE"
@@ -535,7 +575,7 @@ if [ "$IS_MERGE_TASK" = true ]; then
 
     # Wait for all completion markers for this source (chunks 1-8)
     MAX_WAIT=259200  # 72 hours maximum wait (matches job time limit)
-    WAIT_INTERVAL=1800  # Check every 30 minutes
+    WAIT_INTERVAL=600  # Check every 10 minutes
     elapsed=0
 
     while [ $elapsed -lt $MAX_WAIT ]; do

@@ -163,12 +163,26 @@ class SummaryAnalyzer:
     def parse_protein_id(self, protein_id):
         """Parse a Protein_ID to extract gene, transcript, feature_type, and mutation info.
 
+        Handles both old and new (enriched) Protein_ID formats:
+
+        Old formats:
+            GENE_TX_canonical
+            GENE_TX_extension_mutated_POS_CHANGE_AA
+            GENE_TX_canonical_mutated_POS_CHANGE_AA
+
+        New (enriched) formats:
+            GENE_TX_canonical
+            GENE_TX_extension_CTG_123_456  (non-mutant feature)
+            GENE_TX_extension_CTG_123_456_mutated_VCV002776934  (source variant ID)
+            GENE_TX_truncation_ATG_123_456_canonical_mutated_VCV001234567
+            GENE_TX_extension_CTG_123_456_mutated_789_C>T_R5K  (fallback positional)
+
         Args:
             protein_id (str): Protein identifier string.
 
         Returns:
             dict: Dictionary with gene, transcript, feature_type, feature_id, is_mutant,
-                  is_canonical, mutation_info keys.
+                  is_canonical, mutation_info, source_variant_id keys.
         """
         if pd.isna(protein_id) or not protein_id:
             return {
@@ -179,6 +193,7 @@ class SummaryAnalyzer:
                 "is_mutant": False,
                 "is_canonical": False,
                 "mutation_info": None,
+                "source_variant_id": None,
             }
 
         protein_id = str(protein_id).strip()
@@ -189,32 +204,65 @@ class SummaryAnalyzer:
         is_mutant = "_mutated_" in protein_id
         is_canonical = protein_id.endswith("_canonical")
 
+        source_variant_id = None
+
         if is_canonical:
             feature_type = "canonical"
             feature_id = protein_id
         elif "_extension_" in protein_id:
             feature_type = "extension"
-            # Extract feature_id (everything after gene_transcript_)
-            match = re.search(r"(extension_[A-Z]+_\d+)", protein_id)
-            feature_id = match.group(1) if match else protein_id
+            # Extract feature suffix: extension_CODON_start (or extension_CODON_start_end)
+            match = re.search(r"(extension_[A-Z]+_\d+_\d+)", protein_id)
+            if match:
+                feature_suffix = match.group(1)
+            else:
+                # Old format fallback: extension without end position
+                match = re.search(r"(extension_[A-Z]+_\d+)", protein_id)
+                feature_suffix = match.group(1) if match else protein_id
+            # Reconstruct full feature_id with gene_transcript prefix to match bed_name
+            feature_id = (
+                f"{gene}_{transcript}_{feature_suffix}"
+                if gene and transcript
+                else feature_suffix
+            )
         elif "_truncation_" in protein_id:
             feature_type = "truncation"
             match = re.search(r"(truncation_[A-Z]+_\d+_\d+)", protein_id)
-            feature_id = match.group(1) if match else protein_id
+            if match:
+                feature_suffix = match.group(1)
+            else:
+                match = re.search(r"(truncation_[A-Z]+_\d+)", protein_id)
+                feature_suffix = match.group(1) if match else protein_id
+            feature_id = (
+                f"{gene}_{transcript}_{feature_suffix}"
+                if gene and transcript
+                else feature_suffix
+            )
         else:
             feature_type = "unknown"
             feature_id = protein_id
 
         mutation_info = None
         if is_mutant:
-            # Pattern: _mutated_{position}_{change}_{aa_change}
-            match = re.search(r"_mutated_(\d+)_([^_]+)_([A-Z]\d+[A-Z])", protein_id)
-            if match:
-                mutation_info = {
-                    "position": match.group(1),
-                    "change": match.group(2),
-                    "aa_change": match.group(3),
-                }
+            # Extract token after _mutated_ to determine format
+            mutated_suffix = protein_id.split("_mutated_", 1)[-1]
+
+            # New format: source variant ID (e.g., VCV002776934)
+            vcv_match = re.match(r"(VCV\d+)$", mutated_suffix)
+            if vcv_match:
+                source_variant_id = vcv_match.group(1)
+                mutation_info = {"source_variant_id": source_variant_id}
+            else:
+                # Old/fallback format: position_change[_aa_change]
+                match = re.match(
+                    r"(\d+)_([^_]+?)(?:_([A-Z]\d+[A-Z]))?$", mutated_suffix
+                )
+                if match:
+                    mutation_info = {
+                        "position": match.group(1),
+                        "change": match.group(2),
+                        "aa_change": match.group(3),
+                    }
 
         return {
             "gene": gene,
@@ -224,6 +272,7 @@ class SummaryAnalyzer:
             "is_mutant": is_mutant,
             "is_canonical": is_canonical,
             "mutation_info": mutation_info,
+            "source_variant_id": source_variant_id,
         }
 
     def detect_mutation_sources(self, pair_results):
@@ -941,8 +990,8 @@ class SummaryAnalyzer:
                                 "mutation_source": trunc_info.get(
                                     "mutation_source", ""
                                 ),
-                                "clinvar_variant_id": trunc_info.get(
-                                    "clinvar_variant_id", ""
+                                "source_variant_id": trunc_info.get(
+                                    "source_variant_id", ""
                                 ),
                             }
 
@@ -1060,8 +1109,8 @@ class SummaryAnalyzer:
                                         "mutation_source": mut_info.get(
                                             "mutation_source", ""
                                         ),
-                                        "clinvar_variant_id": mut_info.get(
-                                            "clinvar_variant_id", ""
+                                        "source_variant_id": mut_info.get(
+                                            "source_variant_id", ""
                                         ),
                                     }
 
@@ -1175,8 +1224,8 @@ class SummaryAnalyzer:
                             "hgvsp": protein_info.get("hgvsp", ""),
                             "mutation_impact": protein_info.get("mutation_impact", ""),
                             "mutation_source": protein_info.get("mutation_source", ""),
-                            "clinvar_variant_id": protein_info.get(
-                                "clinvar_variant_id", ""
+                            "source_variant_id": protein_info.get(
+                                "source_variant_id", ""
                             ),
                         }
 
@@ -1222,8 +1271,8 @@ class SummaryAnalyzer:
                             "hgvsp": protein_info.get("hgvsp", ""),
                             "mutation_impact": protein_info.get("mutation_impact", ""),
                             "mutation_source": protein_info.get("mutation_source", ""),
-                            "clinvar_variant_id": protein_info.get(
-                                "clinvar_variant_id", ""
+                            "source_variant_id": protein_info.get(
+                                "source_variant_id", ""
                             ),
                         }
 
@@ -1589,20 +1638,20 @@ class SummaryAnalyzer:
                     other_lookup[seq_id] = row
 
         # Build mutations lookup for missense analysis
+        # Key by gene -> feature_id for specificity (disambiguates multiple extensions/truncations)
         mutations_lookup = {}
         if mutations_data is not None:
             for _, row in mutations_data.iterrows():
                 seq_id = row.get("Sequence_ID", "")
                 if seq_id:
                     info = self.parse_protein_id(seq_id)
-                    # Key by gene + feature_type + mutation info for grouping
                     gene = info["gene"]
-                    feature_type = info["feature_type"]
+                    fid = info["feature_id"]
                     if gene not in mutations_lookup:
                         mutations_lookup[gene] = {}
-                    if feature_type not in mutations_lookup[gene]:
-                        mutations_lookup[gene][feature_type] = []
-                    mutations_lookup[gene][feature_type].append((row, info))
+                    if fid not in mutations_lookup[gene]:
+                        mutations_lookup[gene][fid] = []
+                    mutations_lookup[gene][fid].append((row, info))
 
         # Parse all protein IDs and group by gene
         parsed_info = {}
@@ -1752,12 +1801,10 @@ class SummaryAnalyzer:
                 top_missense_hgvsp = ""
 
                 if source != "default" and gene in mutations_lookup:
-                    feat_type = feat_info["feature_type"]
-                    feat_mutations = mutations_lookup[gene].get(feat_type, [])
-                    # Also check for mutations on the "canonical" feature type that are related
-                    can_mutations = mutations_lookup[gene].get("canonical", [])
+                    feat_fid = feat_info["feature_id"]
+                    feat_mutations = mutations_lookup[gene].get(feat_fid, [])
 
-                    for mut_row, mut_info in feat_mutations + can_mutations:
+                    for mut_row, mut_info in feat_mutations:
                         if mut_info["is_mutant"]:
                             missense_count += 1
                             mut_loc = self.get_primary_localization(mut_row)
@@ -2113,7 +2160,7 @@ class SummaryAnalyzer:
                 parsed_mutations[seq_id] = self.parse_protein_id(seq_id)
 
         # Build reference localizations from pairs data (unmutated sequences)
-        # Group by gene and feature_type
+        # Group by gene and feature_id for specificity
         reference_locs = {}
         if pairs_data is not None:
             for _, row in pairs_data.iterrows():
@@ -2121,7 +2168,7 @@ class SummaryAnalyzer:
                 if seq_id:
                     info = self.parse_protein_id(seq_id)
                     if info["gene"] and not info["is_mutant"]:
-                        key = (info["gene"], info["feature_type"])
+                        key = (info["gene"], info["feature_id"])
                         reference_locs[key] = row
 
         # Also check mutations_data for reference sequences
@@ -2130,7 +2177,7 @@ class SummaryAnalyzer:
             if seq_id:
                 info = parsed_mutations[seq_id]
                 if info["gene"] and not info["is_mutant"]:
-                    key = (info["gene"], info["feature_type"])
+                    key = (info["gene"], info["feature_id"])
                     if key not in reference_locs:
                         reference_locs[key] = row
 
@@ -2146,13 +2193,15 @@ class SummaryAnalyzer:
 
             gene = info["gene"]
             feature_type = info["feature_type"]
+            feature_id = info["feature_id"]
             mutation_info = info["mutation_info"]
 
-            # Find reference
-            ref_key = (gene, feature_type)
+            # Find reference by feature_id (specific extension/truncation)
+            ref_key = (gene, feature_id)
             if ref_key not in reference_locs:
                 # Try canonical as fallback
-                ref_key = (gene, "canonical")
+                canonical_pid = f"{gene}_{info['transcript']}_canonical"
+                ref_key = (gene, canonical_pid)
                 if ref_key not in reference_locs:
                     continue
 
@@ -2361,13 +2410,13 @@ class SummaryAnalyzer:
             logger.info("No features with alt-start-loss mutations found")
             return views
 
-        # Build localization lookup
+        # Build localization lookup keyed by gene + feature_id
         loc_lookup = {}
         for _, row in pairs_data.iterrows():
             seq_id = row.get("Sequence_ID", "")
             if seq_id:
                 info = self.parse_protein_id(seq_id)
-                key = (info["gene"], info["feature_type"])
+                key = (info["gene"], info["feature_id"])
                 loc_lookup[key] = {
                     "loc": self.get_primary_localization(row),
                     "confidence": self.get_primary_confidence(row),
@@ -2382,13 +2431,15 @@ class SummaryAnalyzer:
             transcript = feat_row["transcript_id"]
             feature_id = feat_row.get("feature_id", "")
             feature_type = feat_row.get("feature_type", "")
+            bed_name = feat_row.get("bed_name", feature_id)
 
-            # Get extension/truncation localization
-            ext_key = (gene, feature_type)
+            # Get extension/truncation localization using bed_name (= feature_id)
+            ext_key = (gene, bed_name)
             ext_info = loc_lookup.get(ext_key)
 
             # Get canonical localization
-            can_key = (gene, "canonical")
+            canonical_pid = f"{gene}_{transcript}_canonical"
+            can_key = (gene, canonical_pid)
             can_info = loc_lookup.get(can_key)
 
             if not ext_info or not can_info:
@@ -2855,8 +2906,403 @@ class SummaryAnalyzer:
 
         return pd.DataFrame()
 
+    # =========================================================================
+    # Augmented Isoform Analysis Methods
+    # =========================================================================
+
+    def augment_with_localization(self, isoform_df, loc_results, model_type="Accurate"):
+        """Augment isoform_level_results with localization predictions and computed columns.
+
+        Takes the full isoform_level_results DataFrame as the base table and appends
+        localization columns from DeepLoc predictions, plus computed mutation columns.
+
+        Args:
+            isoform_df: isoform_level_results DataFrame (one row per feature).
+            loc_results: Dictionary of localization DataFrames from load_localization_results().
+            model_type: "Accurate" or "Fast".
+
+        Returns:
+            pd.DataFrame: Augmented DataFrame with localization and computed columns appended.
+        """
+        logger.info(
+            f"Augmenting isoform_level_results with {model_type} localization data"
+        )
+
+        if isoform_df is None or isoform_df.empty:
+            logger.warning("No isoform_level_results to augment")
+            return pd.DataFrame()
+
+        # Get localization data for the specified model
+        if model_type.lower() == "accurate":
+            pairs_data = loc_results.get("pairs_accurate")
+            mutations_data = loc_results.get("mutations_accurate")
+        else:
+            pairs_data = loc_results.get("pairs_fast")
+            mutations_data = loc_results.get("mutations_fast")
+
+        if pairs_data is None or pairs_data.empty:
+            logger.warning(f"No pairs localization data for {model_type}")
+            return isoform_df.copy()
+
+        # Build lookup: Protein_ID -> row from localization data
+        # Pairs data has both canonical and feature entries
+        loc_lookup = {}
+        for _, row in pairs_data.iterrows():
+            pid = row.get("Sequence_ID", "")
+            if pid:
+                loc_lookup[pid] = row
+
+        # Also add from mutations data (may have additional entries)
+        if mutations_data is not None:
+            for _, row in mutations_data.iterrows():
+                pid = row.get("Sequence_ID", "")
+                if pid and pid not in loc_lookup:
+                    loc_lookup[pid] = row
+
+        # Build mutations lookup: group mutated entries by gene + transcript + feature_id
+        # Key: (gene, transcript, feature_id) -> list of (row, parsed_info)
+        # Using feature_id (e.g., "extension_CTG_123_456") instead of generic feature_type
+        # to disambiguate genes with multiple extensions/truncations
+        mutations_by_feature = defaultdict(list)
+        if mutations_data is not None:
+            for _, row in mutations_data.iterrows():
+                pid = row.get("Sequence_ID", "")
+                if pid:
+                    info = self.parse_protein_id(pid)
+                    if info["is_mutant"]:
+                        key = (info["gene"], info["transcript"], info["feature_id"])
+                        mutations_by_feature[key].append((row, info))
+
+        # Augment each row
+        new_cols = {
+            "canonical_loc": [],
+            "canonical_confidence": [],
+            "feature_loc": [],
+            "feature_confidence": [],
+            "shift_magnitude": [],
+            "locs_differ": [],
+            "signal_change": [],
+            "lof_count": [],
+            "missense_reverts_to_canonical": [],
+            "missense_reverts_to_truncation": [],
+            "missense_no_effect": [],
+            "missense_novel_loc": [],
+        }
+
+        for _, feat_row in isoform_df.iterrows():
+            gene = feat_row["gene_name"]
+            transcript = feat_row["transcript_id"]
+            bed_name = feat_row.get("bed_name", "")
+            feature_type = feat_row.get("feature_type", "")
+
+            # Construct Protein_IDs for lookup
+            canonical_pid = f"{gene}_{transcript}_canonical"
+            # Feature Protein_ID = bed_name (e.g., ABCA7_ENST00000433129.5_truncation_CTG_1065106)
+            feature_pid = bed_name if bed_name else ""
+
+            # Look up canonical localization
+            can_row = loc_lookup.get(canonical_pid)
+            feat_loc_row = loc_lookup.get(feature_pid)
+
+            if can_row is not None:
+                can_loc = self.get_primary_localization(can_row)
+                can_conf = self.get_primary_confidence(can_row)
+            else:
+                can_loc = "Unknown"
+                can_conf = 0.0
+
+            if feat_loc_row is not None:
+                feat_loc = self.get_primary_localization(feat_loc_row)
+                feat_conf = self.get_primary_confidence(feat_loc_row)
+            else:
+                feat_loc = "Unknown"
+                feat_conf = 0.0
+
+            # Compute shift magnitude
+            if can_row is not None and feat_loc_row is not None:
+                shift = self.compute_shift_magnitude(can_row, feat_loc_row)
+            else:
+                shift = 0.0
+
+            locs_differ = (
+                can_loc != feat_loc and can_loc != "Unknown" and feat_loc != "Unknown"
+            )
+
+            # Detect signal changes
+            signal_changes = []
+            if can_row is not None and feat_loc_row is not None:
+                for sig_col in self.signal_cols:
+                    if sig_col in can_row.index and sig_col in feat_loc_row.index:
+                        can_val = (
+                            float(can_row[sig_col]) if pd.notna(can_row[sig_col]) else 0
+                        )
+                        feat_val = (
+                            float(feat_loc_row[sig_col])
+                            if pd.notna(feat_loc_row[sig_col])
+                            else 0
+                        )
+                        if abs(feat_val - can_val) > 0.2:
+                            signal_changes.append(
+                                f"{sig_col}({can_val:.2f}\u2192{feat_val:.2f})"
+                            )
+
+            # Compute lof_count
+            nonsense = feat_row.get("count_nonsense_variant", 0)
+            frameshift = feat_row.get("count_frameshift_variant", 0)
+            lof_count = int(nonsense if pd.notna(nonsense) else 0) + int(
+                frameshift if pd.notna(frameshift) else 0
+            )
+
+            # Classify missense mutations by localization effect
+            # Two revert columns — only one populated per feature type:
+            #   Extensions: missense_reverts_to_canonical (mutated extension → canonical loc)
+            #   Truncations: missense_reverts_to_truncation (mutated canonical → truncation loc)
+            # In both cases: mutation in the LONGER protein makes it act like the SHORTER one
+            missense_reverts_canonical = 0
+            missense_reverts_truncation = 0
+            missense_no_effect = 0
+            missense_novel = 0
+
+            if can_loc != "Unknown" and feat_loc != "Unknown":
+                mut_key = (gene, transcript, bed_name)
+                mutated_entries = mutations_by_feature.get(mut_key, [])
+
+                for mut_row, mut_info in mutated_entries:
+                    mut_loc = self.get_primary_localization(mut_row)
+                    if mut_loc == "Unknown":
+                        continue
+
+                    if feature_type == "truncation":
+                        # Mutated canonical → does it now localize like truncation?
+                        if mut_loc == feat_loc and mut_loc != can_loc:
+                            missense_reverts_truncation += 1
+                        elif mut_loc == can_loc:
+                            missense_no_effect += 1
+                        else:
+                            missense_novel += 1
+                    else:
+                        # Extension: mutated extension → does it now localize like canonical?
+                        if mut_loc == can_loc and mut_loc != feat_loc:
+                            missense_reverts_canonical += 1
+                        elif mut_loc == feat_loc:
+                            missense_no_effect += 1
+                        else:
+                            missense_novel += 1
+
+            new_cols["canonical_loc"].append(can_loc)
+            new_cols["canonical_confidence"].append(round(can_conf, 3))
+            new_cols["feature_loc"].append(feat_loc)
+            new_cols["feature_confidence"].append(round(feat_conf, 3))
+            new_cols["shift_magnitude"].append(round(shift, 4))
+            new_cols["locs_differ"].append(locs_differ)
+            new_cols["signal_change"].append(
+                "|".join(signal_changes) if signal_changes else ""
+            )
+            new_cols["lof_count"].append(lof_count)
+            new_cols["missense_reverts_to_canonical"].append(missense_reverts_canonical)
+            new_cols["missense_reverts_to_truncation"].append(
+                missense_reverts_truncation
+            )
+            new_cols["missense_no_effect"].append(missense_no_effect)
+            new_cols["missense_novel_loc"].append(missense_novel)
+
+        # Append new columns to the DataFrame
+        result = isoform_df.copy()
+        for col_name, values in new_cols.items():
+            result[col_name] = values
+
+        logger.info(
+            f"Augmented {len(result)} features with localization data "
+            f"({result['locs_differ'].sum()} with different localization)"
+        )
+        return result
+
+    def build_structural_table(self, loc_results, model_type="Accurate"):
+        """Build a minimal structural table from pairs localization data (default source).
+
+        For the default source (no mutation data), builds a table of features with
+        localization predictions only.
+
+        Args:
+            loc_results: Dictionary of localization DataFrames.
+            model_type: "Accurate" or "Fast".
+
+        Returns:
+            pd.DataFrame: Structural analysis table.
+        """
+        logger.info(f"Building structural table from {model_type} pairs data")
+
+        if model_type.lower() == "accurate":
+            pairs_data = loc_results.get("pairs_accurate")
+        else:
+            pairs_data = loc_results.get("pairs_fast")
+
+        if pairs_data is None or pairs_data.empty:
+            logger.warning(f"No pairs data for {model_type}")
+            return pd.DataFrame()
+
+        # Parse all Protein_IDs and group by gene
+        gene_groups = {}
+        for _, row in pairs_data.iterrows():
+            pid = row.get("Sequence_ID", "")
+            if not pid:
+                continue
+            info = self.parse_protein_id(pid)
+            gene = info["gene"]
+            if gene not in gene_groups:
+                gene_groups[gene] = {"canonical": None, "features": []}
+            if info["is_canonical"]:
+                gene_groups[gene]["canonical"] = (row, info, pid)
+            elif (
+                info["feature_type"] in ("extension", "truncation")
+                and not info["is_mutant"]
+            ):
+                gene_groups[gene]["features"].append((row, info, pid))
+
+        records = []
+        for gene, group in gene_groups.items():
+            can_entry = group["canonical"]
+            if can_entry is None:
+                continue
+
+            can_row, can_info, can_pid = can_entry
+            can_loc = self.get_primary_localization(can_row)
+            can_conf = self.get_primary_confidence(can_row)
+
+            for feat_row, feat_info, feat_pid in group["features"]:
+                feat_loc = self.get_primary_localization(feat_row)
+                feat_conf = self.get_primary_confidence(feat_row)
+                shift = self.compute_shift_magnitude(can_row, feat_row)
+                locs_differ = can_loc != feat_loc
+
+                # Detect signal changes
+                signal_changes = []
+                for sig_col in self.signal_cols:
+                    if sig_col in can_row.index and sig_col in feat_row.index:
+                        can_val = (
+                            float(can_row[sig_col]) if pd.notna(can_row[sig_col]) else 0
+                        )
+                        feat_val = (
+                            float(feat_row[sig_col])
+                            if pd.notna(feat_row[sig_col])
+                            else 0
+                        )
+                        if abs(feat_val - can_val) > 0.2:
+                            signal_changes.append(
+                                f"{sig_col}({can_val:.2f}\u2192{feat_val:.2f})"
+                            )
+
+                records.append(
+                    {
+                        "gene_name": gene,
+                        "transcript_id": feat_info["transcript"],
+                        "feature_id": feat_info["feature_id"],
+                        "feature_type": feat_info["feature_type"],
+                        "canonical_loc": can_loc,
+                        "canonical_confidence": round(can_conf, 3),
+                        "feature_loc": feat_loc,
+                        "feature_confidence": round(feat_conf, 3),
+                        "shift_magnitude": round(shift, 4),
+                        "locs_differ": locs_differ,
+                        "signal_change": "|".join(signal_changes)
+                        if signal_changes
+                        else "",
+                    }
+                )
+
+        if not records:
+            logger.warning("No structural table records created")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(records)
+        df = df.sort_values("shift_magnitude", ascending=False).reset_index(drop=True)
+        logger.info(f"Built structural table with {len(df)} features")
+        return df
+
+    def generate_tier_tables(self, feature_df):
+        """Generate tier-specific sorted DataFrames for nomination.
+
+        All tiers require locs_differ=True as a hard prerequisite.
+
+        Args:
+            feature_df: Augmented feature analysis DataFrame (from augment_with_localization).
+
+        Returns:
+            Dict[str, pd.DataFrame]: Dictionary mapping tier filename to sorted DataFrame.
+        """
+        if feature_df is None or feature_df.empty:
+            return {}
+
+        # Hard prerequisite: only features where localization differs
+        shifted = feature_df[feature_df["locs_differ"] == True].copy()  # noqa: E712
+
+        if shifted.empty:
+            logger.info("No features with locs_differ=True, no tier tables to generate")
+            return {}
+
+        tiers = {}
+
+        # Tier 1: Alt-start-loss
+        if "alternative_start_loss_count" in shifted.columns:
+            t1 = shifted[shifted["alternative_start_loss_count"] > 0].copy()
+            if not t1.empty:
+                t1 = t1.sort_values(
+                    ["alternative_start_loss_count", "shift_magnitude"],
+                    ascending=[False, False],
+                ).reset_index(drop=True)
+                tiers["tier1_alt_start_loss"] = t1
+                logger.info(f"Tier 1 (alt-start-loss): {len(t1)} features")
+
+        # Tier 2: LoF burden
+        if "lof_count" in shifted.columns:
+            t2 = shifted[shifted["lof_count"] > 0].copy()
+            if not t2.empty:
+                t2 = t2.sort_values(
+                    ["lof_count", "shift_magnitude"],
+                    ascending=[False, False],
+                ).reset_index(drop=True)
+                tiers["tier2_lof_burden"] = t2
+                logger.info(f"Tier 2 (LoF burden): {len(t2)} features")
+
+        # Tier 3: Missense reverts localization
+        # Extensions: missense_reverts_to_canonical (mutated extension → canonical loc)
+        # Truncations: missense_reverts_to_truncation (mutated canonical → truncation loc)
+        has_reverts_canonical = "missense_reverts_to_canonical" in shifted.columns
+        has_reverts_truncation = "missense_reverts_to_truncation" in shifted.columns
+        if has_reverts_canonical or has_reverts_truncation:
+            reverts_canonical = (
+                shifted["missense_reverts_to_canonical"] > 0
+                if has_reverts_canonical
+                else False
+            )
+            reverts_truncation = (
+                shifted["missense_reverts_to_truncation"] > 0
+                if has_reverts_truncation
+                else False
+            )
+            t3 = shifted[reverts_canonical | reverts_truncation].copy()
+            if not t3.empty:
+                # Add combined column for sorting
+                t3["_total_reverts"] = t3.get(
+                    "missense_reverts_to_canonical", 0
+                ).fillna(0).astype(int) + t3.get(
+                    "missense_reverts_to_truncation", 0
+                ).fillna(0).astype(int)
+                t3 = t3.sort_values(
+                    ["_total_reverts", "shift_magnitude"],
+                    ascending=[False, False],
+                ).reset_index(drop=True)
+                t3 = t3.drop(columns=["_total_reverts"])
+                tiers["tier3_missense_reverts"] = t3
+                logger.info(f"Tier 3 (missense reverts): {len(t3)} features")
+
+        if not tiers:
+            logger.info("No features qualified for any tier")
+
+        return tiers
+
     def generate_summary_text(
-        self, dataset, source, feature_dfs, gene_results, pair_results
+        self, dataset, source, feature_dfs, gene_results, pair_results, tier_tables=None
     ):
         """Generate a unified text summary orienting the reader to feature_analysis.csv.
 
@@ -2866,6 +3312,7 @@ class SummaryAnalyzer:
             feature_dfs: Dict of {model_name: feature_analysis DataFrame}.
             gene_results: Gene-level mutation results DataFrame (or None).
             pair_results: Isoform-level mutation results DataFrame (or None).
+            tier_tables: Optional dict of {model_name: {tier_name: DataFrame}}.
 
         Returns:
             List[str]: Lines of summary text.
@@ -2940,6 +3387,7 @@ class SummaryAnalyzer:
             # Top shifted features
             top_shifted = df.nlargest(5, "shift_magnitude")
             if not top_shifted.empty:
+                gene_col = "gene_name" if "gene_name" in df.columns else "gene"
                 lines.append("  Top shifted features (by shift_magnitude):")
                 for _, row in top_shifted.iterrows():
                     loc_change = (
@@ -2948,7 +3396,7 @@ class SummaryAnalyzer:
                         else f"{row['canonical_loc']} (same)"
                     )
                     lines.append(
-                        f"    {row['gene']} ({row['feature_type']}): "
+                        f"    {row[gene_col]} ({row['feature_type']}): "
                         f"{row['shift_magnitude']:.2f} shift, {loc_change}"
                     )
 
@@ -3016,23 +3464,161 @@ class SummaryAnalyzer:
 
                 # Feature-level mutation info from feature_analysis
                 if not primary_df.empty:
-                    if "missense_loc_change_count" in primary_df.columns:
-                        n_with_missense_loc = int(
-                            (primary_df["missense_loc_change_count"] > 0).sum()
-                        )
+                    if "lof_count" in primary_df.columns:
+                        n_with_lof = int((primary_df["lof_count"] > 0).sum())
                         lines.append(
-                            f"  Features with missense-induced localization changes: {n_with_missense_loc}"
+                            f"  Features with LoF mutations (nonsense+frameshift): {n_with_lof}"
                         )
-                    if "alt_start_loss_count" in primary_df.columns:
+                    if "alternative_start_loss_count" in primary_df.columns:
                         n_with_alt_loss = int(
-                            (primary_df["alt_start_loss_count"] > 0).sum()
+                            (primary_df["alternative_start_loss_count"] > 0).sum()
                         )
                         lines.append(
                             f"  Features with alt-start-loss mutations: {n_with_alt_loss}"
                         )
+                    # Missense reversion counts (extensions → canonical, truncations → truncation)
+                    n_reverts_canonical = 0
+                    n_reverts_truncation = 0
+                    if "missense_reverts_to_canonical" in primary_df.columns:
+                        n_reverts_canonical = int(
+                            (primary_df["missense_reverts_to_canonical"] > 0).sum()
+                        )
+                    if "missense_reverts_to_truncation" in primary_df.columns:
+                        n_reverts_truncation = int(
+                            (primary_df["missense_reverts_to_truncation"] > 0).sum()
+                        )
+                    n_total_reverts = n_reverts_canonical + n_reverts_truncation
+                    lines.append(
+                        f"  Features with missense-reverting localization: {n_total_reverts}"
+                        f" ({n_reverts_canonical} extensions→canonical, {n_reverts_truncation} truncations→truncation)"
+                    )
             else:
                 lines.append("  No mutation data available.")
 
+            lines.append("")
+
+        # --- TOP CANDIDATES FOR VALIDATION (mutation sources only) ---
+        if source != "default" and tier_tables:
+            lines.append("TOP CANDIDATES FOR VALIDATION")
+
+            # Use first model's data
+            primary_model = model_names[0] if model_names else None
+            model_tiers = tier_tables.get(primary_model, {}) if primary_model else {}
+
+            # Nomination funnel
+            lines.append("")
+            lines.append("  Nomination funnel:")
+            n_total_features = len(primary_df) if not primary_df.empty else 0
+            lines.append(f"    Total features: {n_total_features}")
+            if not primary_df.empty and "total_mutations" in primary_df.columns:
+                n_with_mutations = int((primary_df["total_mutations"] > 0).sum())
+                lines.append(
+                    f"    Features with mutations (post-gnomAD filtering): {n_with_mutations}"
+                )
+            if not primary_df.empty and "locs_differ" in primary_df.columns:
+                n_shifted = int(primary_df["locs_differ"].sum())
+                lines.append(
+                    f"    Features with localization shift (locs_differ=True): {n_shifted}"
+                )
+                if "total_mutations" in primary_df.columns:
+                    n_shifted_with_muts = int(
+                        (
+                            (primary_df["locs_differ"])
+                            & (primary_df["total_mutations"] > 0)
+                        ).sum()
+                    )
+                    lines.append(
+                        f"    Features with BOTH shift + mutations: {n_shifted_with_muts}"
+                    )
+            # Tier counts
+            t1_count = len(model_tiers.get("tier1_alt_start_loss", []))
+            t2_count = len(model_tiers.get("tier2_lof_burden", []))
+            t3_count = len(model_tiers.get("tier3_missense_reverts", []))
+            lines.append(f"    → Tier 1 (alt-start-loss): {t1_count}")
+            lines.append(f"    → Tier 2 (LoF burden): {t2_count}")
+            lines.append(f"    → Tier 3 (missense reverts): {t3_count}")
+            lines.append("")
+
+            tier_info = [
+                (
+                    "tier1_alt_start_loss",
+                    "Tier 1 \u2014 Alt-start-loss",
+                    "Mutations destroy the alternative start codon. Patients lose the",
+                    "extended isoform entirely and revert to canonical localization.",
+                    "alternative_start_loss_count",
+                    "alt-start-loss variants",
+                ),
+                (
+                    "tier2_lof_burden",
+                    "Tier 2 \u2014 LoF burden",
+                    "Nonsense/frameshift mutations disrupt the feature region.",
+                    "Patients likely revert to canonical localization.",
+                    "lof_count",
+                    "LoF variants",
+                ),
+                (
+                    "tier3_missense_reverts",
+                    "Tier 3 \u2014 Missense reverts localization",
+                    "Missense in the longer protein makes it localize like the shorter one.",
+                    "Extensions: mutated extension → canonical loc. Truncations: mutated canonical → truncation loc.",
+                    None,  # special handling — two columns
+                    "missense revert",
+                ),
+            ]
+
+            for tier_key, tier_name, desc1, desc2, count_col, count_label in tier_info:
+                tier_df = model_tiers.get(tier_key)
+                if tier_df is not None and not tier_df.empty:
+                    lines.append(f"  {tier_name} ({len(tier_df)} features)")
+                    lines.append(f"    {desc1}")
+                    lines.append(f"    {desc2}")
+
+                    # Show top 5
+                    top5 = tier_df.head(5)
+                    for _, row in top5.iterrows():
+                        gene = row.get("gene_name", "?")
+                        ftype = row.get("feature_type", "?")
+                        can_loc = row.get("canonical_loc", "?")
+                        feat_loc = row.get("feature_loc", "?")
+                        shift = row.get("shift_magnitude", 0)
+
+                        # Tier 3 has two revert columns; pick the right one per feature type
+                        if count_col is None:
+                            # Tier 3 special handling
+                            if ftype == "truncation":
+                                count_val = int(
+                                    row.get("missense_reverts_to_truncation", 0) or 0
+                                )
+                                detail = f"{count_val} missense revert to truncation"
+                            else:
+                                count_val = int(
+                                    row.get("missense_reverts_to_canonical", 0) or 0
+                                )
+                                detail = f"{count_val} missense revert to canonical"
+                        else:
+                            count_val = int(row.get(count_col, 0))
+                            detail = f"{count_val} {count_label}"
+
+                        # Add extra detail for LoF tier
+                        if tier_key == "tier2_lof_burden":
+                            nonsense = int(row.get("count_nonsense_variant", 0) or 0)
+                            frameshift = int(
+                                row.get("count_frameshift_variant", 0) or 0
+                            )
+                            detail = f"{count_val} LoF variants ({nonsense} nonsense, {frameshift} frameshift)"
+
+                        lines.append(
+                            f"    Top: {gene} ({ftype}): "
+                            f"{can_loc}\u2192{feat_loc}, shift={shift:.2f}, {detail}"
+                        )
+                    lines.append("")
+                else:
+                    lines.append(f"  {tier_name} (0 features)")
+                    lines.append("")
+
+            lines.append(
+                "  See tier1_alt_start_loss.csv, tier2_lof_burden.csv, tier3_missense_reverts.csv"
+            )
             lines.append("")
 
         # --- GUIDE TO feature_analysis.csv ---
@@ -3041,38 +3627,50 @@ class SummaryAnalyzer:
         lines.append("    - shift_magnitude: max probability change vs canonical (0-1)")
         lines.append("    - locs_differ: True if primary localization changed")
         lines.append("    - signal_change: membrane/signal type differences")
-        lines.append("    - model_agreement: True if Accurate and Fast models agree")
+        lines.append(
+            "    - canonical_loc, feature_loc: primary compartment predictions"
+        )
 
         if source != "default":
             lines.append("  Key columns for mutations:")
-            lines.append("    - total_mutations, mutation_density")
-            lines.append("    - missense_loc_change_count")
-            lines.append("    - alt_start_loss_count")
-            if source == "clinvar":
-                lines.append("    - clinvar_pathogenic_count, clinvar_top_star_rating")
-            elif source == "cosmic":
-                lines.append("    - cosmic_max_sample_count")
-            elif source == "gnomad":
-                lines.append("    - gnomad_min_af")
+            lines.append("    - total_mutations, lof_count (nonsense + frameshift)")
+            lines.append("    - alternative_start_loss_count")
+            lines.append(
+                "    - missense_reverts_to_canonical (extensions), missense_reverts_to_truncation (truncations)"
+            )
+            lines.append("    - missense_no_effect, missense_novel_loc")
+            lines.append("  Key columns for tier tables:")
+            lines.append("    - All tiers require locs_differ=True")
+            lines.append("    - tier1: alternative_start_loss_count > 0")
+            lines.append("    - tier2: lof_count > 0")
+            lines.append(
+                "    - tier3: missense_reverts_to_canonical > 0 OR missense_reverts_to_truncation > 0"
+            )
 
         lines.append("")
 
         return lines
 
     def analyze_dataset(self, dataset, source="gnomad"):
-        """Analyze a complete dataset and source, saving unified feature analysis.
+        """Analyze a complete dataset and source, saving augmented feature analysis.
 
-        Creates a single comprehensive feature_analysis.csv per model that combines
-        all metrics (structural, missense, alt-start-loss, mutation burden).
+        For mutation sources: augments isoform_level_results with localization columns,
+        generates tier tables for nomination.
+        For default source: builds structural table from pairs localization data.
 
         Output structure:
         - results/{dataset}/{source}/summary/
           - summary.txt (text overview)
-          - model_comparison/ (if both models available)
           - accurate/
-            - feature_analysis.csv (unified analysis table)
+            - feature_analysis.csv (augmented analysis table)
+            - tier1_alt_start_loss.csv (if applicable)
+            - tier2_lof_burden.csv (if applicable)
+            - tier3_missense_reverts.csv (if applicable)
           - fast/
-            - feature_analysis.csv (unified analysis table)
+            - feature_analysis.csv (augmented analysis table)
+            - tier1_alt_start_loss.csv (if applicable)
+            - tier2_lof_burden.csv (if applicable)
+            - tier3_missense_reverts.csv (if applicable)
 
         Args:
             dataset (str): Name of the dataset to analyze.
@@ -3090,11 +3688,6 @@ class SummaryAnalyzer:
         protein_data = self.load_protein_sequences(dataset, source)
         loc_results = self.load_localization_results(dataset, source)
 
-        # Load detailed mutation CSVs if available (for mutation sources)
-        mutation_details = None
-        if source != "default":
-            mutation_details = self.load_mutation_details(dataset, source)
-
         # Get available models
         available_models = self.get_available_models(dataset, source)
 
@@ -3106,25 +3699,9 @@ class SummaryAnalyzer:
             f"Available models for {dataset}/{source}: {', '.join(available_models)}"
         )
 
-        # Create model comparison views if both models available
-        if len(available_models) == 2:
-            logger.info("\n=== CREATING MODEL COMPARISON VIEWS ===")
-            comparison_views = self.create_model_comparison_views(
-                dataset, loc_results, source
-            )
-
-            # Save model comparison views
-            comparison_dir = summary_dir / "model_comparison"
-            comparison_dir.mkdir(parents=True, exist_ok=True)
-
-            for view_name, view_df in comparison_views.items():
-                view_df.to_csv(comparison_dir / f"{view_name}.csv", index=False)
-                logger.info(
-                    f"  Saved model_comparison/{view_name}.csv ({len(view_df)} rows)"
-                )
-
         # Analyze each available model separately, collecting feature DataFrames
         feature_dfs = {}
+        all_tier_tables = {}
 
         for model_type in available_models:
             logger.info(
@@ -3135,21 +3712,46 @@ class SummaryAnalyzer:
             model_summary_dir = summary_dir / model_type.lower()
             model_summary_dir.mkdir(parents=True, exist_ok=True)
 
-            # Determine if we have the other model for agreement column
-            other_model_loc = loc_results if len(available_models) == 2 else None
+            if source != "default" and pair_results is not None:
+                # Mutation source: augment isoform_level_results with localization
+                logger.info(
+                    f"\n--- Augmenting isoform_level_results with {model_type} localization ---"
+                )
+                feature_analysis_df = self.augment_with_localization(
+                    pair_results, loc_results, model_type
+                )
 
-            # Create unified feature analysis table
-            logger.info(f"\n--- Creating unified feature analysis ({model_type}) ---")
-            feature_analysis_df = self.create_feature_analysis(
-                dataset=dataset,
-                loc_results=loc_results,
-                protein_data=protein_data,
-                model_type=model_type,
-                source=source,
-                pair_results=pair_results,
-                mutation_details=mutation_details,
-                other_model_loc=other_model_loc,
-            )
+                # Generate tier tables
+                tier_tables = self.generate_tier_tables(feature_analysis_df)
+                all_tier_tables[model_type] = tier_tables
+
+                # Save tier tables
+                for tier_name, tier_df in tier_tables.items():
+                    tier_df.to_csv(model_summary_dir / f"{tier_name}.csv", index=False)
+                    logger.info(f"  Saved {tier_name}.csv ({len(tier_df)} features)")
+            else:
+                # Default source: build structural table from pairs localization
+                logger.info(f"\n--- Building structural table ({model_type}) ---")
+                feature_analysis_df = self.build_structural_table(
+                    loc_results, model_type
+                )
+                all_tier_tables[model_type] = {}
+
+                # Save localization shifts table for default source
+                if "locs_differ" in feature_analysis_df.columns:
+                    shifts_df = (
+                        feature_analysis_df[feature_analysis_df["locs_differ"] == True]
+                        .sort_values("shift_magnitude", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                    if not shifts_df.empty:
+                        shifts_df.to_csv(
+                            model_summary_dir / "localization_shifts.csv",
+                            index=False,
+                        )
+                        logger.info(
+                            f"  Saved localization_shifts.csv ({len(shifts_df)} shifted features)"
+                        )
 
             # Save feature analysis
             if not feature_analysis_df.empty:
@@ -3157,30 +3759,32 @@ class SummaryAnalyzer:
                     model_summary_dir / "feature_analysis.csv", index=False
                 )
                 logger.info(
-                    f"  Saved feature_analysis.csv ({len(feature_analysis_df)} features)"
+                    f"  Saved feature_analysis.csv ({len(feature_analysis_df)} features, "
+                    f"{len(feature_analysis_df.columns)} columns)"
                 )
 
                 # Print summary statistics
-                locs_differ_count = feature_analysis_df["locs_differ"].sum()
-                total_features = len(feature_analysis_df)
-                logger.info(
-                    f"  {locs_differ_count}/{total_features} features have different localization than canonical"
-                )
+                if "locs_differ" in feature_analysis_df.columns:
+                    locs_differ_count = feature_analysis_df["locs_differ"].sum()
+                    total_features = len(feature_analysis_df)
+                    logger.info(
+                        f"  {locs_differ_count}/{total_features} features have different localization than canonical"
+                    )
 
-                if source != "default":
-                    with_mutations = (feature_analysis_df["total_mutations"] > 0).sum()
+                if source != "default" and "lof_count" in feature_analysis_df.columns:
+                    with_lof = (feature_analysis_df["lof_count"] > 0).sum()
                     with_alt_start_loss = (
-                        feature_analysis_df["alt_start_loss_count"] > 0
+                        feature_analysis_df["alternative_start_loss_count"] > 0
                     ).sum()
-                    with_missense_loc_change = (
-                        feature_analysis_df["missense_loc_change_count"] > 0
+                    with_missense_reverts = (
+                        feature_analysis_df["missense_reverts_to_canonical"] > 0
                     ).sum()
-                    logger.info(f"  {with_mutations} features with mutations")
+                    logger.info(f"  {with_lof} features with LoF mutations")
                     logger.info(
                         f"  {with_alt_start_loss} features with alt-start-loss mutations"
                     )
                     logger.info(
-                        f"  {with_missense_loc_change} features with missense-induced loc changes"
+                        f"  {with_missense_reverts} features with missense-reverting localization"
                     )
             else:
                 # Save empty file
@@ -3193,7 +3797,12 @@ class SummaryAnalyzer:
 
         # Generate and save unified summary text
         summary_lines = self.generate_summary_text(
-            dataset, source, feature_dfs, gene_results, pair_results
+            dataset,
+            source,
+            feature_dfs,
+            gene_results,
+            pair_results,
+            tier_tables=all_tier_tables,
         )
         with open(summary_dir / "summary.txt", "w") as f:
             f.write("\n".join(summary_lines))
@@ -3204,11 +3813,11 @@ class SummaryAnalyzer:
         logger.info(f"Results saved to: {summary_dir}")
         logger.info(f"{'=' * 60}")
         for model_type in available_models:
-            logger.info(
-                f"  {model_type} model: {summary_dir / model_type.lower()}/feature_analysis.csv"
-            )
-        if len(available_models) == 2:
-            logger.info(f"  Model comparison: {summary_dir / 'model_comparison'}/")
+            model_dir = summary_dir / model_type.lower()
+            logger.info(f"  {model_type} model: {model_dir}/feature_analysis.csv")
+            model_tiers = all_tier_tables.get(model_type, {})
+            for tier_name in model_tiers:
+                logger.info(f"    + {tier_name}.csv")
 
     # Keep original methods for backward compatibility (they now use the first available model)
     def analyze_localizations(self, dataset, loc_results, protein_data):
