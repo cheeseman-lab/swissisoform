@@ -6,6 +6,9 @@
 # It processes protein sequences in parallel with both Fast and Accurate modes.
 #
 # Usage:
+#   # Base proteins only (no mutations) - 2 tasks
+#   sbatch --export=DATASET=hela,MODE=base --array=1-2 4_predict_localization.sh
+#
 #   # Single source (backward compatible) - 4 tasks
 #   sbatch --export=DATASET=hela,SOURCE=clinvar --array=1-4 4_predict_localization.sh
 #
@@ -26,6 +29,7 @@
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
+#   MODE - Set to "base" to predict only default proteins (no mutations)
 #   SOURCE - Single mutation source (default: clinvar)
 #   SOURCES - Multiple sources for parallel processing (pipe-separated: "clinvar|cosmic|custom_bch")
 #             ALWAYS predicts base pairs first (tasks 1-2), then source mutations
@@ -139,36 +143,61 @@ if [ -n "$SOURCES" ]; then
     fi
 else
     # Single-source mode (backward compatible)
-    SOURCE="${SOURCE:-clinvar}"
+    # Supports MODE=base for predicting only default proteins
     NUM_SOURCES=1
-    MODE="source"
 
-    PROTEINS_DIR="../results/${DATASET}/${SOURCE}/proteins"
-    LOCALIZATION_DIR="../results/${DATASET}/${SOURCE}/localization"
+    if [ "${MODE}" = "base" ]; then
+        # Base-only mode: predict default proteins (no mutations)
+        SOURCE="default"
+        PROTEINS_DIR="../results/${DATASET}/default/proteins"
+        LOCALIZATION_DIR="../results/${DATASET}/default/localization"
 
-    # Old behavior: 4 tasks (pairs Fast/Accurate + mutations Fast/Accurate)
-    case $SLURM_ARRAY_TASK_ID in
-        1)
-            FILE_TYPE="pairs"; DEEPLOC_MODE="Fast"
-            INPUT_FILE="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
-            ;;
-        2)
-            FILE_TYPE="pairs"; DEEPLOC_MODE="Accurate"
-            INPUT_FILE="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
-            ;;
-        3)
-            FILE_TYPE="mutations"; DEEPLOC_MODE="Fast"
-            INPUT_FILE="${PROTEINS_DIR}/protein_sequences_with_mutations.fasta"
-            ;;
-        4)
-            FILE_TYPE="mutations"; DEEPLOC_MODE="Accurate"
-            INPUT_FILE="${PROTEINS_DIR}/protein_sequences_with_mutations.fasta"
-            ;;
-        *)
-            echo "Single-source mode only uses tasks 1-4"
-            exit 0
-            ;;
-    esac
+        # Base mode: 2 tasks (pairs Fast/Accurate only)
+        case $SLURM_ARRAY_TASK_ID in
+            1)
+                FILE_TYPE="pairs"; DEEPLOC_MODE="Fast"
+                INPUT_FILE="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
+                ;;
+            2)
+                FILE_TYPE="pairs"; DEEPLOC_MODE="Accurate"
+                INPUT_FILE="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
+                ;;
+            *)
+                echo "Base mode only uses tasks 1-2"
+                exit 0
+                ;;
+        esac
+    else
+        # Source mode: predict proteins with mutations
+        SOURCE="${SOURCE:-clinvar}"
+        MODE="source"
+        PROTEINS_DIR="../results/${DATASET}/${SOURCE}/proteins"
+        LOCALIZATION_DIR="../results/${DATASET}/${SOURCE}/localization"
+
+        # Source mode: 4 tasks (pairs Fast/Accurate + mutations Fast/Accurate)
+        case $SLURM_ARRAY_TASK_ID in
+            1)
+                FILE_TYPE="pairs"; DEEPLOC_MODE="Fast"
+                INPUT_FILE="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
+                ;;
+            2)
+                FILE_TYPE="pairs"; DEEPLOC_MODE="Accurate"
+                INPUT_FILE="${PROTEINS_DIR}/protein_sequences_pairs.fasta"
+                ;;
+            3)
+                FILE_TYPE="mutations"; DEEPLOC_MODE="Fast"
+                INPUT_FILE="${PROTEINS_DIR}/protein_sequences_with_mutations.fasta"
+                ;;
+            4)
+                FILE_TYPE="mutations"; DEEPLOC_MODE="Accurate"
+                INPUT_FILE="${PROTEINS_DIR}/protein_sequences_with_mutations.fasta"
+                ;;
+            *)
+                echo "Single-source mode only uses tasks 1-4"
+                exit 0
+                ;;
+        esac
+    fi
 fi
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
@@ -236,8 +265,8 @@ if [ "$SLURM_ARRAY_TASK_ID" -eq 1 ]; then
         missing_files+=("pairs")
     fi
 
-    # Only check for mutations file when MODE != base
-    if [ "$MODE" != "base" ]; then
+    # Only check for mutations file when MODE != base and SOURCE != default
+    if [ "$MODE" != "base" ] && [ "$SOURCE" != "default" ]; then
         mutations_file="${PROTEINS_DIR}/protein_sequences_with_mutations.fasta"
         if [ -f "$mutations_file" ]; then
             count=$(grep -c '^>' "$mutations_file")

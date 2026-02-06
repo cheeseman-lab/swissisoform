@@ -2093,6 +2093,13 @@ class AlternativeProteinGenerator:
                     if alternative_protein == canonical_protein:
                         continue
 
+                    # Strip gene_transcript prefix from feature_id to match mutation format
+                    # variant_id should be just the suffix (e.g., extension_CTG_123)
+                    gene_transcript_prefix = f"{gene_name_val}_{transcript_id}_"
+                    feature_suffix = feature_id
+                    if feature_suffix.startswith(gene_transcript_prefix):
+                        feature_suffix = feature_suffix[len(gene_transcript_prefix) :]
+
                     # Add canonical sequence
                     all_sequences.append(
                         {
@@ -2117,7 +2124,7 @@ class AlternativeProteinGenerator:
                             "feature_id": feature_id,
                             "bed_name": bed_name,
                             "feature_type": feature_type,
-                            "variant_id": feature_id,
+                            "variant_id": feature_suffix,
                             "sequence": alternative_protein,
                             "length": len(alternative_protein),
                             "is_alternative": 1,
@@ -3558,10 +3565,30 @@ class AlternativeProteinGenerator:
                 ):
                     description += f" with mutation {row['mutation_change']}"
             else:
-                record_id = (
-                    f"{row['gene_name']}_{row['transcript_id']}_{row['variant_id']}"
-                )
+                # Match mutation format for consistency:
+                # - Canonical: GENE_TX_canonical
+                # - Alternative: GENE_TX_extension_CTG_123 (full feature ID)
+                gene_tx_prefix = f"{row['gene_name']}_{row['transcript_id']}_"
+
                 is_alt = row.get("is_alternative", 0)
+                if is_alt:
+                    # Alternative: use bed_name (full feature ID) or construct it
+                    if (
+                        "bed_name" in row
+                        and pd.notna(row["bed_name"])
+                        and row["bed_name"]
+                    ):
+                        record_id = row["bed_name"]
+                    else:
+                        variant_id = str(row.get("variant_id", ""))
+                        if variant_id.startswith(gene_tx_prefix):
+                            record_id = variant_id
+                        else:
+                            record_id = f"{gene_tx_prefix}{variant_id}"
+                else:
+                    # Canonical: simple GENE_TX_canonical format
+                    record_id = f"{gene_tx_prefix}canonical"
+
                 region_type = row.get("region_type", "unknown")
                 description = f"{'Alternative' if is_alt else 'Canonical'} protein ({region_type})"
 

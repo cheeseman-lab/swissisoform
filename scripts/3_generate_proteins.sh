@@ -7,6 +7,9 @@
 # pairs and mutated variants.
 #
 # Usage:
+#   # Base proteins only (no mutations) - 8 tasks
+#   sbatch --export=DATASET=hela,MODE=base --array=1-8 3_generate_proteins.sh
+#
 #   # Single source (backward compatible) - 8 tasks
 #   sbatch --export=DATASET=hela,SOURCE=clinvar --array=1-8 3_generate_proteins.sh
 #
@@ -27,6 +30,7 @@
 #
 # Environment Variables:
 #   DATASET - Dataset to process (default: hela)
+#   MODE - Set to "base" to generate only default proteins (no mutations)
 #   SOURCE - Single mutation source for output directory (default: clinvar)
 #   SOURCES - Multiple sources for parallel processing (pipe-separated: "clinvar|cosmic|custom_bch")
 #             ALWAYS generates base proteins first (tasks 1-8), then sources
@@ -140,19 +144,27 @@ if [ -n "$SOURCES" ]; then
         fi
     fi
 else
-    # Single-source mode: use SOURCE variable (backward compatibility)
-    SOURCE="${SOURCE:-clinvar}"
+    # Single-source mode (backward compatible)
+    # Supports MODE=base for generating only default proteins
     NUM_SOURCES=1
     TOTAL_TASKS=$CHUNKS_PER_SOURCE
     CHUNK_ID=$SLURM_ARRAY_TASK_ID
-    MODE="source"
 
     IS_MERGE_TASK=false
     if [ "$CHUNK_ID" -eq 8 ]; then
         IS_MERGE_TASK=true
     fi
 
-    OUTPUT_DIR_BASE="../results/${DATASET}/${SOURCE}"
+    if [ "${MODE}" = "base" ]; then
+        # Base-only mode: generate default proteins (no mutations)
+        SOURCE="default"
+        OUTPUT_DIR_BASE="../results/${DATASET}/default"
+    else
+        # Source mode: generate proteins with mutations
+        SOURCE="${SOURCE:-clinvar}"
+        MODE="source"
+        OUTPUT_DIR_BASE="../results/${DATASET}/${SOURCE}"
+    fi
 fi
 
 # Sources selection for this specific task

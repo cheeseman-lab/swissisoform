@@ -206,33 +206,44 @@ class SummaryAnalyzer:
 
         source_variant_id = None
 
-        if is_canonical:
+        # Strip _canonical suffix for feature type detection
+        # This handles pairs format: GENE_TX_extension_CTG_123_canonical
+        base_id = protein_id[:-10] if is_canonical else protein_id
+
+        # Check for pure canonical transcript (GENE_TX_canonical)
+        if (
+            is_canonical
+            and "_extension_" not in base_id
+            and "_truncation_" not in base_id
+        ):
             feature_type = "canonical"
             feature_id = protein_id
-        elif "_extension_" in protein_id:
+        elif "_extension_" in base_id:
             feature_type = "extension"
             # Extract feature suffix: extension_CODON_start (or extension_CODON_start_end)
-            match = re.search(r"(extension_[A-Z]+_\d+_\d+)", protein_id)
+            # Use base_id (without _canonical suffix) for pattern matching
+            match = re.search(r"(extension_[A-Z]+_\d+_\d+)", base_id)
             if match:
                 feature_suffix = match.group(1)
             else:
                 # Old format fallback: extension without end position
-                match = re.search(r"(extension_[A-Z]+_\d+)", protein_id)
-                feature_suffix = match.group(1) if match else protein_id
+                match = re.search(r"(extension_[A-Z]+_\d+)", base_id)
+                feature_suffix = match.group(1) if match else base_id
             # Reconstruct full feature_id with gene_transcript prefix to match bed_name
             feature_id = (
                 f"{gene}_{transcript}_{feature_suffix}"
                 if gene and transcript
                 else feature_suffix
             )
-        elif "_truncation_" in protein_id:
+        elif "_truncation_" in base_id:
             feature_type = "truncation"
-            match = re.search(r"(truncation_[A-Z]+_\d+_\d+)", protein_id)
+            # Use base_id (without _canonical suffix) for pattern matching
+            match = re.search(r"(truncation_[A-Z]+_\d+_\d+)", base_id)
             if match:
                 feature_suffix = match.group(1)
             else:
-                match = re.search(r"(truncation_[A-Z]+_\d+)", protein_id)
-                feature_suffix = match.group(1) if match else protein_id
+                match = re.search(r"(truncation_[A-Z]+_\d+)", base_id)
+                feature_suffix = match.group(1) if match else base_id
             feature_id = (
                 f"{gene}_{transcript}_{feature_suffix}"
                 if gene and transcript
@@ -240,7 +251,7 @@ class SummaryAnalyzer:
             )
         else:
             feature_type = "unknown"
-            feature_id = protein_id
+            feature_id = base_id
 
         mutation_info = None
         if is_mutant:
@@ -3117,20 +3128,72 @@ class SummaryAnalyzer:
         )
         return result
 
-    def build_structural_table(self, loc_results, model_type="Accurate"):
-        """Build a minimal structural table from pairs localization data (default source).
+    def build_structural_table(self, loc_results, model_type="Accurate", dataset=None):
+        """Build a structural table from pairs localization data (default source).
 
         For the default source (no mutation data), builds a table of features with
-        localization predictions only.
+        localization predictions and structural metadata (MANE, coordinates, etc.)
+        loaded from any available isoform_level_results.csv.
 
         Args:
             loc_results: Dictionary of localization DataFrames.
             model_type: "Accurate" or "Fast".
+            dataset: Dataset name (used to find isoform_level_results for metadata).
 
         Returns:
-            pd.DataFrame: Structural analysis table.
+            pd.DataFrame: Structural analysis table with metadata.
         """
         logger.info(f"Building structural table from {model_type} pairs data")
+
+        # Load structural metadata from any available isoform_level_results.csv
+        structural_metadata = None
+        if dataset:
+            metadata_cols = [
+                "gene_name",
+                "transcript_id",
+                "MANE",
+                "transcript_notes",
+                "feature_id",
+                "bed_name",
+                "feature_type",
+                "feature_start",
+                "feature_end",
+                "feature_length_aa",
+                "aa_difference_from_canonical",
+            ]
+            # Try to find any isoform_level_results.csv file
+            results_dir = Path(f"../results/{dataset}")
+            potential_sources = [
+                "clinvar",
+                "gnomad",
+                "cosmic",
+                "custom_bch",
+                "custom_msk",
+            ]
+            for src in potential_sources:
+                isoform_file = (
+                    results_dir / src / "mutations" / "isoform_level_results.csv"
+                )
+                if isoform_file.exists():
+                    logger.info(
+                        f"Loading structural metadata from {src}/isoform_level_results.csv"
+                    )
+                    try:
+                        isoform_df = pd.read_csv(isoform_file, usecols=metadata_cols)
+                        structural_metadata = isoform_df.drop_duplicates(
+                            subset=["gene_name", "transcript_id", "feature_id"]
+                        )
+                        logger.info(
+                            f"  Loaded metadata for {len(structural_metadata)} features"
+                        )
+                        break
+                    except Exception as e:
+                        logger.warning(f"  Failed to load metadata from {src}: {e}")
+                        continue
+            if structural_metadata is None:
+                logger.warning(
+                    "No isoform_level_results.csv found for structural metadata"
+                )
 
         if model_type.lower() == "accurate":
             pairs_data = loc_results.get("pairs_accurate")
@@ -3141,26 +3204,29 @@ class SummaryAnalyzer:
             logger.warning(f"No pairs data for {model_type}")
             return pd.DataFrame()
 
-        # Parse all Protein_IDs and group by gene
-        gene_groups = {}
+        # Parse all Protein_IDs and group by (gene, transcript)
+        # This ensures each feature is compared to its own transcript's canonical
+        transcript_groups = {}
         for _, row in pairs_data.iterrows():
             pid = row.get("Sequence_ID", "")
             if not pid:
                 continue
             info = self.parse_protein_id(pid)
             gene = info["gene"]
-            if gene not in gene_groups:
-                gene_groups[gene] = {"canonical": None, "features": []}
+            transcript = info["transcript"]
+            key = (gene, transcript)
+            if key not in transcript_groups:
+                transcript_groups[key] = {"canonical": None, "features": []}
             if info["is_canonical"]:
-                gene_groups[gene]["canonical"] = (row, info, pid)
+                transcript_groups[key]["canonical"] = (row, info, pid)
             elif (
                 info["feature_type"] in ("extension", "truncation")
                 and not info["is_mutant"]
             ):
-                gene_groups[gene]["features"].append((row, info, pid))
+                transcript_groups[key]["features"].append((row, info, pid))
 
         records = []
-        for gene, group in gene_groups.items():
+        for (gene, transcript), group in transcript_groups.items():
             can_entry = group["canonical"]
             if can_entry is None:
                 continue
@@ -3215,8 +3281,79 @@ class SummaryAnalyzer:
             return pd.DataFrame()
 
         df = pd.DataFrame(records)
+
+        # Merge structural metadata if available
+        if structural_metadata is not None:
+            # The feature_id in df matches the bed_name column in isoform_level_results
+            # Both have format: GENE_TRANSCRIPT_extension_CODON_POSITION
+            # Use bed_name for matching since it's the canonical Protein_ID format
+
+            if "bed_name" in structural_metadata.columns:
+                # Match feature_id to bed_name directly
+                existing_cols = set(df.columns)
+                new_metadata_cols = [
+                    c
+                    for c in structural_metadata.columns
+                    if c not in existing_cols and c not in ["feature_id", "bed_name"]
+                ]
+                if new_metadata_cols:
+                    # Rename bed_name to feature_id for the merge
+                    metadata_subset = structural_metadata[
+                        ["bed_name"] + new_metadata_cols
+                    ].copy()
+                    metadata_subset = metadata_subset.rename(
+                        columns={"bed_name": "feature_id"}
+                    )
+                    metadata_subset = metadata_subset.dropna(subset=["feature_id"])
+                    metadata_subset = metadata_subset.drop_duplicates(
+                        subset=["feature_id"]
+                    )
+
+                    before_count = len(df)
+                    df = df.merge(metadata_subset, on="feature_id", how="left")
+                    matched = (
+                        df[new_metadata_cols[0]].notna().sum()
+                        if new_metadata_cols
+                        else 0
+                    )
+                    logger.info(
+                        f"  Merged {len(new_metadata_cols)} metadata columns via bed_name "
+                        f"({matched}/{before_count} features matched)"
+                    )
+            else:
+                logger.warning(
+                    "  bed_name column not found in metadata, skipping merge"
+                )
+
+        # Reorder columns to put metadata at the front
+        preferred_order = [
+            "gene_name",
+            "transcript_id",
+            "MANE",
+            "transcript_notes",
+            "feature_id",
+            "bed_name",
+            "feature_type",
+            "feature_start",
+            "feature_end",
+            "feature_length_aa",
+            "aa_difference_from_canonical",
+            "canonical_loc",
+            "canonical_confidence",
+            "feature_loc",
+            "feature_confidence",
+            "shift_magnitude",
+            "locs_differ",
+            "signal_change",
+        ]
+        final_cols = [c for c in preferred_order if c in df.columns]
+        remaining_cols = [c for c in df.columns if c not in final_cols]
+        df = df[final_cols + remaining_cols]
+
         df = df.sort_values("shift_magnitude", ascending=False).reset_index(drop=True)
-        logger.info(f"Built structural table with {len(df)} features")
+        logger.info(
+            f"Built structural table with {len(df)} features, {len(df.columns)} columns"
+        )
         return df
 
     def generate_tier_tables(self, feature_df):
@@ -3733,7 +3870,7 @@ class SummaryAnalyzer:
                 # Default source: build structural table from pairs localization
                 logger.info(f"\n--- Building structural table ({model_type}) ---")
                 feature_analysis_df = self.build_structural_table(
-                    loc_results, model_type
+                    loc_results, model_type, dataset=dataset
                 )
                 all_tier_tables[model_type] = {}
 
