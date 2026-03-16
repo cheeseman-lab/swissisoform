@@ -37,12 +37,29 @@ class GenomeHandler:
     def load_annotations(self, gtf_path: str) -> None:
         """Load and parse GTF annotations into a pandas DataFrame.
 
+        Uses a parquet cache alongside the GTF file for fast subsequent loads
+        (~1s vs ~67s for full GTF parsing).
+
         Args:
             gtf_path (str): Path to the genome annotation GTF file.
 
         Returns:
             None
         """
+        from pathlib import Path
+        import os
+
+        gtf_p = Path(gtf_path)
+        cache_path = gtf_p.with_suffix(".annotations.parquet")
+
+        # Use cache if it exists and is newer than the GTF file
+        if cache_path.exists() and os.path.getmtime(cache_path) >= os.path.getmtime(gtf_path):
+            logger.info(f"Loading cached annotations from {cache_path}")
+            self.annotations = pd.read_parquet(cache_path)
+            self._build_lookup_indices()
+            return
+
+        logger.info(f"Parsing GTF file {gtf_path} (this is slow, will cache for next time)")
         features_list = []
 
         with open(gtf_path) as handle:
@@ -103,6 +120,29 @@ class GenomeHandler:
         other_cols = [col for col in df.columns if col not in base_cols]
         self.annotations = df[base_cols + other_cols]
 
+        # Build lookup indices for fast gene/transcript queries
+        self._build_lookup_indices()
+
+        # Save parquet cache for fast subsequent loads
+        try:
+            self.annotations.to_parquet(cache_path)
+            logger.info(f"Saved annotation cache to {cache_path}")
+        except Exception as e:
+            logger.warning(f"Could not save annotation cache: {e}")
+
+    def _build_lookup_indices(self) -> None:
+        """Build row-index mappings for fast gene_name and transcript_id lookups."""
+        self._gene_rows = {}
+        self._transcript_rows = {}
+
+        if "gene_name" in self.annotations.columns:
+            for name, group in self.annotations.groupby("gene_name", sort=False):
+                self._gene_rows[name] = group.index.tolist()
+
+        if "transcript_id" in self.annotations.columns:
+            for name, group in self.annotations.groupby("transcript_id", sort=False):
+                self._transcript_rows[name] = group.index.tolist()
+
     def find_gene_features(self, gene_name: str) -> pd.DataFrame:
         """Find all features associated with a gene name.
 
@@ -118,6 +158,9 @@ class GenomeHandler:
         if not hasattr(self, "annotations"):
             raise ValueError("No GTF file loaded")
 
+        if hasattr(self, "_gene_rows"):
+            rows = self._gene_rows.get(gene_name, [])
+            return self.annotations.loc[rows] if rows else pd.DataFrame()
         return self.annotations[self.annotations["gene_name"] == gene_name]
 
     def get_sequence(self, chrom: str, start: int, end: int, strand: str = "+") -> str:
@@ -163,6 +206,9 @@ class GenomeHandler:
         if not hasattr(self, "annotations"):
             raise ValueError("No GTF file loaded")
 
+        if hasattr(self, "_transcript_rows"):
+            rows = self._transcript_rows.get(transcript_id, [])
+            return self.annotations.loc[rows] if rows else pd.DataFrame()
         return self.annotations[self.annotations["transcript_id"] == transcript_id]
 
     def get_gene_stats(self, gene_name: str) -> Optional[Dict]:
