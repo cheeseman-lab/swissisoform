@@ -186,11 +186,9 @@ class AlternativeProteinGenerator:
             cds_end = cds["end"]
 
             # Check if this CDS overlaps with our extraction range
-            if extract_end and (cds_start > extract_end or cds_end < extract_start):
+            if extract_end is not None and cds_start > extract_end:
                 continue
-            if extract_start and cds_end < extract_start:
-                continue
-            if extract_end and cds_start > extract_end:
+            if extract_start is not None and cds_end < extract_start:
                 continue
 
             # Calculate effective boundaries within this CDS
@@ -220,6 +218,15 @@ class AlternativeProteinGenerator:
                 chromosome, cds["start"], cds["end"], strand
             )
             coding_sequence += str(cds_seq)
+
+        # In GENCODE GTF, the stop codon is NOT part of CDS — append it explicitly
+        if stop_codon_start is not None and stop_codon_end is not None:
+            stop_seq = str(
+                self.genome.get_sequence(
+                    chromosome, stop_codon_start, stop_codon_end, strand
+                )
+            )
+            coding_sequence += stop_seq
 
         # Translate
         if len(coding_sequence) >= 3:
@@ -477,6 +484,15 @@ class AlternativeProteinGenerator:
                     f"Error extracting CDS {cds['start']}-{cds['end']}: {e}"
                 )
 
+        # In GENCODE GTF, the stop codon is NOT part of CDS — append it explicitly
+        if stop_codon_start is not None and stop_codon_end is not None:
+            stop_seq = str(
+                self.genome.get_sequence(
+                    chromosome, stop_codon_start, stop_codon_end, strand
+                )
+            )
+            cds_sequence += stop_seq
+
         self._debug_print(f"CDS sequence length: {len(cds_sequence)} bp")
         self._debug_print(f"Total CDS regions used: {len(overlapping_cds)}")
 
@@ -494,11 +510,14 @@ class AlternativeProteinGenerator:
         # Translate the combined sequence
         protein = ""
         if len(full_coding_sequence) >= 3:
-            # Ensure length is divisible by 3 for clean translation
             remainder = len(full_coding_sequence) % 3
             if remainder > 0:
-                full_coding_sequence = full_coding_sequence[:-remainder]
-                self._debug_print(f"Trimmed {remainder} bp for clean translation")
+                self._debug_print(
+                    f"⚠️ Extension coding sequence length {len(full_coding_sequence)} "
+                    f"not divisible by 3 (remainder {remainder}). "
+                    f"Extension part: {len(extension_sequence)}bp, CDS part: {len(cds_sequence)}bp. "
+                    f"This indicates a coordinate extraction bug."
+                )
 
             try:
                 protein = str(Seq(full_coding_sequence).translate())
@@ -660,6 +679,15 @@ class AlternativeProteinGenerator:
                 f"CDS region {i + 1}: {cds['start']}-{cds['end']}, length {len(seq_str)} bp"
             )
 
+        # In GENCODE GTF, the stop codon is NOT part of CDS — append it explicitly
+        if stop_codon_start is not None and stop_codon_end is not None:
+            stop_seq = str(
+                self.genome.get_sequence(
+                    chromosome, stop_codon_start, stop_codon_end, strand
+                )
+            )
+            coding_sequence += stop_seq
+
         self._debug_print(
             f"Final truncated CDS sequence length: {len(coding_sequence)} bp"
         )
@@ -670,7 +698,11 @@ class AlternativeProteinGenerator:
         if len(coding_sequence) >= 3:
             remainder = len(coding_sequence) % 3
             if remainder > 0:
-                coding_sequence = coding_sequence[:-remainder]
+                self._debug_print(
+                    f"⚠️ Truncation coding sequence length {len(coding_sequence)} "
+                    f"not divisible by 3 (remainder {remainder}). "
+                    f"This indicates a coordinate extraction bug."
+                )
 
             protein = str(Seq(coding_sequence).translate())
             self._debug_print(f"Truncated protein length: {len(protein)} AA")
@@ -1077,7 +1109,11 @@ class AlternativeProteinGenerator:
         if len(mutated_coding_sequence) >= 3:
             remainder = len(mutated_coding_sequence) % 3
             if remainder > 0:
-                mutated_coding_sequence = mutated_coding_sequence[:-remainder]
+                self._debug_print(
+                    f"⚠️ Mutated coding sequence length {len(mutated_coding_sequence)} "
+                    f"not divisible by 3 (remainder {remainder}). "
+                    f"This indicates a coordinate extraction bug."
+                )
             mutated_protein = str(Seq(mutated_coding_sequence).translate())
         else:
             mutated_protein = ""
