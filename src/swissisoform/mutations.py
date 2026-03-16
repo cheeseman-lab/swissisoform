@@ -4,6 +4,8 @@ This module provides the MutationHandler class for fetching, processing, and
 analyzing mutation data from various sources including gnomAD, ClinVar, and COSMIC.
 """
 
+import bisect
+
 from gql import gql, Client
 from gql.transport.aiohttp import AIOHTTPTransport
 import pandas as pd
@@ -99,10 +101,11 @@ class MutationHandler:
 
     def _is_cache_valid(self, cache_path: Path) -> bool:
         """Check if a cache file exists and is younger than max age."""
-        if not cache_path.exists():
+        try:
+            age_days = (time.time() - cache_path.stat().st_mtime) / 86400
+            return age_days < self.cache_max_age_days
+        except FileNotFoundError:
             return False
-        age_days = (time.time() - cache_path.stat().st_mtime) / 86400
-        return age_days < self.cache_max_age_days
 
     def _load_from_cache(self, source: str, gene_name: str) -> Optional[pd.DataFrame]:
         """Load cached mutation data from parquet if valid."""
@@ -117,9 +120,7 @@ class MutationHandler:
         return None
 
     def _save_to_cache(self, source: str, gene_name: str, df: pd.DataFrame) -> None:
-        """Save mutation data to parquet cache."""
-        if df.empty:
-            return
+        """Save mutation data to parquet cache (including empty results)."""
         cache_path = self._get_cache_path(source, gene_name)
         try:
             df.to_parquet(cache_path, index=False)
@@ -338,6 +339,8 @@ class MutationHandler:
         """
         cached = self._load_from_cache("gnomad", gene_name)
         if cached is not None:
+            cache_key = f"gnomad_{gene_name}"
+            self.cached_data[cache_key] = cached
             return cached
 
         gnomad_data = await self.fetch_gnomad_data(gene_name)
@@ -1759,7 +1762,7 @@ class MutationHandler:
         if "chromosome" in variants_df.columns:
             for chrom in variants_df["chromosome"].dropna().unique():
                 try:
-                    self.genome_handler.get_sequence(str(chrom), 1, 1)
+                    self.genome_handler.warm_cache(str(chrom))
                 except (ValueError, Exception):
                     pass
 
@@ -2104,7 +2107,6 @@ class MutationHandler:
             return mutations_df, []
 
         # Helper: check if a position falls in any valid interval using binary search
-        import bisect
         interval_starts = [iv[0] for iv in valid_intervals]
         interval_ends = [iv[1] for iv in valid_intervals]
 

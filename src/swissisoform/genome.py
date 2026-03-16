@@ -12,6 +12,9 @@ from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Complement table for reverse-complement operations (built once at module level)
+_COMPLEMENT_TABLE = str.maketrans("ACGTacgt", "TGCAtgca")
+
 
 class GenomeHandler:
     """Handles access to genome sequence data and feature annotations.
@@ -203,9 +206,20 @@ class GenomeHandler:
         seq_str = self._seq_str_cache[seq_id][start - 1 : end]
 
         if strand == "-":
-            complement = str.maketrans("ACGTacgt", "TGCAtgca")
-            return seq_str.translate(complement)[::-1]
+            return seq_str.translate(_COMPLEMENT_TABLE)[::-1]
         return seq_str
+
+    def warm_cache(self, chrom: str) -> None:
+        """Pre-warm the string cache for a chromosome.
+
+        Converts the BioPython Seq to a plain string once, so subsequent
+        get_sequence() calls use fast O(1) slicing instead of the slow
+        BioPython Seq.__getitem__ decode.
+
+        Args:
+            chrom: Chromosome name (e.g. 'chr1', '1').
+        """
+        self.get_sequence(chrom, 1, 1)
 
     def get_transcript_features(self, transcript_id: str) -> pd.DataFrame:
         """Get all features associated with a transcript ID.

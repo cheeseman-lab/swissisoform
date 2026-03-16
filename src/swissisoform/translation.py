@@ -120,6 +120,7 @@ class AlternativeProteinGenerator:
         self.debug = debug
         self.custom_parquet_path = custom_parquet_path
         self.validation_cache = self.ValidationCache()
+        self._strand_cache = {}
 
     def _debug_print(self, message: str):
         """Print debug message if debug mode is enabled.
@@ -2688,8 +2689,6 @@ class AlternativeProteinGenerator:
         """FAST: Analyze single BP changes using codon-level analysis with better error handling."""
         try:
             # Get strand from cached transcript data (avoid per-variant DataFrame lookup)
-            if not hasattr(self, "_strand_cache"):
-                self._strand_cache = {}
             if transcript_id not in self._strand_cache:
                 transcript_data = self.genome.get_transcript_features_with_sequence(
                     transcript_id
