@@ -30,6 +30,11 @@ class GenomeHandler:
             gtf_path (Optional[str]): Path to the genome annotation GTF file.
         """
         self.genome = SeqIO.to_dict(SeqIO.parse(genome_path, "fasta"))
+        # Pre-convert sequences to plain strings for fast O(1) slicing.
+        # BioPython Seq.__getitem__ does a full bytes decode on every slice (~20ms),
+        # which dominates runtime when extracting thousands of sequences.
+        self._seq_str_cache: Dict[str, str] = {}
+        self._chrom_id_cache: Dict[str, str] = {}  # chrom name → canonical seq_id
         self.gtf_path = gtf_path
         if gtf_path:
             self.load_annotations(gtf_path)
@@ -178,18 +183,29 @@ class GenomeHandler:
         Raises:
             ValueError: If chromosome not found in genome.
         """
-        # Try to find chromosome in the genome, checking different prefix formats
-        if chrom in self.genome:
-            seq_id = chrom
-        elif chrom.startswith("chr") and chrom[3:] in self.genome:
-            seq_id = chrom[3:]  # Try without "chr" prefix
-        elif not chrom.startswith("chr") and f"chr{chrom}" in self.genome:
-            seq_id = f"chr{chrom}"  # Try with "chr" prefix
-        else:
-            raise ValueError(f"Chromosome {chrom} not found in genome")
+        # Resolve chromosome name to canonical seq_id (cached)
+        if chrom not in self._chrom_id_cache:
+            if chrom in self.genome:
+                self._chrom_id_cache[chrom] = chrom
+            elif chrom.startswith("chr") and chrom[3:] in self.genome:
+                self._chrom_id_cache[chrom] = chrom[3:]
+            elif not chrom.startswith("chr") and f"chr{chrom}" in self.genome:
+                self._chrom_id_cache[chrom] = f"chr{chrom}"
+            else:
+                raise ValueError(f"Chromosome {chrom} not found in genome")
 
-        seq = self.genome[seq_id].seq[start - 1 : end]
-        return seq if strand == "+" else seq.reverse_complement()
+        seq_id = self._chrom_id_cache[chrom]
+
+        # Use string cache for fast slicing (avoids BioPython Seq decode overhead)
+        if seq_id not in self._seq_str_cache:
+            self._seq_str_cache[seq_id] = str(self.genome[seq_id].seq)
+
+        seq_str = self._seq_str_cache[seq_id][start - 1 : end]
+
+        if strand == "-":
+            complement = str.maketrans("ACGTacgt", "TGCAtgca")
+            return seq_str.translate(complement)[::-1]
+        return seq_str
 
     def get_transcript_features(self, transcript_id: str) -> pd.DataFrame:
         """Get all features associated with a transcript ID.

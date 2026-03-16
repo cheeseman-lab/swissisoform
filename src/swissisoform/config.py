@@ -81,6 +81,12 @@ class Config:
         os.getenv("CLINVAR_RETRY_DELAY", "1.0")
     )  # seconds
 
+    # Persistent mutation cache settings
+    MUTATION_CACHE_DIR: str = os.getenv("MUTATION_CACHE_DIR", "data/mutation_data")
+    MUTATION_CACHE_MAX_AGE_DAYS: int = int(
+        os.getenv("MUTATION_CACHE_MAX_AGE_DAYS", "30")
+    )
+
     @classmethod
     def validate(cls) -> None:
         """Validate that required configuration is present."""

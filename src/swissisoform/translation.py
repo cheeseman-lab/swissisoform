@@ -2687,11 +2687,17 @@ class AlternativeProteinGenerator:
     ) -> str:
         """FAST: Analyze single BP changes using codon-level analysis with better error handling."""
         try:
-            # Get transcript info for strand debugging
-            transcript_data = self.genome.get_transcript_features_with_sequence(
-                transcript_id
-            )
-            strand = transcript_data["sequence"]["strand"] if transcript_data else "?"
+            # Get strand from cached transcript data (avoid per-variant DataFrame lookup)
+            if not hasattr(self, "_strand_cache"):
+                self._strand_cache = {}
+            if transcript_id not in self._strand_cache:
+                transcript_data = self.genome.get_transcript_features_with_sequence(
+                    transcript_id
+                )
+                self._strand_cache[transcript_id] = (
+                    transcript_data["sequence"]["strand"] if transcript_data else "?"
+                )
+            strand = self._strand_cache[transcript_id]
 
             # Debug logging is very verbose - only enable for deep troubleshooting
             # Most validation info is now shown in mutations.py at INFO level
